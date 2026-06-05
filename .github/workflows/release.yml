@@ -2,25 +2,70 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - "v*"
+      - "*.*.*.*"
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') ||
+      github.event_name == 'push' &&
+      !contains(github.event.head_commit.message, '[skip release]')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            new_tag="${GITHUB_REF#refs/tags/}"
+            echo "Using pushed tag: $new_tag"
+          else
+            today_prefix="$(date -u +%y).$(date -u +%-m).$(date -u +%-d)"
+            latest_count=0
+            shopt -s nullglob
+            for tag in $(git tag -l "${today_prefix}.*"); do
+              n="${tag##*.}"
+              if [[ "$n" =~ ^[0-9]+$ ]] && (( n > latest_count )); then
+                latest_count=$n
+              fi
+            done
+            new_tag="${today_prefix}.$((latest_count + 1))"
+            echo "Auto tag for ${today_prefix}: ${latest_count} -> ${new_tag}"
+          fi
+          release_name="Release ${new_tag}"
+          if git rev-parse "$new_tag" >/dev/null 2>&1; then
+            echo "Tag $new_tag already exists; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$new_tag" >> "$GITHUB_OUTPUT"
+            echo "name=$release_name" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up Python
+        if: steps.tag.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Cache PlatformIO
+        if: steps.tag.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -30,14 +75,17 @@ jobs:
           restore-keys: pio-${{ runner.os }}-
 
       - name: Install PlatformIO
+        if: steps.tag.outputs.skip != 'true'
         run: pip install platformio
 
       - name: Build firmware
+        if: steps.tag.outputs.skip != 'true'
         run: |
           pio run -e tencoder-pro
           pio run -t merge -e tencoder-pro
 
       - name: Package release artifacts
+        if: steps.tag.outputs.skip != 'true'
         run: |
           BUILD=".pio/build/tencoder-pro"
           OUT="release"
@@ -53,8 +101,12 @@ jobs:
           cat "$OUT/SHA256SUMS.txt"
 
       - name: Create GitHub release
+        if: steps.tag.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.name }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
             release/FlightScnr-tencoder-pro-merged.bin
@@ -66,7 +118,7 @@ jobs:
             Firmware for **LilyGO T-Encoder Pro** (ESP32-S3, 16 MB flash).
 
             ### Web install (recommended)
-            Open the [FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/) in **Chrome** or **Edge**, connect USB, and flash **Latest release** or upload `FlightScnr-tencoder-pro-merged.bin`.
+            Open the [FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/) in **Chrome** or **Edge**, connect USB, and click **Install**.
 
             ### Manual flash
             Flash the merged image at offset **0x0**:

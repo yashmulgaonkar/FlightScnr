@@ -70,7 +70,7 @@ async function loadLatestReleaseMeta() {
     const data = await resp.json();
     const asset = (data.assets || []).find((a) => a.name === MERGED_ASSET);
     const sizeMb = asset ? (asset.size / (1024 * 1024)).toFixed(2) : "?";
-    els.releaseMeta.textContent = `Latest: ${data.tag_name} (${sizeMb} MB)`;
+    els.releaseMeta.textContent = `Latest: ${data.name || data.tag_name} (${sizeMb} MB)`;
   } catch (err) {
     els.releaseMeta.textContent = "Latest release info unavailable (you can still upload a .bin file).";
     console.warn(err);

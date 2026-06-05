@@ -126,7 +126,11 @@ If upload fails, hold the board **BOOT** button (not the knob), tap reset, and r
 
 ## Releases
 
-Tagged builds are published on [GitHub Releases](https://github.com/yashmulgaonkar/FlightScnr/releases) (e.g. **v1.0.0**). Each release includes:
+Each push to **`main`** automatically builds firmware and publishes a GitHub Release named **`Release YY.M.D.N`** (UTC date + daily build number). Example: **`Release 26.6.5.1`** = 2026-06-05, 1st release that day; the next push the same day becomes **`Release 26.6.5.2`**. You can also run **Actions → Release → Run workflow** or push a matching tag (e.g. `26.6.5.3`).
+
+Add `[skip release]` anywhere in a commit message to push without creating a release (docs-only changes, etc.).
+
+Published builds: [GitHub Releases](https://github.com/yashmulgaonkar/FlightScnr/releases). Each release includes:
 
 | File | Purpose |
 | --- | --- |
@@ -134,16 +138,9 @@ Tagged builds are published on [GitHub Releases](https://github.com/yashmulgaonk
 | `FlightScnr-tencoder-pro-app.bin` | Application only — flash at **0x10000** (advanced) |
 | `SHA256SUMS.txt` | Checksums |
 
-Create a release by pushing a version tag:
-
-```bash
-git tag v1.0.1
-git push origin v1.0.1
-```
-
-GitHub Actions builds the firmware and attaches the binaries automatically.
-
 ### WebFlasher (browser install)
+
+The WebFlasher **Install** button always pulls the latest release from GitHub.
 
 **[FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/)** flashes firmware over USB from Chrome or Edge — no PlatformIO required.
 
