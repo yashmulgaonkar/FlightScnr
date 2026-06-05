@@ -145,10 +145,10 @@ The WebFlasher **Install** button always pulls the latest release from GitHub.
 **[FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/)** flashes firmware over USB from Chrome or Edge — no PlatformIO required.
 
 1. Connect the T-Encoder Pro via USB.
-2. Open WebFlasher, click **Connect USB**, then **Flash latest release** (or upload a downloaded `.bin`).
+2. Open WebFlasher, click **Connect**, then **Install** (or upload a downloaded `.bin`).
 3. If needed, hold **BOOT** while connecting.
 
-WebFlasher is deployed from the `webflasher/` folder when changes land on **`master`**. In repo **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions** (required once; without this the site stays 404).
+WebFlasher lives in the **`docs/`** folder. **Settings → Pages → Build and deployment → Source** must be **GitHub Actions** (runs the *Deploy WebFlasher* workflow) or **Deploy from a branch → `master` → `/docs`**. If Source is set to the repo root (`/`), GitHub renders this README as the site instead of the installer.
 
 ## Configuration
 
