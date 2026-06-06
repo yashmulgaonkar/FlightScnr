@@ -1,6 +1,7 @@
 import { ESPLoader, Transport } from "./vendor/esptool-js.bundle.js";
 
-const MERGED_ASSET = "FlightScnr-tencoder-pro-merged.bin";
+const APP_ASSET = "FlightScnr-tencoder-pro-app.bin";
+const APP_FLASH_OFFSET = 0x10000;
 const FIRMWARE_BASE = "./firmware";
 const MANIFEST_URL = `${FIRMWARE_BASE}/manifest.json`;
 
@@ -83,13 +84,16 @@ async function loadLatestReleaseMeta() {
   }
 }
 
-async function fetchLatestMergedFirmware() {
+async function fetchLatestFirmware() {
   const manifest = await loadFirmwareManifest();
   const part = manifest.builds?.[0]?.parts?.[0];
-  const binName = part?.path || MERGED_ASSET;
-  const url = `${FIRMWARE_BASE}/${binName}`;
+  if (!part?.path) {
+    throw new Error("Firmware manifest has no image path");
+  }
+  const url = `${FIRMWARE_BASE}/${part.path}`;
+  const offset = part.offset ?? APP_FLASH_OFFSET;
 
-  log(`Downloading ${manifest.name || manifest.version || binName}…`);
+  log(`Downloading ${manifest.name || manifest.version || part.path}…`);
   const resp = await fetch(url, { cache: "no-store" });
   if (!resp.ok) {
     throw new Error(`Download failed (HTTP ${resp.status})`);
@@ -99,7 +103,7 @@ async function fetchLatestMergedFirmware() {
     throw new Error("Downloaded file is empty");
   }
   log(`Downloaded ${(buf.byteLength / (1024 * 1024)).toFixed(2)} MB`);
-  return new Uint8Array(buf);
+  return { data: new Uint8Array(buf), offset, label: part.path };
 }
 
 async function connect() {
@@ -157,20 +161,22 @@ async function disconnect() {
   log("Disconnected.");
 }
 
-async function flashBinary(data, label) {
+async function flashBinary(data, label, address = APP_FLASH_OFFSET) {
   if (!esploader) {
     throw new Error("Not connected");
   }
 
   setProgress(0, `Preparing ${label}…`);
-  log(`Flashing ${label} at 0x0 (${data.byteLength} bytes)…`);
+  log(
+    `Flashing ${label} at 0x${address.toString(16)} (${data.byteLength} bytes, no full-chip erase)…`,
+  );
 
   // esptool-js 0.5.x expects a binary string, not Uint8Array (uses charCodeAt internally).
   const image =
     data instanceof Uint8Array ? esploader.ui8ToBstr(data) : data;
 
   await esploader.writeFlash({
-    fileArray: [{ data: image, address: 0 }],
+    fileArray: [{ data: image, address }],
     flashSize: "16MB",
     flashMode: "qio",
     flashFreq: "80m",
@@ -191,8 +197,12 @@ async function flashBinary(data, label) {
 async function runFlash(getData, label) {
   setBusy(true);
   try {
-    const data = await getData();
-    await flashBinary(data, label);
+    const payload = await getData();
+    if (payload && typeof payload === "object" && payload.data) {
+      await flashBinary(payload.data, label, payload.offset);
+    } else {
+      await flashBinary(payload, label);
+    }
   } catch (err) {
     log(`Flash failed: ${err.message || err}`);
     clearProgress();
@@ -205,7 +215,7 @@ els.connectBtn.addEventListener("click", connect);
 els.disconnectBtn.addEventListener("click", disconnect);
 
 els.flashLatestBtn.addEventListener("click", () => {
-  runFlash(() => fetchLatestMergedFirmware(), MERGED_ASSET);
+  runFlash(() => fetchLatestFirmware(), APP_ASSET);
 });
 
 els.fileInput.addEventListener("change", async () => {
@@ -214,9 +224,16 @@ els.fileInput.addEventListener("change", async () => {
   if (!file) {
     return;
   }
+  const offset = /merged/i.test(file.name) ? 0 : APP_FLASH_OFFSET;
+  if (offset === 0) {
+    log("Warning: merged images at 0x0 replace the full flash and erase saved settings.");
+  }
   await runFlash(async () => {
     log(`Reading ${file.name}…`);
-    return new Uint8Array(await file.arrayBuffer());
+    return {
+      data: new Uint8Array(await file.arrayBuffer()),
+      offset,
+    };
   }, file.name);
 });
 

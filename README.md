@@ -113,14 +113,14 @@ pio device monitor
 
 Each build downloads the latest [tar1090-db](https://github.com/wiedehopf/tar1090-db) aircraft database and regenerates the ICAO type lookup (e.g. `E75L` → Embraer ERJ-170-200). If the download fails, the last cached or committed lookup is used. Refresh manually with `python tools/icao_types_to_header.py`.
 
-### Single merged binary (web flasher / factory image)
+### Single merged binary (factory image)
 
 ```bash
 pio run -e tencoder-pro
 pio run -t merge -e tencoder-pro
 ```
 
-Output: `.pio/build/tencoder-pro/firmware-merged.bin`. Flash at offset **0x0**.
+Output: `.pio/build/tencoder-pro/firmware-merged.bin`. For a **full factory flash**, write at offset **0x0** (erases saved Wi‑Fi and settings). Normal updates use the app image at **0x10000** instead (see WebFlasher below).
 
 If upload fails, hold the board **BOOT** button (not the knob), tap reset, and retry.
 
@@ -134,19 +134,19 @@ Published builds: [GitHub Releases](https://github.com/yashmulgaonkar/FlightScnr
 
 | File | Purpose |
 | --- | --- |
-| `FlightScnr-tencoder-pro-merged.bin` | Full factory image — flash at **0x0** |
-| `FlightScnr-tencoder-pro-app.bin` | Application only — flash at **0x10000** (advanced) |
+| `FlightScnr-tencoder-pro-merged.bin` | Full factory image — manual flash at **0x0** only |
+| `FlightScnr-tencoder-pro-app.bin` | Application update — flash at **0x10000** (used by WebFlasher **Install**) |
 | `SHA256SUMS.txt` | Checksums |
 
 ### WebFlasher (browser install)
 
-The WebFlasher **Install** button always pulls the latest release from GitHub.
-
 **[FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr)** flashes firmware over USB from Chrome or Edge — no PlatformIO required.
 
 1. Connect the T-Encoder Pro via USB.
-2. Open WebFlasher, click **Connect**, then **Install** (or upload a downloaded `.bin`).
+2. Open WebFlasher, click **Connect**, then **Install**.
 3. If needed, hold **BOOT** while connecting.
+
+**Install** writes `FlightScnr-tencoder-pro-app.bin` at **0x10000** and keeps Wi‑Fi and saved settings. Upload a `merged` `.bin` in the UI only if you need a full factory flash at **0x0**.
 
 WebFlasher lives in the **`docs/`** folder. **Settings → Pages → Build and deployment → Source** must be **GitHub Actions**. Each **Release** workflow run builds firmware, writes `docs/firmware/manifest.json`, and deploys the installer. To redeploy UI-only changes without a new release, run **Actions → Deploy WebFlasher**.
 

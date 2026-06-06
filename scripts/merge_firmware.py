@@ -1,4 +1,5 @@
 # PlatformIO post-build script: merge bootloader + partitions + app into one .bin
+# for full factory flash at 0x0 (WebFlasher Install uses the app-only .bin at 0x10000).
 # Usage: pio run -t merge -e tencoder-pro
 
 Import("env")
@@ -61,7 +62,7 @@ def merge_firmware(source, target, env):
 env.AddCustomTarget(
     name="merge",
     dependencies="${BUILD_DIR}/${PROGNAME}.bin",
-    actions=env.Action(merge_firmware, "Merging flash image for web flasher"),
+    actions=env.Action(merge_firmware, "Merging factory flash image"),
     title="Merge firmware",
-    description="Create firmware-merged.bin (bootloader + partitions + app)",
+    description="Create firmware-merged.bin for full factory flash at 0x0",
 )

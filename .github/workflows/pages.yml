@@ -32,22 +32,24 @@ jobs:
 
       - name: Download latest release firmware
         env:
-          MERGED_ASSET: FlightScnr-tencoder-pro-merged.bin
+          APP_ASSET: FlightScnr-tencoder-pro-app.bin
+          APP_OFFSET: "65536"
         run: |
           set -euo pipefail
           mkdir -p docs/firmware
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${MERGED_ASSET}"
-          curl -fsSL -L -o "docs/firmware/${MERGED_ASSET}" "${URL}"
-          FIRMWARE_SIZE="$(stat -c%s "docs/firmware/${MERGED_ASSET}")"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${APP_ASSET}"
+          curl -fsSL -L -o "docs/firmware/${APP_ASSET}" "${URL}"
+          FIRMWARE_SIZE="$(stat -c%s "docs/firmware/${APP_ASSET}")"
           RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest")"
           RELEASE_NAME="$(echo "${RELEASE_JSON}" | jq -r .name)"
           RELEASE_TAG="$(echo "${RELEASE_JSON}" | jq -r .tag_name)"
           jq -n \
             --arg name "${RELEASE_NAME}" \
             --arg version "${RELEASE_TAG}" \
-            --arg path "${MERGED_ASSET}" \
+            --arg path "${APP_ASSET}" \
+            --argjson offset "${APP_OFFSET}" \
             --argjson size "${FIRMWARE_SIZE}" \
-            '{name: $name, version: $version, size: $size, builds: [{chipFamily: "ESP32-S3", parts: [{path: $path, offset: 0}]}]}' \
+            '{name: $name, version: $version, size: $size, builds: [{chipFamily: "ESP32-S3", parts: [{path: $path, offset: $offset}]}]}' \
             > docs/firmware/manifest.json
           echo "Bundled ${RELEASE_NAME} (${FIRMWARE_SIZE} bytes)"
 
