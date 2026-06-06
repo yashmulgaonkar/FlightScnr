@@ -165,8 +165,12 @@ async function flashBinary(data, label) {
   setProgress(0, `Preparing ${label}…`);
   log(`Flashing ${label} at 0x0 (${data.byteLength} bytes)…`);
 
+  // esptool-js 0.5.x expects a binary string, not Uint8Array (uses charCodeAt internally).
+  const image =
+    data instanceof Uint8Array ? esploader.ui8ToBstr(data) : data;
+
   await esploader.writeFlash({
-    fileArray: [{ data, address: 0 }],
+    fileArray: [{ data: image, address: 0 }],
     flashSize: "16MB",
     flashMode: "qio",
     flashFreq: "80m",
