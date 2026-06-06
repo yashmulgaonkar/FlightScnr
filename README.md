@@ -8,15 +8,15 @@ Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licen
 
 ## Features
 
-- **Sweeping radar:** concentric range rings, cardinal direction labels, radar sweep line, top-down **aircraft pips** (heading-aligned), and callsign / type / altitude tags
+- **Sweeping radar:** concentric range rings, compass rose, radar sweep line, top-down **aircraft pips** (heading-aligned), and callsign / type / altitude tags
 - **Display range:** 2 / 4 / 6 / 8 mi on the outermost ring. Inner rings show 1/3 and 2/3 of that scale. Knob changes preset.
-- **Distance units:** statute miles or kilometres on ring labels and detail readouts
+- **Distance units:** statute miles or kilometers on ring labels and detail readouts
 - **Beyond-ring pips:** aircraft outside the active range still appear on the rim
 - **Flight detail:** tap a blip or short press the knob for callsign, airline, route, ICAO type, altitude, and speed. Turn the knob to cycle through visible aircraft.
 - **Settings:** swipe left from radar for page 1 (network / location) and page 2 (brightness, units, compass rose)
 - **Clock:** swipe down from radar for large local time (NTP). Swipe left for UTC offset and 12h/24h format.
-- **Web settings:** on your LAN at [http://flightscnr.local/](http://flightscnr.local/) (or device IP) for radar center, filters, route API keys, monthly limits, and route-cache download
-- **Setup portal:** captive portal on first boot or after knob reset. Wi‑Fi network and password only at [http://4.3.2.1](http://4.3.2.1). Other settings use the LAN web UI after connect.
+- **Web settings:** on your local network at [http://flightscnr.local/](http://flightscnr.local/) (or device IP) for radar center, filters, route API keys, monthly limits, and route-cache download
+- **Setup portal:** captive portal on first boot or after knob reset. Wi‑Fi network and password only at [http://4.3.2.1](http://4.3.2.1). Other settings use the live web portal after connecting.
 - **Airline & route:** optional API sources to fetch flight details. Vendors are used in the order of: **AirLabs > FlightAware > FR24** (same idea as [plane-tracker-rgb-pi](https://github.com/c0wsaysmoo/plane-tracker-rgb-pi)). One live lookup per callsign, then flash/RAM cache.
 - **Background ADS-B:** non-blocking fetch on a FreeRTOS task (~**2 s** via [adsb.fi](https://adsb.fi))
 - **Auto reconnect:** STA retries after a short grace period if network drops
@@ -33,10 +33,10 @@ Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licen
 | **Swipe up**         |                            |               |               |                                    | Back to radar       |                         |
 | **Swipe left**       | Open settings (page 1)     |               | Open page 2   |                                    | Open clock settings |                         |
 | **Swipe right**      |                            | Back to radar | Back to radar | Back to page 1                     |                     | Back to clock           |
-| **Hold knob 3 s**    | Portal reset               | Same          | Same          | Same                               | Same                | Same                    |
+| **Hold knob 3 s**    | WiFi reset               | Same          | Same          | Same                               | Same                | Same                    |
 
 
-**Idle timeout (10 s):** flight detail and both settings pages return to **radar**. Clock settings return to the **clock** (not radar). The clock face has no idle timeout. The display refreshes when the minute changes.
+**Idle timeout (10 s):** flight detail and both settings pages return to **radar**. Clock settings return to the **clock** (not radar). The clock face has no idle timeout.
 
 Range, distance units, brightness, clock timezone/format, and route API settings persist across reboots.
 
@@ -52,7 +52,7 @@ Range, distance units, brightness, clock timezone/format, and route API settings
 
 ### Change settings later (without clearing Wi‑Fi settings)
 
-On the same network, open [http://flightscnr.local/](http://flightscnr.local/) or `http://<device-ip>/`. Edit radar center, miles/km, min altitude, range preset, and route API keys/limits, then **Save & reboot**.
+On the local network, open [http://flightscnr.local/](http://flightscnr.local/) or `http://<device-ip>/`. Edit radar center, miles/km, min altitude, range preset, and route API keys/limits, then **Save & reboot**.
 
 The on-device settings page 1 shows **flightscnr.local** and the device IP address when Wi‑Fi is connected.
 
@@ -78,7 +78,7 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 
 ### Clock
 
-- Large time (native 36 pt font), date, UTC offset label. In 12 h mode, green AM/PM appears beside the time.
+- Shows time in 12h/24h format , date, UTC offset label.
 - Footer: gesture guide
 
 ### Clock settings
