@@ -2,7 +2,7 @@
 
 Open-source firmware that shows **live ADS-B traffic** on a sweeping radar around your preset position. Built for the **[LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl)**, inspired by desktop flight-tracking radar gadgets such as **[ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)** and **[deskradar](https://github.com/arvis91/deskradar)**.
 
-FlightScnr is a fresh take on a desktop flight display that requires no soldering, with tons of cool features, released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** (see [LICENSE](LICENSE)) instead of MIT. Permissive MIT licensing on similar projects has made it easy for vendors to ship closed derivatives without keeping firmware open to the community. This license keeps the source shareable for hobbyists and open-source builders while discouraging proprietary takeaways.
+Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** (see [LICENSE](LICENSE)) instead of MIT. Permissive MIT licensing on similar projects has made it easy for vendors to ship closed derivatives without keeping firmware open to the community. This license keeps the source shareable for hobbyists and open-source builders while discouraging proprietary takeaways.
 
 **3D-printed enclosure:** [MakerWorld Link](https://makerworld.com/en/models/1964198-lilygo-t-encoder-pro-s3-stand). Licensed separately. See [Enclosure license](#enclosure-license) below.
 
@@ -123,7 +123,6 @@ pio run -t merge -e tencoder-pro
 Output: `.pio/build/tencoder-pro/firmware-merged.bin`. For a **full factory flash**, write at offset **0x0** (erases saved Wi‑Fi and settings). Normal updates use the app image at **0x10000** instead (see WebFlasher below).
 
 If upload fails, hold the board **BOOT** button (not the knob), tap reset, and retry.  
-
 
 ### WebFlasher (browser based)
 
