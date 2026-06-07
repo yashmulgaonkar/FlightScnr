@@ -49,6 +49,8 @@ struct CacheSlot {
 
 CacheSlot s_cache[kCacheSize];
 
+bool apiAvailable();
+
 void routeClear(RouteInfo* r) {
   if (r == nullptr) {
     return;
@@ -60,6 +62,39 @@ void routeClear(RouteInfo* r) {
 
 bool routeHasData(const RouteInfo& r) {
   return r.airline[0] != '\0' || r.origin[0] != '\0' || r.dest[0] != '\0';
+}
+
+bool routeEndpointsComplete(const RouteInfo& r) {
+  return r.origin[0] != '\0' && r.dest[0] != '\0';
+}
+
+bool slotNeedsApiRouteUpgrade(const CacheSlot& slot) {
+  if (slot.callsign[0] == '\0') {
+    return false;
+  }
+  if (slot.source == ApiSource::kPrefix) {
+    return true;
+  }
+  if (routeEndpointsComplete(slot.route)) {
+    return false;
+  }
+  if (slot.api_done && slot.source == ApiSource::kNone) {
+    return false;
+  }
+  return true;
+}
+
+bool fileEntryNeedsApiRouteUpgrade(const route_cache::Entry& e) {
+  if (e.source == static_cast<uint8_t>(ApiSource::kPrefix)) {
+    return true;
+  }
+  if (e.origin[0] != '\0' && e.dest[0] != '\0') {
+    return false;
+  }
+  if (e.api_done && e.source == static_cast<uint8_t>(ApiSource::kNone)) {
+    return false;
+  }
+  return true;
 }
 
 void applyRouteToAircraft(services::adsb::Aircraft& ac, const RouteInfo& info) {
@@ -200,25 +235,6 @@ void storeCache(const char* callsign, const RouteInfo& info, ApiSource src, bool
   storeCache(callsign, info, src, api_done, nowSec(), true);
 }
 
-/**
- * If this callsign was already looked up (hit, API miss, or prefix), copy cached
- * route and return true — caller must not hit live APIs again.
- */
-bool cacheResolveFromSlot(const CacheSlot& slot, RouteInfo* out, ApiSource* src_out) {
-  const bool resolved = slot.api_done || routeHasData(slot.route) ||
-                          slot.source == ApiSource::kPrefix;
-  if (!resolved) {
-    return false;
-  }
-  if (out != nullptr) {
-    *out = slot.route;
-  }
-  if (src_out != nullptr) {
-    *src_out = slot.source;
-  }
-  return true;
-}
-
 void loadFileEntryToRam(const char* callsign, const route_cache::Entry& file_entry) {
   RouteInfo info;
   routeClear(&info);
@@ -232,49 +248,57 @@ void loadFileEntryToRam(const char* callsign, const route_cache::Entry& file_ent
   storeCache(callsign, info, src, file_entry.api_done, file_entry.cached_at_sec, false);
 }
 
-bool cacheResolve(const char* callsign, RouteInfo* out, ApiSource* src_out) {
-  const int idx = findCache(callsign);
-  if (idx >= 0 && cacheResolveFromSlot(s_cache[idx], out, src_out)) {
-    return true;
+/**
+ * Load RAM cache from flash if needed. Returns slot index or -1.
+ */
+int loadCacheSlotForCallsign(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return -1;
+  }
+
+  int idx = findCache(callsign);
+  if (idx >= 0) {
+    return idx;
   }
 
   route_cache::Entry file_entry;
   if (route_cache::lookupPermanent(callsign, &file_entry)) {
     loadFileEntryToRam(callsign, file_entry);
-    if (out != nullptr) {
-      routeClear(out);
-      strncpy(out->airline, file_entry.airline, sizeof(out->airline) - 1);
-      out->airline[sizeof(out->airline) - 1] = '\0';
-      strncpy(out->origin, file_entry.origin, sizeof(out->origin) - 1);
-      out->origin[sizeof(out->origin) - 1] = '\0';
-      strncpy(out->dest, file_entry.dest, sizeof(out->dest) - 1);
-      out->dest[sizeof(out->dest) - 1] = '\0';
-    }
-    if (src_out != nullptr) {
-      *src_out = static_cast<ApiSource>(file_entry.source);
-    }
-    return cacheResolveFromSlot(s_cache[findCache(callsign)], out, src_out);
+    return findCache(callsign);
   }
 
   const uint32_t now = nowSec();
   if (!route_cache::lookup(callsign, &file_entry, now, config::kRouteLookupCacheTtlSec)) {
-    return false;
+    return -1;
   }
 
   loadFileEntryToRam(callsign, file_entry);
+  return findCache(callsign);
+}
+
+/**
+ * If cached route is complete (or APIs off), copy it and return true — skip live APIs.
+ * Always fills out/src_out when cache data exists, even if a live upgrade is still needed.
+ */
+bool cacheResolve(const char* callsign, RouteInfo* out, ApiSource* src_out) {
+  const int idx = loadCacheSlotForCallsign(callsign);
+  if (idx < 0) {
+    return false;
+  }
+
+  const CacheSlot& slot = s_cache[idx];
   if (out != nullptr) {
-    routeClear(out);
-    strncpy(out->airline, file_entry.airline, sizeof(out->airline) - 1);
-    out->airline[sizeof(out->airline) - 1] = '\0';
-    strncpy(out->origin, file_entry.origin, sizeof(out->origin) - 1);
-    out->origin[sizeof(out->origin) - 1] = '\0';
-    strncpy(out->dest, file_entry.dest, sizeof(out->dest) - 1);
-    out->dest[sizeof(out->dest) - 1] = '\0';
+    *out = slot.route;
   }
   if (src_out != nullptr) {
-    *src_out = static_cast<ApiSource>(file_entry.source);
+    *src_out = slot.source;
   }
-  return cacheResolveFromSlot(s_cache[findCache(callsign)], out, src_out);
+
+  if (apiAvailable()) {
+    return !slotNeedsApiRouteUpgrade(slot);
+  }
+
+  return slot.api_done || routeHasData(slot.route) || slot.source == ApiSource::kPrefix;
 }
 
 /** First sight of a callsign: reserve a pending slot so live APIs run at most once. */
@@ -295,17 +319,20 @@ void ensureSeenCallsign(const char* callsign) {
 }
 
 bool apiLookupAlreadyDone(const char* callsign) {
+  if (!apiAvailable()) {
+    return true;
+  }
+
   const int idx = findCache(callsign);
   if (idx >= 0) {
-    if (s_cache[idx].api_done || s_cache[idx].source == ApiSource::kPrefix) {
-      return true;
-    }
+    return !slotNeedsApiRouteUpgrade(s_cache[idx]);
   }
+
   route_cache::Entry file_entry;
   if (!route_cache::lookupPermanent(callsign, &file_entry)) {
     return false;
   }
-  return file_entry.api_done || file_entry.source == static_cast<uint8_t>(ApiSource::kPrefix);
+  return !fileEntryNeedsApiRouteUpgrade(file_entry);
 }
 
 bool readRamCacheSlot(size_t index, route_cache::Entry* out, size_t max_index) {
@@ -874,9 +901,13 @@ void enrichAircraft(services::adsb::Aircraft* planes, size_t count, double cente
     }
 
     RouteInfo info;
+    routeClear(&info);
     ApiSource src = ApiSource::kNone;
-    if (cacheResolve(ac.callsign, &info, &src)) {
+    const bool route_complete = cacheResolve(ac.callsign, &info, &src);
+    if (routeHasData(info)) {
       applyRouteToAircraft(ac, info);
+    }
+    if (route_complete) {
       continue;
     }
 
