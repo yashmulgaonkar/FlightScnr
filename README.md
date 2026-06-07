@@ -8,7 +8,7 @@ Open-source firmware that shows **live ADS-B traffic** on a sweeping radar aroun
 
 Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** (see [LICENSE](LICENSE)) instead of MIT. Permissive MIT licensing on similar projects has made it easy for vendors to ship closed derivatives without keeping firmware open to the community. This license keeps the source shareable for hobbyists and open-source builders while discouraging proprietary takeaways.
 
-**3D-printed enclosure:** [MakerWorld Link](https://makerworld.com/en/models/1964198-lilygo-t-encoder-pro-s3-stand). Licensed separately. See [Enclosure license](#enclosure-license) below.
+**3D-printed enclosure:** [MakerWorld Link](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055). Licensed separately. See [Enclosure license](#enclosure-license) below.
 
 ## Features
 
@@ -96,7 +96,7 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 | Item          | Details                                                                                                                                |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Board**     | [LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl). ESP32-S3-R8, 16 MB flash, 8 MB OPI PSRAM                                         |
-| **Enclosure** | [MakerWorld](https://makerworld.com/en/models/1964198-lilygo-t-encoder-pro-s3-stand). Not in this repo. Terms on the model page apply. |
+| **Enclosure** | [MakerWorld Link](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055). Not in this repo. Terms on the model page apply. |
 
 
 ## Build and flash
