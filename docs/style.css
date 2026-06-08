@@ -73,6 +73,51 @@ button.secondary {
   background: transparent;
 }
 
+button.danger {
+  border-color: #c62828;
+  background: #c62828;
+  color: #fff;
+}
+
+button.danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.danger-row {
+  margin-top: 0.25em;
+}
+
+dialog {
+  max-width: 28rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font: inherit;
+  line-height: 1.45;
+}
+
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+dialog h2 {
+  margin: 0 0 0.75em;
+  font-size: 1.15rem;
+}
+
+dialog p {
+  margin: 0 0 0.75em;
+}
+
+dialog p:last-of-type {
+  margin-bottom: 1.25em;
+}
+
+dialog .button-row {
+  margin: 0;
+  justify-content: flex-end;
+}
+
 input[type="file"] {
   display: none;
 }
@@ -183,6 +228,18 @@ progress {
 
   button.secondary {
     background: transparent;
+  }
+
+  button.danger {
+    border-color: #e53935;
+    background: #e53935;
+    color: #fff;
+  }
+
+  dialog {
+    border-color: #555;
+    background: #333;
+    color: #fff;
   }
 
   .content pre {

@@ -29,6 +29,30 @@
         </button>
       </p>
 
+      <p class="button-row danger-row">
+        <button id="erase-btn" type="button" class="danger" disabled>
+          Erase flash
+        </button>
+      </p>
+
+      <dialog id="erase-dialog">
+        <h2>Erase entire flash?</h2>
+        <p>
+          This will permanently erase <strong>all 16&nbsp;MB</strong> of flash
+          memory on the ESP32. Firmware, Wi‑Fi credentials, saved settings, and
+          route cache will be deleted.
+        </p>
+        <p>The board will not run FlightScnr until you flash firmware again.</p>
+        <p class="button-row">
+          <button id="erase-cancel-btn" type="button" class="secondary">
+            Cancel
+          </button>
+          <button id="erase-confirm-btn" type="button" class="danger">
+            Erase flash
+          </button>
+        </p>
+      </dialog>
+
       <p class="meta" id="release-meta">Loading latest release&hellip;</p>
       <p class="status-line"><span id="status">Not connected</span></p>
 
@@ -54,6 +78,8 @@
         <strong>Install</strong> updates the app at offset
         <strong>0x10000</strong> and keeps Wi‑Fi and saved settings. Upload a
         <code>merged</code> .bin only for a full factory flash at <strong>0x0</strong>.
+        <strong>Erase flash</strong> wipes the entire chip (same as a blank factory
+        part) — use only when you want to clear everything before reflashing.
       </p>
 
       <div class="log-section">

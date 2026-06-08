@@ -9,6 +9,10 @@ const els = {
   connectBtn: document.getElementById("connect-btn"),
   disconnectBtn: document.getElementById("disconnect-btn"),
   flashLatestBtn: document.getElementById("flash-latest-btn"),
+  eraseBtn: document.getElementById("erase-btn"),
+  eraseDialog: document.getElementById("erase-dialog"),
+  eraseCancelBtn: document.getElementById("erase-cancel-btn"),
+  eraseConfirmBtn: document.getElementById("erase-confirm-btn"),
   fileInput: document.getElementById("file-input"),
   status: document.getElementById("status"),
   releaseMeta: document.getElementById("release-meta"),
@@ -38,6 +42,7 @@ function setBusy(value) {
   els.connectBtn.disabled = value || port !== null;
   els.disconnectBtn.disabled = value || port === null;
   els.flashLatestBtn.disabled = value || port === null;
+  els.eraseBtn.disabled = value || port === null;
   if (value) {
     setStatus("Working…");
     els.status.className = "";
@@ -211,11 +216,63 @@ async function runFlash(getData, label) {
   }
 }
 
+async function eraseChipFlash() {
+  if (!esploader) {
+    throw new Error("Not connected");
+  }
+
+  setProgress(0, "Erasing entire flash…");
+  log("Erasing entire 16 MB flash chip (this may take a few minutes)…");
+
+  await esploader.eraseFlash();
+
+  log("Hard reset…");
+  await esploader.after("hard_reset");
+  setProgress(100, "Erase complete");
+  log(
+    "Chip erase complete. Flash is blank — use Install or upload a .bin to flash firmware.",
+  );
+}
+
+async function runErase() {
+  setBusy(true);
+  try {
+    await eraseChipFlash();
+  } catch (err) {
+    log(`Erase failed: ${err.message || err}`);
+    clearProgress();
+  } finally {
+    setBusy(false);
+  }
+}
+
 els.connectBtn.addEventListener("click", connect);
 els.disconnectBtn.addEventListener("click", disconnect);
 
 els.flashLatestBtn.addEventListener("click", () => {
   runFlash(() => fetchLatestFirmware(), APP_ASSET);
+});
+
+els.eraseBtn.addEventListener("click", () => {
+  if (!esploader || busy) {
+    return;
+  }
+  els.eraseDialog.showModal();
+});
+
+els.eraseCancelBtn.addEventListener("click", () => {
+  els.eraseDialog.close();
+});
+
+els.eraseDialog.addEventListener("click", (event) => {
+  if (event.target === els.eraseDialog) {
+    els.eraseDialog.close();
+  }
+});
+
+els.eraseConfirmBtn.addEventListener("click", () => {
+  els.eraseDialog.close();
+  runErase();
 });
 
 els.fileInput.addEventListener("change", async () => {
@@ -247,6 +304,7 @@ navigator.serial?.addEventListener("disconnect", () => {
   els.connectBtn.disabled = false;
   els.disconnectBtn.disabled = true;
   els.flashLatestBtn.disabled = true;
+  els.eraseBtn.disabled = true;
 });
 
 loadLatestReleaseMeta();
