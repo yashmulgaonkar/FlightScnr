@@ -61,6 +61,9 @@ struct CachedAircraftMarker {
 
 CachedAircraftMarker s_prev_aircraft_markers[services::adsb::kMaxAircraft];
 size_t s_prev_aircraft_marker_count = 0;
+/** Scratch for ADS-B refresh — must not live on loopTask stack (~8 KB). */
+CachedAircraftMarker s_current_aircraft_markers[services::adsb::kMaxAircraft];
+bool s_marker_prev_used[services::adsb::kMaxAircraft] = {};
 
 class DrawScope {
  public:
@@ -859,13 +862,13 @@ bool markerVisualChanged(const CachedAircraftMarker& prev,
 }
 
 IntRect unionChangedMarkerBounds(const CachedAircraftMarker* current, size_t curr_count) {
-  bool prev_used[services::adsb::kMaxAircraft] = {};
+  memset(s_marker_prev_used, 0, sizeof(s_marker_prev_used));
   IntRect dirty{};
 
   for (size_t c = 0; c < curr_count; ++c) {
     int prev_i = -1;
     for (size_t p = 0; p < s_prev_aircraft_marker_count; ++p) {
-      if (prev_used[p]) {
+      if (s_marker_prev_used[p]) {
         continue;
       }
       if (aircraftIdentityMatch(s_prev_aircraft_markers[p].plane, current[c].plane)) {
@@ -875,7 +878,7 @@ IntRect unionChangedMarkerBounds(const CachedAircraftMarker* current, size_t cur
     }
 
     if (prev_i >= 0) {
-      prev_used[static_cast<size_t>(prev_i)] = true;
+      s_marker_prev_used[static_cast<size_t>(prev_i)] = true;
       if (markerVisualChanged(s_prev_aircraft_markers[static_cast<size_t>(prev_i)],
                               current[c])) {
         dirty = unionRect(dirty,
@@ -888,7 +891,7 @@ IntRect unionChangedMarkerBounds(const CachedAircraftMarker* current, size_t cur
   }
 
   for (size_t p = 0; p < s_prev_aircraft_marker_count; ++p) {
-    if (!prev_used[p]) {
+    if (!s_marker_prev_used[p]) {
       dirty = unionRect(dirty, markerBounds(s_prev_aircraft_markers[p]));
     }
   }
@@ -1016,10 +1019,10 @@ void radarDisplayDraw() {
 void radarDisplayRefreshAircraft() {
   initPalette();
 
-  CachedAircraftMarker current[services::adsb::kMaxAircraft];
-  const size_t curr_count =
-      collectAircraftMarkers(current, services::adsb::kMaxAircraft);
-  const IntRect dirty = unionChangedMarkerBounds(current, curr_count);
+  const size_t curr_count = collectAircraftMarkers(s_current_aircraft_markers,
+                                                    services::adsb::kMaxAircraft);
+  const IntRect dirty =
+      unionChangedMarkerBounds(s_current_aircraft_markers, curr_count);
   if (rectEmpty(dirty)) {
     return;
   }
