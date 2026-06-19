@@ -39,7 +39,7 @@ void displayInit() {
     Serial.println("Display init failed");
   }
 
-  tft.attach(s_panel);
+  tft.attach(s_panel, true);
   tft.fillScreen(BLACK);
 
   for (uint8_t brightness = 0; brightness < 255; ++brightness) {

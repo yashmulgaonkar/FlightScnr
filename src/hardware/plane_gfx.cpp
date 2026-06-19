@@ -73,6 +73,37 @@ bool ensureBlitScratch(size_t pixels) {
 
 }  // namespace
 
+bool PlaneGfx::targetUsesPixelAlign2() const {
+  return Arduino_TFT::pixelAlign2() && hardware_panel_;
+}
+
+void PlaneGfx::drawLinePixelAlign2(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                                   uint16_t color) {
+  int16_t dx = static_cast<int16_t>(abs(x1 - x0));
+  int16_t sx = x0 < x1 ? 1 : -1;
+  int16_t dy = static_cast<int16_t>(-abs(y1 - y0));
+  int16_t sy = y0 < y1 ? 1 : -1;
+  int16_t err = dx + dy;
+
+  for (;;) {
+    const int16_t ax = static_cast<int16_t>(x0 & ~1);
+    const int16_t ay = static_cast<int16_t>(y0 & ~1);
+    gfx_->fillRect(ax, ay, 2, 2, color);
+    if (x0 == x1 && y0 == y1) {
+      break;
+    }
+    const int16_t e2 = static_cast<int16_t>(2 * err);
+    if (e2 >= dy) {
+      err = static_cast<int16_t>(err + dy);
+      x0 = static_cast<int16_t>(x0 + sx);
+    }
+    if (e2 <= dx) {
+      err = static_cast<int16_t>(err + dx);
+      y0 = static_cast<int16_t>(y0 + sy);
+    }
+  }
+}
+
 void PlaneGfx::fillScreen(uint16_t color) {
   if (gfx_ != nullptr) {
     gfx_->fillScreen(color);
@@ -106,9 +137,16 @@ void PlaneGfx::fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
 
 void PlaneGfx::drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
                         uint16_t color) {
-  if (gfx_ != nullptr) {
-    gfx_->drawLine(x0, y0, x1, y1, color);
+  if (gfx_ == nullptr) {
+    return;
   }
+  if (targetUsesPixelAlign2()) {
+    gfx_->startWrite();
+    drawLinePixelAlign2(x0, y0, x1, y1, color);
+    gfx_->endWrite();
+    return;
+  }
+  gfx_->drawLine(x0, y0, x1, y1, color);
 }
 
 void PlaneGfx::drawWideLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
@@ -118,6 +156,17 @@ void PlaneGfx::drawWideLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
   }
   const int steps = std::max(1, static_cast<int>(half_width * 2.0f + 0.5f));
   const float offset = -half_width;
+  if (targetUsesPixelAlign2()) {
+    gfx_->startWrite();
+    for (int i = 0; i < steps; ++i) {
+      const float t = offset + static_cast<float>(i);
+      const int ox = static_cast<int>(std::lround(t));
+      const int oy = static_cast<int>(std::lround(-t));
+      drawLinePixelAlign2(x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
+    }
+    gfx_->endWrite();
+    return;
+  }
   for (int i = 0; i < steps; ++i) {
     const float t = offset + static_cast<float>(i);
     const int ox = static_cast<int>(std::lround(t));

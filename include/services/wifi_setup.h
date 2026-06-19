@@ -5,5 +5,5 @@ bool wifiShowsSetupScreenOnBoot();
 void wifiResetCredentialsAndReboot();
 /** Boot flow: connect with UI, open portal only if saved creds fail. */
 bool wifiSetupConnect();
-/** Reconnect using saved creds; opens captive portal after repeated failure. */
+/** Reconnect using saved credentials (silent; does not open captive portal). */
 bool wifiReconnect();

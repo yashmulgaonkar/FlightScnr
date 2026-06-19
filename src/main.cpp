@@ -393,7 +393,7 @@ void tickAdsbFetch() {
     if (g_screen == AppScreen::Radar && g_radar_visible) {
       ui::radarDisplayRefreshAircraft();
     } else if (g_screen == AppScreen::FlightDetail) {
-      ui::flightDetailDraw();
+      ui::flightDetailRefresh();
     }
   }
 

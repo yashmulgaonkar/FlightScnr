@@ -11,6 +11,9 @@ namespace ui {
  */
 void flightDetailDraw();
 
+/** Update alt/speed in place when ADS-B data changes; full redraw if layout changes. */
+void flightDetailRefresh();
+
 /** Rebuild list sorted by distance; select closest aircraft. */
 void flightDetailSelectClosest();
 

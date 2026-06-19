@@ -20,7 +20,10 @@ class PlaneGfx {
  public:
   PlaneGfx() = default;
 
-  void attach(Arduino_GFX* gfx) { gfx_ = gfx; }
+  void attach(Arduino_GFX* gfx, bool hardware_panel = false) {
+    gfx_ = gfx;
+    hardware_panel_ = hardware_panel;
+  }
   Arduino_GFX* raw() const { return gfx_; }
 
   void fillScreen(uint16_t color);
@@ -59,9 +62,13 @@ class PlaneGfx {
 
  private:
   Arduino_GFX* gfx_ = nullptr;
+  bool hardware_panel_ = false;
   TextDatum datum_ = TextDatum::TopLeft;
   bool write_open_ = false;
 
+  bool targetUsesPixelAlign2() const;
+  void drawLinePixelAlign2(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                           uint16_t color);
   void mapDatum(const char* text, int16_t x, int16_t y, int16_t* out_x,
                 int16_t* out_y) const;
 };
