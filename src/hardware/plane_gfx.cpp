@@ -100,6 +100,63 @@ bool ensureBlitScratch(size_t pixels) {
   return true;
 }
 
+/** Expand blit bounds outward to 2×2 grid (CO5300). alignDrawArea2 shrinks inward and
+ *  can skip thin erase regions or miss 2×2 sweep stamps. */
+bool expandBlitAreaForPixelAlign2(int16_t* x, int16_t* y, int16_t* w, int16_t* h,
+                                  int16_t screen_w, int16_t screen_h) {
+  if (!Arduino_TFT::pixelAlign2()) {
+    return *w > 0 && *h > 0;
+  }
+
+  int16_t x0 = static_cast<int16_t>((*x) & ~1);
+  int16_t y0 = static_cast<int16_t>((*y) & ~1);
+  int16_t x2 = static_cast<int16_t>(*x + *w);
+  int16_t y2 = static_cast<int16_t>(*y + *h);
+  if (x2 & 1) {
+    x2++;
+  }
+  if (y2 & 1) {
+    y2++;
+  }
+
+  *x = x0;
+  *y = y0;
+  *w = static_cast<int16_t>(x2 - x0);
+  *h = static_cast<int16_t>(y2 - y0);
+
+  if (*x < 0) {
+    *w = static_cast<int16_t>(*w + *x);
+    *x = 0;
+  }
+  if (*y < 0) {
+    *h = static_cast<int16_t>(*h + *y);
+    *y = 0;
+  }
+  if (*x + *w > screen_w) {
+    *w = static_cast<int16_t>(screen_w - *x);
+  }
+  if (*y + *h > screen_h) {
+    *h = static_cast<int16_t>(screen_h - *y);
+  }
+
+  x0 = static_cast<int16_t>((*x) & ~1);
+  y0 = static_cast<int16_t>((*y) & ~1);
+  x2 = static_cast<int16_t>(*x + *w);
+  y2 = static_cast<int16_t>(*y + *h);
+  if (x2 & 1) {
+    x2 = static_cast<int16_t>(x2 < screen_w ? x2 + 1 : x2 - 1);
+  }
+  if (y2 & 1) {
+    y2 = static_cast<int16_t>(y2 < screen_h ? y2 + 1 : y2 - 1);
+  }
+
+  *x = x0;
+  *y = y0;
+  *w = static_cast<int16_t>(x2 - x0);
+  *h = static_cast<int16_t>(y2 - y0);
+  return *w >= 2 && *h >= 2;
+}
+
 }  // namespace
 
 void planeGfxPanelLockInit() {
@@ -393,11 +450,20 @@ void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
   // One row per addr window keeps each writePixels under that limit.
   auto* panel = static_cast<Arduino_TFT*>(gfx_);
   panel->startWrite();
-  for (int16_t row = 0; row < h; ++row) {
-    uint16_t* row_ptr =
-        const_cast<uint16_t*>(src + static_cast<size_t>(row) * static_cast<size_t>(w));
-    panel->writeAddrWindow(x, static_cast<int16_t>(y + row), static_cast<uint16_t>(w), 1);
-    panel->writePixels(row_ptr, static_cast<uint32_t>(w));
+  if (targetUsesPixelAlign2()) {
+    for (int16_t row = 0; row + 2 <= h; row += 2) {
+      uint16_t* row_ptr =
+          const_cast<uint16_t*>(src + static_cast<size_t>(row) * static_cast<size_t>(w));
+      panel->writeAddrWindow(x, static_cast<int16_t>(y + row), static_cast<uint16_t>(w), 2);
+      panel->writePixels(row_ptr, static_cast<uint32_t>(w) * 2U);
+    }
+  } else {
+    for (int16_t row = 0; row < h; ++row) {
+      uint16_t* row_ptr =
+          const_cast<uint16_t*>(src + static_cast<size_t>(row) * static_cast<size_t>(w));
+      panel->writeAddrWindow(x, static_cast<int16_t>(y + row), static_cast<uint16_t>(w), 1);
+      panel->writePixels(row_ptr, static_cast<uint32_t>(w));
+    }
   }
   panel->endWrite();
 
@@ -467,13 +533,13 @@ void PlaneGfx::blitRegionFromBuffer(int16_t x, int16_t y, int16_t w, int16_t h,
     return;
   }
 
-  int16_t skip_x = 0;
-  int16_t skip_y = 0;
-  if (!Arduino_TFT::alignDrawArea2(&x, &y, &w, &h, &skip_x, &skip_y)) {
+  const int16_t blit_x = x;
+  const int16_t blit_y = y;
+  if (!expandBlitAreaForPixelAlign2(&x, &y, &w, &h, screen_w, screen_h)) {
     return;
   }
-  src += static_cast<size_t>(skip_y) * static_cast<size_t>(src_stride) +
-         static_cast<size_t>(skip_x);
+  src += static_cast<size_t>(y - blit_y) * static_cast<size_t>(src_stride) +
+         static_cast<size_t>(x - blit_x);
 
   const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
   if (!ensureBlitScratch(pixels)) {

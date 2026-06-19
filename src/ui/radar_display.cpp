@@ -8,6 +8,7 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "hardware/display_font.h"
+#include "hardware/panel.h"
 #include "services/adsb_client.h"
 #include "services/aircraft_type_lookup.h"
 #include "geo/flat_earth.h"
@@ -1013,8 +1014,10 @@ void radarDisplayRefreshSweep() {
   const int new_count =
       collectSweepAngles(currentSweepAngleDeg(), new_angles, kMaxSweepSpokes);
 
-  constexpr int kSweepMargin =
+  constexpr int kSweepMarginBase =
       static_cast<int>(radar::kSweepLineHalfWidth * 2.0f + 4.0f);
+  const int kSweepMargin =
+      kSweepMarginBase + (hardware::panelUsesCo5300() ? 2 : 0);
   const IntRect new_dirty = unionSpokeBounds(new_angles, new_count, kSweepMargin);
 
   IntRect erase_dirty = new_dirty;
