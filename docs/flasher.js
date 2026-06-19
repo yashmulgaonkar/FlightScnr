@@ -15,7 +15,6 @@ const els = {
   eraseDialog: document.getElementById("erase-dialog"),
   eraseCancelBtn: document.getElementById("erase-cancel-btn"),
   eraseConfirmBtn: document.getElementById("erase-confirm-btn"),
-  fileInput: document.getElementById("file-input"),
   installModeFull: document.getElementById("install-mode-full"),
   installModeApp: document.getElementById("install-mode-app"),
   installModeAppLabel: document.getElementById("install-mode-app-label"),
@@ -134,7 +133,7 @@ async function loadLatestReleaseMeta() {
     els.releaseMeta.textContent = `Latest: ${manifest.name || manifest.version} (${sizeMb} MB full image)`;
   } catch (err) {
     els.releaseMeta.textContent =
-      "Firmware not bundled yet (run Release workflow, then redeploy Pages). You can still upload a .bin file.";
+      "Firmware not bundled yet (run Release workflow, then redeploy Pages).";
     console.warn(err);
   }
 }
@@ -341,27 +340,6 @@ els.eraseDialog.addEventListener("click", (event) => {
 els.eraseConfirmBtn.addEventListener("click", () => {
   els.eraseDialog.close();
   runErase();
-});
-
-els.fileInput.addEventListener("change", async () => {
-  const file = els.fileInput.files?.[0];
-  els.fileInput.value = "";
-  if (!file) {
-    return;
-  }
-  const offset = /merged/i.test(file.name) ? FULL_FLASH_OFFSET : APP_FLASH_OFFSET;
-  if (offset === FULL_FLASH_OFFSET) {
-    log("Full factory image at 0x0 - clears Wi‑Fi and saved settings.");
-  } else {
-    log("App-only image at 0x10000 - requires an existing FlightScnr bootloader and partition table.");
-  }
-  await runFlash(async () => {
-    log(`Reading ${file.name}…`);
-    return {
-      data: new Uint8Array(await file.arrayBuffer()),
-      offset,
-    };
-  }, file.name);
 });
 
 navigator.serial?.addEventListener("disconnect", () => {

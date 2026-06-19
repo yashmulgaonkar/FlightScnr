@@ -27,7 +27,6 @@
             name="install-mode"
             id="install-mode-full"
             value="full"
-            checked
           />
           Full install
         </label>
@@ -37,6 +36,7 @@
             name="install-mode"
             id="install-mode-app"
             value="app"
+            checked
           />
           Update app only
         </label>
@@ -45,8 +45,6 @@
       <p class="button-row">
         <button id="connect-btn" type="button">Connect</button>
         <button id="flash-latest-btn" type="button" disabled>Install</button>
-        <label class="file-btn" for="file-input">Upload .bin</label>
-        <input id="file-input" type="file" accept=".bin,application/octet-stream" />
         <button id="disconnect-btn" type="button" class="secondary" disabled>
           Disconnect
         </button>
@@ -107,8 +105,7 @@
         <strong>0x0</strong>; clears Wi‑Fi and saved settings).
         <strong>Update app only</strong> flashes the application at
         <strong>0x10000</strong> and keeps settings when bootloader and partitions
-        already match. <strong>Upload .bin</strong> uses the same offsets from the
-        filename (<code>merged</code> → 0x0, otherwise 0x10000).
+        already match.
       </p>
 
       <div class="log-section">
