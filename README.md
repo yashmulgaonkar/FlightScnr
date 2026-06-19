@@ -1,5 +1,9 @@
 # FlightScnr for LilyGO T-Encoder Pro
 
+> **Newer LilyGO boards — known issue:** Recent T-Encoder Pro units ship with **different display and touch hardware** than the original revision (see [Hardware](#hardware)). Some users on the newer boards have reported **display glitches** on the radar screen. Firmware auto-detects both variants; fixes are in progress.
+>
+> I work on FlightScnr in my **free time**, so changes and releases can take a while. I’ve **ordered a new-revision unit** to test against myself and will **confirm operation once it’s delivered** (expected in the next few days).
+
 ---
 <p align="center">
   <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
