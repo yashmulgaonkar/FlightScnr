@@ -250,6 +250,10 @@ void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
   int16_t draw_x = x;
   int16_t draw_y = y;
   mapDatum(text, x, y, &draw_x, &draw_y);
+  if (Arduino_TFT::pixelAlign2()) {
+    draw_x &= ~1;
+    draw_y &= ~1;
+  }
   gfx_->setCursor(draw_x, draw_y);
   gfx_->print(text);
 }

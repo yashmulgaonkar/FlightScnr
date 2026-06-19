@@ -113,6 +113,8 @@ void Arduino_TFT::writePixelPreclipped(int16_t x, int16_t y, uint16_t color)
     _bus->writeRepeat(color, 4);
 #else
     if (_pixel_align2) {
+        x &= ~1;
+        y &= ~1;
         writeAddrWindow(x, y, 2, 2);
         _bus->writeRepeat(color, 4);
     } else {
@@ -890,6 +892,13 @@ void Arduino_TFT::drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color
                 xo = 0;
             }
 
+            // CO5300: batch char blit uses unaligned writeAddrWindow; use per-glyph path.
+            if (_pixel_align2 && bg != color)
+            {
+                Arduino_GFX::drawChar(x, y, c, color, bg);
+                return;
+            }
+
             startWrite();
             if (bg != color) // have background color
             {
@@ -1023,6 +1032,13 @@ void Arduino_TFT::drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color
             for (int8_t i = 0; i < 5; i++)
             {
                 col[i] = pgm_read_byte(&font[c * 5 + i]);
+            }
+
+            // CO5300: batch char blit uses unaligned writeAddrWindow; use per-glyph path.
+            if (_pixel_align2 && bg != color)
+            {
+                Arduino_GFX::drawChar(x, y, c, color, bg);
+                return;
             }
 
             startWrite();

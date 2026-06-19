@@ -96,6 +96,27 @@ void sendRebootPage() {
   s_server->send(200, "text/html; charset=utf-8", page);
 }
 
+void sendLocationErrorPage() {
+  char page[960];
+  snprintf(page, sizeof(page),
+           "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+           "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+           "<title>Radar center not saved</title></head>"
+           "<body style=\"font-family:system-ui,sans-serif;max-width:28rem;margin:1.5rem auto;"
+           "padding:0 1rem;background:#000;color:#e8f0ff\">"
+           "<h1 style=\"font-size:1.25rem;color:#f66\">Radar center not saved</h1>"
+           "<p>Other settings were saved, but the <strong>Radar Center</strong> value could "
+           "not be parsed. Use decimal degrees with a comma between latitude and longitude, "
+           "for example:</p>"
+           "<p style=\"font-family:monospace;background:#222;padding:.75rem;border-radius:6px\">"
+           "51.507400, -0.127800</p>"
+           "<p style=\"color:#9ab;font-size:.9rem\">Spaces around the comma are fine. "
+           "Latitude must be between &minus;90 and 90; longitude between &minus;180 and 180.</p>"
+           "<p><a href=\"/\" style=\"color:#6cf\">Back to settings</a></p>"
+           "</body></html>");
+  s_server->send(400, "text/html; charset=utf-8", page);
+}
+
 void appendRangeOptions(char* buf, size_t len, size_t* used) {
   for (uint8_t i = 0; i < ui::radar::kScaleBandCount; ++i) {
     const ui::radar::ScaleBand& p = ui::radar::kScaleBands[i];
@@ -407,6 +428,11 @@ void handleSave() {
       s_server->arg("beep_tone").c_str(), s_server->arg("bright_pct").c_str());
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
+
+  if (!loc_ok) {
+    sendLocationErrorPage();
+    return;
+  }
 
   sendRebootPage();
   s_server->client().flush();
