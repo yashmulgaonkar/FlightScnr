@@ -937,10 +937,8 @@ static void blitStatic() {
   }
 
   if (!rebuildContentLayer()) {
-    tft.startWrite();
     s_bg.pushSprite(0, 0);
     drawAircraft();
-    tft.endWrite();
     tft.setTextDatum(TextDatum::TopLeft);
     s_sweep_track_valid = false;
     return;
@@ -980,7 +978,6 @@ void radarDisplayRefreshSweep() {
     erase_dirty = unionRect(s_prev_sweep_dirty, new_dirty);
   }
 
-  tft.startWrite();
   if (!rectEmpty(erase_dirty)) {
     blitRegionFromContent(erase_dirty, content, content_stride);
   }
@@ -990,7 +987,6 @@ void radarDisplayRefreshSweep() {
         (i == new_count - 1) ? radar::kColorSweep : radar::kColorSweepTrail;
     drawSweepSpokeOn(tft, new_angles[i], color);
   }
-  tft.endWrite();
   tft.setTextDatum(TextDatum::TopLeft);
 
   s_prev_sweep_dirty = new_dirty;
@@ -1030,17 +1026,10 @@ void radarDisplayRefreshAircraft() {
 
   if (!s_bg_ready || !rebuildContentLayer()) {
     blitStatic();
-    radarDisplayRefreshSweep();
     return;
   }
 
-  const uint16_t* content = s_content.buffer();
-  const int content_stride = s_content.width();
-
-  tft.startWrite();
-  blitRegionFromContent(dirty, content, content_stride);
-  tft.endWrite();
-
+  s_content.pushSprite(0, 0);
   savePrevAircraftMarkers();
 }
 

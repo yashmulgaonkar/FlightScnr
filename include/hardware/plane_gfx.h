@@ -56,7 +56,7 @@ class PlaneGfx {
                           int16_t h);
   void draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
                           uint16_t transparent_color, int16_t w, int16_t h);
-  /** Copies a screen region; caller must hold startWrite() on the target display. */
+  /** Copies a screen region to the hardware panel. */
   void blitRegionFromBuffer(int16_t x, int16_t y, int16_t w, int16_t h,
                             const uint16_t* src, int16_t src_stride);
 
@@ -64,14 +64,16 @@ class PlaneGfx {
   Arduino_GFX* gfx_ = nullptr;
   bool hardware_panel_ = false;
   TextDatum datum_ = TextDatum::TopLeft;
-  bool write_open_ = false;
+  uint8_t write_depth_ = 0;
 
   bool targetUsesPixelAlign2() const;
   void drawLinePixelAlign2(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
                            uint16_t color);
-  /** Single SPI flush; skips nested startWrite when a batch is already open. */
+  /** Single SPI flush to the hardware panel. */
   void panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
                         const uint16_t* src);
+  void drawLineInternal(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                        uint16_t color);
   void mapDatum(const char* text, int16_t x, int16_t y, int16_t* out_x,
                 int16_t* out_y) const;
 };

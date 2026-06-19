@@ -8,7 +8,26 @@
 
 #include "Arduino_TFT.h"
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
+
 namespace {
+
+class GfxWriteLineAccess : public Arduino_GFX {
+ public:
+  static void writeLineOn(Arduino_GFX* gfx, int16_t x0, int16_t y0, int16_t x1,
+                          int16_t y1, uint16_t color) {
+    static_cast<GfxWriteLineAccess*>(gfx)->writeLine(x0, y0, x1, y1, color);
+  }
+};
+
+portMUX_TYPE s_panel_spi_mux = portMUX_INITIALIZER_UNLOCKED;
+
+class PanelSpiLock {
+ public:
+  PanelSpiLock() { portENTER_CRITICAL(&s_panel_spi_mux); }
+  ~PanelSpiLock() { portEXIT_CRITICAL(&s_panel_spi_mux); }
+};
 
 class SpriteCanvas : public Arduino_GFX {
  public:
@@ -135,18 +154,34 @@ void PlaneGfx::fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
   }
 }
 
+void PlaneGfx::drawLineInternal(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                                uint16_t color) {
+  if (targetUsesPixelAlign2()) {
+    drawLinePixelAlign2(x0, y0, x1, y1, color);
+    return;
+  }
+  GfxWriteLineAccess::writeLineOn(gfx_, x0, y0, x1, y1, color);
+}
+
 void PlaneGfx::drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
                         uint16_t color) {
   if (gfx_ == nullptr) {
     return;
   }
+  if (write_depth_ > 0) {
+    drawLineInternal(x0, y0, x1, y1, color);
+    return;
+  }
+  PanelSpiLock lock;
   if (targetUsesPixelAlign2()) {
     gfx_->startWrite();
     drawLinePixelAlign2(x0, y0, x1, y1, color);
     gfx_->endWrite();
     return;
   }
-  gfx_->drawLine(x0, y0, x1, y1, color);
+  gfx_->startWrite();
+  drawLineInternal(x0, y0, x1, y1, color);
+  gfx_->endWrite();
 }
 
 void PlaneGfx::drawWideLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
@@ -156,22 +191,20 @@ void PlaneGfx::drawWideLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
   }
   const int steps = std::max(1, static_cast<int>(half_width * 2.0f + 0.5f));
   const float offset = -half_width;
-  if (targetUsesPixelAlign2()) {
+
+  const bool opened_here = write_depth_ == 0;
+  PanelSpiLock lock;
+  if (opened_here) {
     gfx_->startWrite();
-    for (int i = 0; i < steps; ++i) {
-      const float t = offset + static_cast<float>(i);
-      const int ox = static_cast<int>(std::lround(t));
-      const int oy = static_cast<int>(std::lround(-t));
-      drawLinePixelAlign2(x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
-    }
-    gfx_->endWrite();
-    return;
   }
   for (int i = 0; i < steps; ++i) {
     const float t = offset + static_cast<float>(i);
     const int ox = static_cast<int>(std::lround(t));
     const int oy = static_cast<int>(std::lround(-t));
-    gfx_->drawLine(x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
+    drawLineInternal(x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
+  }
+  if (opened_here) {
+    gfx_->endWrite();
   }
 }
 
@@ -308,16 +341,20 @@ void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
 }
 
 void PlaneGfx::startWrite() {
-  if (gfx_ != nullptr && !write_open_) {
+  if (gfx_ == nullptr) {
+    return;
+  }
+  if (write_depth_++ == 0) {
     gfx_->startWrite();
-    write_open_ = true;
   }
 }
 
 void PlaneGfx::endWrite() {
-  if (gfx_ != nullptr && write_open_) {
+  if (gfx_ == nullptr || write_depth_ == 0) {
+    return;
+  }
+  if (--write_depth_ == 0) {
     gfx_->endWrite();
-    write_open_ = false;
   }
 }
 
@@ -332,16 +369,12 @@ void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
     return;
   }
 
+  PanelSpiLock lock;
   auto* panel = static_cast<Arduino_TFT*>(gfx_);
-  const bool opened_here = !write_open_;
-  if (opened_here) {
-    panel->startWrite();
-  }
+  panel->startWrite();
   panel->writeAddrWindow(x, y, w, h);
   panel->writePixels(const_cast<uint16_t*>(src), static_cast<uint32_t>(w) * static_cast<uint32_t>(h));
-  if (opened_here) {
-    panel->endWrite();
-  }
+  panel->endWrite();
 }
 
 void PlaneGfx::draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
@@ -368,6 +401,11 @@ void PlaneGfx::draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
 void PlaneGfx::blitRegionFromBuffer(int16_t x, int16_t y, int16_t w, int16_t h,
                                     const uint16_t* src, int16_t src_stride) {
   if (gfx_ == nullptr || src == nullptr || w <= 0 || h <= 0 || src_stride <= 0) {
+    return;
+  }
+
+  if (!hardware_panel_) {
+    gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(src), w, h);
     return;
   }
 
