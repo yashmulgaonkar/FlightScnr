@@ -14,6 +14,58 @@ void Arduino_TFT::setPixelAlign2(bool enable) { _pixel_align2 = enable; }
 
 bool Arduino_TFT::pixelAlign2() { return _pixel_align2; }
 
+bool Arduino_TFT::alignDrawArea2(int16_t *x, int16_t *y, int16_t *w, int16_t *h,
+                                 int16_t *skip_x, int16_t *skip_y)
+{
+    if (skip_x)
+    {
+        *skip_x = 0;
+    }
+    if (skip_y)
+    {
+        *skip_y = 0;
+    }
+    if (!_pixel_align2)
+    {
+        return true;
+    }
+
+    if ((*x) % 2 != 0)
+    {
+        (*x)++;
+        if (skip_x)
+        {
+            (*skip_x)++;
+        }
+        if (*w > 0)
+        {
+            (*w)--;
+        }
+    }
+    if ((*y) % 2 != 0)
+    {
+        (*y)++;
+        if (skip_y)
+        {
+            (*skip_y)++;
+        }
+        if (*h > 0)
+        {
+            (*h)--;
+        }
+    }
+    if ((*w) % 2 != 0)
+    {
+        (*w)--;
+    }
+    if ((*h) % 2 != 0)
+    {
+        (*h)--;
+    }
+
+    return (*w) >= 2 && (*h) >= 2;
+}
+
 Arduino_TFT::Arduino_TFT(
     Arduino_DataBus *bus, int8_t rst, uint8_t r,
     bool ips, int16_t w, int16_t h,
@@ -152,6 +204,10 @@ void Arduino_TFT::writeFillRectPreclipped(
 #ifdef ESP8266
     yield();
 #endif
+    if (!alignDrawArea2(&x, &y, &w, &h))
+    {
+        return;
+    }
     writeAddrWindow(x, y, w, h);
     writeRepeat(color, (uint32_t)w * h);
 }
@@ -585,12 +641,34 @@ void Arduino_TFT::draw16bitRGBBitmap(
     }
     else
     {
-        uint32_t len = (uint32_t)w * h;
+        const int16_t stride = w;
+        int16_t skip_x = 0;
+        int16_t skip_y = 0;
+        if (!alignDrawArea2(&x, &y, &w, &h, &skip_x, &skip_y))
+        {
+            return;
+        }
+
         startWrite();
         writeAddrWindow(x, y, w, h);
-        for (uint32_t i = 0; i < len; i++)
+        if (skip_x == 0 && skip_y == 0)
         {
-            _bus->write16(pgm_read_word(&bitmap[i]));
+            const uint32_t len = (uint32_t)w * h;
+            for (uint32_t i = 0; i < len; i++)
+            {
+                _bus->write16(pgm_read_word(&bitmap[i]));
+            }
+        }
+        else
+        {
+            for (int16_t row = 0; row < h; row++)
+            {
+                const uint16_t *row_ptr = &bitmap[(size_t)(skip_y + row) * (size_t)stride + (size_t)skip_x];
+                for (int16_t col = 0; col < w; col++)
+                {
+                    _bus->write16(pgm_read_word(&row_ptr[col]));
+                }
+            }
         }
         endWrite();
     }
@@ -620,9 +698,28 @@ void Arduino_TFT::draw16bitRGBBitmap(
     }
     else
     {
+        const int16_t stride = w;
+        int16_t skip_x = 0;
+        int16_t skip_y = 0;
+        if (!alignDrawArea2(&x, &y, &w, &h, &skip_x, &skip_y))
+        {
+            return;
+        }
+
         startWrite();
         writeAddrWindow(x, y, w, h);
-        _bus->writePixels(bitmap, (uint32_t)w * h);
+        if (skip_x == 0 && skip_y == 0)
+        {
+            _bus->writePixels(bitmap, (uint32_t)w * h);
+        }
+        else
+        {
+            bitmap += (size_t)skip_y * (size_t)stride + (size_t)skip_x;
+            for (int16_t row = 0; row < h; row++)
+            {
+                _bus->writePixels(bitmap + (size_t)row * (size_t)stride, w);
+            }
+        }
         endWrite();
     }
 }

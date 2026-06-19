@@ -25,6 +25,9 @@ public:
   /** CO5300 (TFD12) panels require 2×2 pixel writes for single-pixel ops. */
   static void setPixelAlign2(bool enable);
   static bool pixelAlign2();
+  /** Snap draw region to a 2×2 grid (LilyGO LVGL rounder). No-op when pixelAlign2 is off. */
+  static bool alignDrawArea2(int16_t *x, int16_t *y, int16_t *w, int16_t *h,
+                             int16_t *skip_x = nullptr, int16_t *skip_y = nullptr);
 
   void startWrite(void) override;
   void endWrite(void) override;

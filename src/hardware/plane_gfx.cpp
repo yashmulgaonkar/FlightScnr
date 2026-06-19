@@ -316,6 +316,14 @@ void PlaneGfx::blitRegionFromBuffer(int16_t x, int16_t y, int16_t w, int16_t h,
     return;
   }
 
+  int16_t skip_x = 0;
+  int16_t skip_y = 0;
+  if (!Arduino_TFT::alignDrawArea2(&x, &y, &w, &h, &skip_x, &skip_y)) {
+    return;
+  }
+  src += static_cast<size_t>(skip_y) * static_cast<size_t>(src_stride) +
+         static_cast<size_t>(skip_x);
+
   const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
   if (!ensureBlitScratch(pixels)) {
     return;
