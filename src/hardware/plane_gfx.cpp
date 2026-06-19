@@ -321,11 +321,39 @@ void PlaneGfx::endWrite() {
   }
 }
 
+void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
+                                const uint16_t* src) {
+  if (gfx_ == nullptr || src == nullptr || w <= 0 || h <= 0) {
+    return;
+  }
+
+  if (!hardware_panel_) {
+    gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(src), w, h);
+    return;
+  }
+
+  auto* panel = static_cast<Arduino_TFT*>(gfx_);
+  const bool opened_here = !write_open_;
+  if (opened_here) {
+    panel->startWrite();
+  }
+  panel->writeAddrWindow(x, y, w, h);
+  panel->writePixels(const_cast<uint16_t*>(src), static_cast<uint32_t>(w) * static_cast<uint32_t>(h));
+  if (opened_here) {
+    panel->endWrite();
+  }
+}
+
 void PlaneGfx::draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
                                   int16_t w, int16_t h) {
-  if (gfx_ != nullptr && bitmap != nullptr) {
-    gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(bitmap), w, h);
+  if (gfx_ == nullptr || bitmap == nullptr) {
+    return;
   }
+  if (hardware_panel_) {
+    blitRegionFromBuffer(x, y, w, h, bitmap, w);
+    return;
+  }
+  gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(bitmap), w, h);
 }
 
 void PlaneGfx::draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
@@ -388,7 +416,7 @@ void PlaneGfx::blitRegionFromBuffer(int16_t x, int16_t y, int16_t w, int16_t h,
            static_cast<size_t>(w) * sizeof(uint16_t));
   }
 
-  static_cast<Arduino_TFT*>(gfx_)->draw16bitRGBBitmap(x, y, s_blit_scratch, w, h);
+  panelFlushBitmap(x, y, w, h, s_blit_scratch);
 }
 
 PlaneGfxSprite::PlaneGfxSprite(PlaneGfx* parent) : parent_(parent) {}

@@ -494,8 +494,8 @@ void loop() {
       if (!g_radar_visible) {
         showRadar();
       } else {
-        tickRadarAnimation();
         tickAdsbFetch();
+        tickRadarAnimation();
       }
     } else if (g_screen == AppScreen::FlightDetail) {
       tickAdsbFetch();

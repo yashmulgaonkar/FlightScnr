@@ -69,6 +69,9 @@ class PlaneGfx {
   bool targetUsesPixelAlign2() const;
   void drawLinePixelAlign2(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
                            uint16_t color);
+  /** Single SPI flush; skips nested startWrite when a batch is already open. */
+  void panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
+                        const uint16_t* src);
   void mapDatum(const char* text, int16_t x, int16_t y, int16_t* out_x,
                 int16_t* out_y) const;
 };

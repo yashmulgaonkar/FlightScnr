@@ -946,9 +946,7 @@ static void blitStatic() {
     return;
   }
 
-  tft.startWrite();
   s_content.pushSprite(0, 0);
-  tft.endWrite();
   tft.setTextDatum(TextDatum::TopLeft);
   s_sweep_track_valid = false;
   savePrevAircraftMarkers();
@@ -981,6 +979,8 @@ void radarDisplayRefreshSweep() {
   if (s_sweep_track_valid) {
     erase_dirty = unionRect(s_prev_sweep_dirty, new_dirty);
   }
+
+  tft.startWrite();
   if (!rectEmpty(erase_dirty)) {
     blitRegionFromContent(erase_dirty, content, content_stride);
   }
@@ -990,6 +990,7 @@ void radarDisplayRefreshSweep() {
         (i == new_count - 1) ? radar::kColorSweep : radar::kColorSweepTrail;
     drawSweepSpokeOn(tft, new_angles[i], color);
   }
+  tft.endWrite();
   tft.setTextDatum(TextDatum::TopLeft);
 
   s_prev_sweep_dirty = new_dirty;
@@ -1036,18 +1037,9 @@ void radarDisplayRefreshAircraft() {
   const uint16_t* content = s_content.buffer();
   const int content_stride = s_content.width();
 
-  float hold_angles[kMaxSweepSpokes] = {};
-  const int hold_count =
-      collectSweepAngles(currentSweepAngleDeg(), hold_angles, kMaxSweepSpokes);
-
+  tft.startWrite();
   blitRegionFromContent(dirty, content, content_stride);
-
-  for (int i = 0; i < hold_count; ++i) {
-    const uint16_t color =
-        (i == hold_count - 1) ? radar::kColorSweep : radar::kColorSweepTrail;
-    drawSweepSpokeOn(tft, hold_angles[i], color);
-  }
-  tft.setTextDatum(TextDatum::TopLeft);
+  tft.endWrite();
 
   savePrevAircraftMarkers();
 }
