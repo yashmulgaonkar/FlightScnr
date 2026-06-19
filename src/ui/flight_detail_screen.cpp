@@ -561,7 +561,7 @@ void computeFlightDetailLayout(const FlightDetailStrings& s, FlightDetailLayout*
     y = kBezelInsetPx;
   }
 
-  int y_alt = y + pre_type_h_adj + type_block_h;
+  int y_alt = y + pre_type_h_adj + type_block_h + kLineGap;
   layout->y_start = y;
   layout->y_alt = y_alt;
   layout->y_speed = y_alt + detail_h + kLineGap;
@@ -741,12 +741,12 @@ void flightDetailRefresh() {
   const UiTextStyle detail_style = displayFontDetail();
 
   if (strcmp(s.alt, s_snapshot.text.alt) != 0) {
-    redrawCenterLineAt(layout.y_alt, s.alt, detail_style, fg, bg);
+    redrawCenterLineAt(s_snapshot.layout.y_alt, s.alt, detail_style, fg, bg);
     strncpy(s_snapshot.text.alt, s.alt, sizeof(s_snapshot.text.alt) - 1);
     s_snapshot.text.alt[sizeof(s_snapshot.text.alt) - 1] = '\0';
   }
   if (strcmp(s.speed, s_snapshot.text.speed) != 0) {
-    redrawCenterLineAt(layout.y_speed, s.speed, detail_style, fg, bg);
+    redrawCenterLineAt(s_snapshot.layout.y_speed, s.speed, detail_style, fg, bg);
     strncpy(s_snapshot.text.speed, s.speed, sizeof(s_snapshot.text.speed) - 1);
     s_snapshot.text.speed[sizeof(s_snapshot.text.speed) - 1] = '\0';
   }

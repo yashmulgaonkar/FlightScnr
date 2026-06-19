@@ -17,6 +17,8 @@
 #include "ui/radar_scale.h"
 #include "ui/radar_theme.h"
 
+#include "hardware/gfx_log.h"
+
 namespace ui {
 namespace radar {
 
@@ -666,14 +668,6 @@ IntRect clampRectToScreen(IntRect r) {
   return r;
 }
 
-IntRect spokeBounds(float angle_deg, int margin) {
-  int ex = 0;
-  int ey = 0;
-  sweepSpokeEndpoint(angle_deg, &ex, &ey);
-  return clampRectToScreen(
-      rectFromPoints(radar::kCenterX, radar::kCenterY, ex, ey, margin));
-}
-
 IntRect unionRect(const IntRect& a, const IntRect& b) {
   if (rectEmpty(a)) {
     return b;
@@ -686,6 +680,14 @@ IntRect unionRect(const IntRect& a, const IntRect& b) {
   const int x1 = std::max(a.x + a.w, b.x + b.w);
   const int y1 = std::max(a.y + a.h, b.y + b.h);
   return IntRect{x0, y0, x1 - x0, y1 - y0};
+}
+
+IntRect spokeBounds(float angle_deg, int margin) {
+  int ex = 0;
+  int ey = 0;
+  sweepSpokeEndpoint(angle_deg, &ex, &ey);
+  return clampRectToScreen(
+      rectFromPoints(radar::kCenterX, radar::kCenterY, ex, ey, margin));
 }
 
 IntRect unionSpokeBounds(const float* angles, int count, int margin) {
@@ -708,10 +710,14 @@ void blitRegionFromContent(const IntRect& rect, const uint16_t* content, int str
   const int area = clipped.w * clipped.h;
   constexpr int kScreenPixels = radar::kSize * radar::kSize;
   if (area >= kScreenPixels / 3 && s_content_ready) {
+    hardware::gfxLog("[radar] blitRegion full pushSprite");
     s_content.pushSprite(0, 0);
+    hardware::gfxLog("[radar] blitRegion full pushSprite ok");
     return;
   }
 
+  hardware::gfxLogf("[radar] blitRegion partial %dx%d @ (%d,%d)", clipped.w, clipped.h,
+                    clipped.x, clipped.y);
   tft.blitRegionFromBuffer(static_cast<int16_t>(clipped.x),
                            static_cast<int16_t>(clipped.y),
                            static_cast<int16_t>(clipped.w),
@@ -719,6 +725,7 @@ void blitRegionFromContent(const IntRect& rect, const uint16_t* content, int str
                            content + static_cast<size_t>(clipped.y) * static_cast<size_t>(stride) +
                                static_cast<size_t>(clipped.x),
                            static_cast<int16_t>(stride));
+  hardware::gfxLog("[radar] blitRegion partial ok");
 }
 
 void drawSweepSpokeOn(PlaneGfx& gfx, float angle_deg, uint16_t color) {
@@ -958,20 +965,29 @@ static void blitStatic() {
   savePrevAircraftMarkers();
 }
 
-void applyPendingContentPanelSync() {
-  switch (s_content_panel_sync) {
+bool applyPendingContentPanelSync() {
+  const ContentPanelSync pending = s_content_panel_sync;
+  if (pending == ContentPanelSync::None) {
+    return false;
+  }
+
+  switch (pending) {
     case ContentPanelSync::None:
-      return;
+      break;
     case ContentPanelSync::BlitStatic:
+      hardware::gfxLog("[radar] panel sync: blitStatic");
       blitStatic();
       break;
     case ContentPanelSync::PushSprite:
+      hardware::gfxLog("[radar] panel sync: pushSprite");
       s_content.pushSprite(0, 0);
       tft.setTextDatum(TextDatum::TopLeft);
       s_sweep_track_valid = false;
       break;
   }
   s_content_panel_sync = ContentPanelSync::None;
+  hardware::gfxLog("[radar] panel sync done");
+  return true;
 }
 
 void radarDisplayRefreshSweep() {
@@ -986,7 +1002,9 @@ void radarDisplayRefreshSweep() {
     return;
   }
 
-  applyPendingContentPanelSync();
+  hardware::gfxLog("[radar] sweep begin");
+
+  const bool content_synced = applyPendingContentPanelSync();
 
   const uint16_t* content = s_content.buffer();
   const int content_stride = s_content.width();
@@ -1004,10 +1022,13 @@ void radarDisplayRefreshSweep() {
     erase_dirty = unionRect(s_prev_sweep_dirty, new_dirty);
   }
 
-  if (!rectEmpty(erase_dirty)) {
+  if (content_synced) {
+    hardware::gfxLog("[radar] skip erase blit (content synced)");
+  } else if (!rectEmpty(erase_dirty)) {
     blitRegionFromContent(erase_dirty, content, content_stride);
   }
 
+  hardware::gfxLogf("[radar] draw %d sweep spokes", new_count);
   for (int i = 0; i < new_count; ++i) {
     const uint16_t color =
         (i == new_count - 1) ? radar::kColorSweep : radar::kColorSweepTrail;
@@ -1017,6 +1038,8 @@ void radarDisplayRefreshSweep() {
 
   s_prev_sweep_dirty = new_dirty;
   s_sweep_track_valid = true;
+
+  hardware::gfxLog("[radar] sweep end");
 }
 
 void radarDisplayDraw() {
@@ -1051,12 +1074,16 @@ void radarDisplayRefreshAircraft() {
     return;
   }
 
+  hardware::gfxLogf("[radar] adsb dirty %dx%d @ (%d,%d)", dirty.w, dirty.h, dirty.x, dirty.y);
+
   if (!s_bg_ready || !rebuildContentLayer()) {
     s_content_panel_sync = ContentPanelSync::BlitStatic;
+    hardware::gfxLog("[radar] adsb pending blitStatic");
     return;
   }
 
   s_content_panel_sync = ContentPanelSync::PushSprite;
+  hardware::gfxLog("[radar] adsb pending pushSprite");
   savePrevAircraftMarkers();
 }
 

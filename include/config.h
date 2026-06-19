@@ -84,6 +84,9 @@ constexpr bool kTrafficIncludeGround = false;
 /** Minimum altitude (ft); 0 disables the filter. */
 constexpr int kFactoryAltitudeFloorFt = 500;
 
+/** Serial [gfx]/[radar] SPI debug (set false once stable). */
+constexpr bool kGfxDebug = false;
+
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;
 constexpr uint16_t kTextOnBlack = 0xFFFF;

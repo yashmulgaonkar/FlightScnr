@@ -8,6 +8,8 @@
 
 #include "Arduino_TFT.h"
 
+#include "hardware/gfx_log.h"
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -378,17 +380,28 @@ void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
     return;
   }
 
+  hardware::gfxLogf("[gfx] flush %dx%d @ (%d,%d) begin", w, h, x, y);
+
+  PanelSpiLock lock;
   if (!hardware_panel_) {
     gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(src), w, h);
+    hardware::gfxLog("[gfx] flush ok");
     return;
   }
 
-  PanelSpiLock lock;
+  // QSPI writePixels asserts when a single CS session spans >4096 pixels.
+  // One row per addr window keeps each writePixels under that limit.
   auto* panel = static_cast<Arduino_TFT*>(gfx_);
   panel->startWrite();
-  panel->writeAddrWindow(x, y, w, h);
-  panel->writePixels(const_cast<uint16_t*>(src), static_cast<uint32_t>(w) * static_cast<uint32_t>(h));
+  for (int16_t row = 0; row < h; ++row) {
+    uint16_t* row_ptr =
+        const_cast<uint16_t*>(src + static_cast<size_t>(row) * static_cast<size_t>(w));
+    panel->writeAddrWindow(x, static_cast<int16_t>(y + row), static_cast<uint16_t>(w), 1);
+    panel->writePixels(row_ptr, static_cast<uint32_t>(w));
+  }
   panel->endWrite();
+
+  hardware::gfxLog("[gfx] flush ok");
 }
 
 void PlaneGfx::draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
@@ -446,6 +459,11 @@ void PlaneGfx::blitRegionFromBuffer(int16_t x, int16_t y, int16_t w, int16_t h,
     h = screen_h - y;
   }
   if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  if (x == 0 && y == 0 && w == screen_w && h == screen_h && src_stride == w) {
+    panelFlushBitmap(x, y, w, h, src);
     return;
   }
 
