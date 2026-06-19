@@ -40,6 +40,7 @@ void displayInit() {
   }
 
   tft.attach(s_panel, true);
+  planeGfxPanelLockInit();
   tft.fillScreen(BLACK);
 
   for (uint8_t brightness = 0; brightness < 255; ++brightness) {

@@ -65,6 +65,14 @@ size_t s_prev_aircraft_marker_count = 0;
 CachedAircraftMarker s_current_aircraft_markers[services::adsb::kMaxAircraft];
 bool s_marker_prev_used[services::adsb::kMaxAircraft] = {};
 
+enum class ContentPanelSync : uint8_t {
+  None,
+  PushSprite,
+  BlitStatic,
+};
+
+ContentPanelSync s_content_panel_sync = ContentPanelSync::None;
+
 class DrawScope {
  public:
   explicit DrawScope(PlaneGfx& gfx) : prev_(s_draw) { s_draw = &gfx; }
@@ -950,6 +958,22 @@ static void blitStatic() {
   savePrevAircraftMarkers();
 }
 
+void applyPendingContentPanelSync() {
+  switch (s_content_panel_sync) {
+    case ContentPanelSync::None:
+      return;
+    case ContentPanelSync::BlitStatic:
+      blitStatic();
+      break;
+    case ContentPanelSync::PushSprite:
+      s_content.pushSprite(0, 0);
+      tft.setTextDatum(TextDatum::TopLeft);
+      s_sweep_track_valid = false;
+      break;
+  }
+  s_content_panel_sync = ContentPanelSync::None;
+}
+
 void radarDisplayRefreshSweep() {
   initPalette();
   advanceSweepAngle();
@@ -961,6 +985,8 @@ void radarDisplayRefreshSweep() {
     tft.setTextDatum(TextDatum::TopLeft);
     return;
   }
+
+  applyPendingContentPanelSync();
 
   const uint16_t* content = s_content.buffer();
   const int content_stride = s_content.width();
@@ -996,6 +1022,7 @@ void radarDisplayRefreshSweep() {
 void radarDisplayDraw() {
   initPalette();
   initLabelMetrics();
+  s_content_panel_sync = ContentPanelSync::None;
   s_sweep_angle_deg = 0.0f;
   s_sweep_track_valid = false;
   s_prev_aircraft_marker_count = 0;
@@ -1025,11 +1052,11 @@ void radarDisplayRefreshAircraft() {
   }
 
   if (!s_bg_ready || !rebuildContentLayer()) {
-    blitStatic();
+    s_content_panel_sync = ContentPanelSync::BlitStatic;
     return;
   }
 
-  s_content.pushSprite(0, 0);
+  s_content_panel_sync = ContentPanelSync::PushSprite;
   savePrevAircraftMarkers();
 }
 

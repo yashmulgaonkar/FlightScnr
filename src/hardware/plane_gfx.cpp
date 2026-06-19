@@ -9,7 +9,9 @@
 #include "Arduino_TFT.h"
 
 #include <freertos/FreeRTOS.h>
-#include <freertos/portmacro.h>
+#include <freertos/semphr.h>
+
+static SemaphoreHandle_t s_panel_mutex = nullptr;
 
 namespace {
 
@@ -21,12 +23,18 @@ class GfxWriteLineAccess : public Arduino_GFX {
   }
 };
 
-portMUX_TYPE s_panel_spi_mux = portMUX_INITIALIZER_UNLOCKED;
-
 class PanelSpiLock {
  public:
-  PanelSpiLock() { portENTER_CRITICAL(&s_panel_spi_mux); }
-  ~PanelSpiLock() { portEXIT_CRITICAL(&s_panel_spi_mux); }
+  PanelSpiLock() {
+    if (s_panel_mutex != nullptr) {
+      xSemaphoreTake(s_panel_mutex, portMAX_DELAY);
+    }
+  }
+  ~PanelSpiLock() {
+    if (s_panel_mutex != nullptr) {
+      xSemaphoreGive(s_panel_mutex);
+    }
+  }
 };
 
 class SpriteCanvas : public Arduino_GFX {
@@ -91,6 +99,12 @@ bool ensureBlitScratch(size_t pixels) {
 }
 
 }  // namespace
+
+void planeGfxPanelLockInit() {
+  if (s_panel_mutex == nullptr) {
+    s_panel_mutex = xSemaphoreCreateMutex();
+  }
+}
 
 bool PlaneGfx::targetUsesPixelAlign2() const {
   return Arduino_TFT::pixelAlign2() && hardware_panel_;

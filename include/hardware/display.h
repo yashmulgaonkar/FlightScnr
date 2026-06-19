@@ -5,3 +5,4 @@
 extern PlaneGfx tft;
 
 void displayInit();
+void planeGfxPanelLockInit();
