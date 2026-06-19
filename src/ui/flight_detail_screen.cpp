@@ -450,6 +450,19 @@ void formatSpeedLine(const services::adsb::Aircraft& ac, char* out, size_t out_l
   }
 }
 
+void formatTypeLine(const services::adsb::Aircraft& ac, char* out, size_t out_len) {
+  if (ac.type[0] == '\0') {
+    strncpy(out, "—", out_len - 1);
+    out[out_len - 1] = '\0';
+    return;
+  }
+  if (services::aircraft_type::lookupDescription(ac.type, out, out_len)) {
+    return;
+  }
+  strncpy(out, ac.type, out_len - 1);
+  out[out_len - 1] = '\0';
+}
+
 constexpr int kTypeMaxLines = 4;
 
 struct FlightDetailStrings {
@@ -577,19 +590,6 @@ void saveSnapshot(const FlightDetailStrings& s, const FlightDetailLayout& layout
   s_snapshot.order_count = s_order_count;
   s_snapshot.text = s;
   s_snapshot.layout = layout;
-}
-
-void formatTypeLine(const services::adsb::Aircraft& ac, char* out, size_t out_len) {
-  if (ac.type[0] == '\0') {
-    strncpy(out, "—", out_len - 1);
-    out[out_len - 1] = '\0';
-    return;
-  }
-  if (services::aircraft_type::lookupDescription(ac.type, out, out_len)) {
-    return;
-  }
-  strncpy(out, ac.type, out_len - 1);
-  out[out_len - 1] = '\0';
 }
 
 }  // namespace

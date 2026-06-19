@@ -823,14 +823,6 @@ IntRect markerBounds(const CachedAircraftMarker& marker) {
   return aircraftMarkerBounds(marker.x, marker.y, marker.plane);
 }
 
-IntRect unionMarkerBounds(const CachedAircraftMarker* markers, size_t count) {
-  IntRect bounds{};
-  for (size_t i = 0; i < count; ++i) {
-    bounds = unionRect(bounds, markerBounds(markers[i]));
-  }
-  return bounds;
-}
-
 bool aircraftIdentityMatch(const services::adsb::Aircraft& a,
                            const services::adsb::Aircraft& b) {
   if (a.callsign[0] != '\0' && b.callsign[0] != '\0') {
