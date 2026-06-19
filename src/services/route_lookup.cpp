@@ -773,7 +773,7 @@ void init() {
   } else if (apikeys::hasAirLabs() || apikeys::hasFlightAware() || apikeys::hasFr24()) {
     Serial.println("Route lookup: API keys saved but all providers disabled");
   } else {
-    Serial.println("Route lookup: no API keys — prefix fallback only");
+    Serial.println("Route lookup: no API keys - prefix fallback only");
   }
 }
 

@@ -1,5 +1,5 @@
 # PlatformIO post-build script: merge bootloader + partitions + app into one .bin
-# for full factory flash at 0x0 (WebFlasher Install uses the app-only .bin at 0x10000).
+# for full factory flash at 0x0 (WebFlasher Install uses the merged image).
 # Usage: pio run -t merge -e tencoder-pro
 
 Import("env")

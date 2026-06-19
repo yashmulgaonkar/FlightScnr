@@ -7,7 +7,8 @@ body {
 }
 
 .content {
-  max-width: 600px;
+  width: min(1100px, calc(100vw - 24px));
+  max-width: min(1100px, calc(100vw - 24px));
   margin: 0 auto;
   padding: 12px;
 }
@@ -16,6 +17,7 @@ h1 {
   margin: 0 0 0.35em;
   font-size: 1.75rem;
   font-weight: 600;
+  text-align: center;
 }
 
 h2 {
@@ -29,10 +31,51 @@ h2 {
   margin: 0 0 1.5em;
   color: inherit;
   opacity: 0.85;
+  text-align: center;
 }
 
 a {
   color: #03a9f4;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.install-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  justify-content: center;
+  align-items: center;
+  margin: 1.25em 0 0;
+  padding: 0;
+  border: none;
+}
+
+.install-mode-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.install-mode-option.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.install-mode-option.disabled input {
+  cursor: not-allowed;
 }
 
 .button-row {
@@ -83,10 +126,6 @@ button.danger:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 
-.danger-row {
-  margin-top: 0.25em;
-}
-
 dialog {
   max-width: 28rem;
   padding: 1.25rem 1.5rem;
@@ -126,6 +165,10 @@ input[type="file"] {
   font-size: 0.9rem;
   opacity: 0.85;
   margin: 0.5em 0;
+}
+
+#release-meta {
+  text-align: center;
 }
 
 .status-line {
@@ -174,12 +217,6 @@ progress {
   opacity: 0.85;
   margin-top: 0.35em;
   text-align: center;
-}
-
-.log-section {
-  width: min(1100px, calc(100vw - 24px));
-  margin-left: 50%;
-  transform: translateX(-50%);
 }
 
 .log-section h2 {

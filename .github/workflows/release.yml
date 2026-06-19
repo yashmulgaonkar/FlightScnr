@@ -127,47 +127,53 @@ jobs:
             Firmware for **LilyGO T-Encoder Pro** (ESP32-S3, 16 MB flash).
 
             ### Web install (recommended)
-            Open the [FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/) in **Chrome** or **Edge**, connect USB, and click **Install**. This writes the app at **0x10000** and keeps Wi‑Fi and saved settings.
+            Open the [FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/) in **Chrome** or **Edge**, connect USB, and click **Install**. This flashes the full factory image at **0x0** (bootloader, partitions, and app). Wi‑Fi and saved settings are cleared.
 
             ### Manual flash
-            **App update** (keeps settings):
-            ```bash
-            esptool.py --chip esp32s3 write_flash 0x10000 FlightScnr-tencoder-pro-app.bin
-            ```
-
-            **Full factory image** (erases saved settings):
+            **Full factory image** (recommended — WebFlasher **Install**):
             ```bash
             esptool.py --chip esp32s3 write_flash 0x0 FlightScnr-tencoder-pro-merged.bin
             ```
 
+            **App-only update** (keeps settings if bootloader/partitions already match):
+            ```bash
+            esptool.py --chip esp32s3 write_flash 0x10000 FlightScnr-tencoder-pro-app.bin
+            ```
+
             | File | Use |
             | --- | --- |
-            | `FlightScnr-tencoder-pro-merged.bin` | Full factory image — flash at **0x0** |
-            | `FlightScnr-tencoder-pro-app.bin` | App update — flash at **0x10000** (WebFlasher **Install**) |
+            | `FlightScnr-tencoder-pro-merged.bin` | Full factory image — flash at **0x0** (WebFlasher **Install**) |
+            | `FlightScnr-tencoder-pro-app.bin` | App-only update — flash at **0x10000** (advanced) |
             | `bootloader.bin` / `partitions.bin` | Individual components (advanced) |
             | `SHA256SUMS.txt` | Checksums |
 
-            **Note:** Hold the board **BOOT** button (not the knob) while connecting USB if the port does not appear.
+            **Note:** Push the screen in (BOOT) while connecting USB if the port does not appear.
 
       - name: Bundle WebFlasher site
         if: steps.tag.outputs.skip != 'true'
         env:
+          MERGED_ASSET: FlightScnr-tencoder-pro-merged.bin
           APP_ASSET: FlightScnr-tencoder-pro-app.bin
-          APP_OFFSET: "65536"
           RELEASE_NAME: ${{ steps.tag.outputs.name }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p docs/firmware
+          cp "release/${MERGED_ASSET}" "docs/firmware/${MERGED_ASSET}"
           cp "release/${APP_ASSET}" "docs/firmware/${APP_ASSET}"
-          FIRMWARE_SIZE="$(stat -c%s "docs/firmware/${APP_ASSET}")"
+          MERGED_SIZE="$(stat -c%s "docs/firmware/${MERGED_ASSET}")"
+          APP_SIZE="$(stat -c%s "docs/firmware/${APP_ASSET}")"
           jq -n \
             --arg name "${RELEASE_NAME}" \
             --arg version "${RELEASE_TAG}" \
-            --arg path "${APP_ASSET}" \
-            --argjson offset "${APP_OFFSET}" \
-            --argjson size "${FIRMWARE_SIZE}" \
-            '{name: $name, version: $version, size: $size, builds: [{chipFamily: "ESP32-S3", parts: [{path: $path, offset: $offset}]}]}' \
+            --arg merged "${MERGED_ASSET}" \
+            --arg app "${APP_ASSET}" \
+            --argjson merged_size "${MERGED_SIZE}" \
+            --argjson app_size "${APP_SIZE}" \
+            '{name: $name, version: $version, size: $merged_size, builds: [{chipFamily: "ESP32-S3", parts: [
+              {path: $merged, offset: 0, role: "full", size: $merged_size},
+              {path: $app, offset: 65536, role: "app", size: $app_size}
+            ]}]}' \
             > docs/firmware/manifest.json
           echo "WebFlasher bundle:"
           ls -la docs/firmware/
@@ -199,6 +205,7 @@ jobs:
       - name: Verify bundled firmware
         run: |
           test -f site/firmware/manifest.json
+          test -f site/firmware/FlightScnr-tencoder-pro-merged.bin
           test -f site/firmware/FlightScnr-tencoder-pro-app.bin
           ls -la site/firmware/
 

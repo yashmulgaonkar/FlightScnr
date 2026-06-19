@@ -88,7 +88,7 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 
 - **Page 1:** IP, Wi‑Fi SSID, lat/lon, min altitude, web hostname
 - **Page 2:** brightness, miles/km, compass rose on/off (knob press cycles highlighted row; turn adjusts value)
-- **Page 3:** radar theme color — Red, Yellow, Orange, Green, or White (turn knob to cycle). Applies to range rings, crosshairs, compass rose, scale labels, and sweep line.
+- **Page 3:** radar theme color - Red, Yellow, Orange, Green, or White (turn knob to cycle). Applies to range rings, crosshairs, compass rose, scale labels, and sweep line.
 - Footer: gesture guide
 
 ### Clock
@@ -138,16 +138,16 @@ pio run -e tencoder-pro
 pio run -t merge -e tencoder-pro
 ```
 
-Output: `.pio/build/tencoder-pro/firmware-merged.bin`. For a **full factory flash**, write at offset **0x0** (erases saved Wi‑Fi and settings). Normal updates use the app image at **0x10000** instead (see WebFlasher below).
+Output: `.pio/build/tencoder-pro/firmware-merged.bin`. The [WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/) **Install** button flashes this at **0x0**. For a manual app-only update (keeps settings when bootloader/partitions already match), use `firmware.bin` at **0x10000**.
 
 If upload fails, hold the screen down (**BOOT**), run upload again, and release once flashing begins. If the port never appears, tap **RESET** on the back while holding the screen down.
 
 ### WebFlasher (browser based)
 
-**[FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr)** flashes firmware over USB from Chrome or Edge — no PlatformIO required.
+**[FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr)** flashes firmware over USB from Chrome or Edge - no PlatformIO required.
 
 1. Connect the T-Encoder Pro via USB.
-2. Open WebFlasher, click **Connect**, then **Install**.
+2. Open WebFlasher, click **Connect**, then **Install** (full factory image at 0x0 - clears Wi‑Fi and saved settings).
 3. If **Connect** or **Install** fails, hold the screen in (**BOOT**) and retry until flashing starts. If the USB port never appears, hold the screen in, tap **RESET** on the back, then click **Connect**.
 
 ## Configuration

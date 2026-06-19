@@ -1,6 +1,8 @@
 import { ESPLoader, Transport } from "./vendor/esptool-js.bundle.js";
 
+const MERGED_ASSET = "FlightScnr-tencoder-pro-merged.bin";
 const APP_ASSET = "FlightScnr-tencoder-pro-app.bin";
+const FULL_FLASH_OFFSET = 0;
 const APP_FLASH_OFFSET = 0x10000;
 const FIRMWARE_BASE = "./firmware";
 const MANIFEST_URL = `${FIRMWARE_BASE}/manifest.json`;
@@ -14,6 +16,9 @@ const els = {
   eraseCancelBtn: document.getElementById("erase-cancel-btn"),
   eraseConfirmBtn: document.getElementById("erase-confirm-btn"),
   fileInput: document.getElementById("file-input"),
+  installModeFull: document.getElementById("install-mode-full"),
+  installModeApp: document.getElementById("install-mode-app"),
+  installModeAppLabel: document.getElementById("install-mode-app-label"),
   status: document.getElementById("status"),
   releaseMeta: document.getElementById("release-meta"),
   progressWrap: document.getElementById("progress-wrap"),
@@ -26,6 +31,8 @@ let port = null;
 let transport = null;
 let esploader = null;
 let busy = false;
+/** True after chip erase in this session - app-only install is invalid until full install. */
+let chipErased = false;
 
 function log(line) {
   const ts = new Date().toLocaleTimeString();
@@ -37,12 +44,33 @@ function setStatus(text) {
   els.status.textContent = text;
 }
 
+function getInstallMode() {
+  if (chipErased || els.installModeApp.disabled) {
+    return "full";
+  }
+  return els.installModeApp.checked ? "app" : "full";
+}
+
+function updateInstallModeUI() {
+  const appDisabled = chipErased;
+  els.installModeApp.disabled = appDisabled;
+  els.installModeAppLabel.classList.toggle("disabled", appDisabled);
+  if (appDisabled) {
+    els.installModeFull.checked = true;
+  }
+}
+
 function setBusy(value) {
   busy = value;
   els.connectBtn.disabled = value || port !== null;
   els.disconnectBtn.disabled = value || port === null;
   els.flashLatestBtn.disabled = value || port === null;
   els.eraseBtn.disabled = value || port === null;
+  els.installModeFull.disabled = value;
+  if (!chipErased) {
+    els.installModeApp.disabled = busy;
+    els.installModeAppLabel.classList.toggle("disabled", busy);
+  }
   if (value) {
     setStatus("Working…");
     els.status.className = "";
@@ -52,6 +80,9 @@ function setBusy(value) {
   } else {
     setStatus("Not connected");
     els.status.className = "";
+  }
+  if (!value) {
+    updateInstallModeUI();
   }
 }
 
@@ -67,6 +98,22 @@ function clearProgress() {
   els.progressLabel.textContent = "";
 }
 
+function manifestPart(manifest, mode) {
+  const parts = manifest.builds?.[0]?.parts ?? [];
+  if (mode === "app") {
+    return (
+      parts.find((part) => part.role === "app") ??
+      parts.find((part) => /app/i.test(part.path ?? "")) ??
+      { path: APP_ASSET, offset: APP_FLASH_OFFSET }
+    );
+  }
+  return (
+    parts.find((part) => part.role === "full") ??
+    parts.find((part) => /merged/i.test(part.path ?? "")) ??
+    parts[0] ?? { path: MERGED_ASSET, offset: FULL_FLASH_OFFSET }
+  );
+}
+
 async function loadFirmwareManifest() {
   const resp = await fetch(MANIFEST_URL, { cache: "no-store" });
   if (!resp.ok) {
@@ -78,10 +125,13 @@ async function loadFirmwareManifest() {
 async function loadLatestReleaseMeta() {
   try {
     const manifest = await loadFirmwareManifest();
-    const sizeMb = manifest.size
-      ? (manifest.size / (1024 * 1024)).toFixed(2)
-      : "?";
-    els.releaseMeta.textContent = `Latest: ${manifest.name || manifest.version} (${sizeMb} MB)`;
+    const fullPart = manifestPart(manifest, "full");
+    const sizeMb = fullPart.size
+      ? (fullPart.size / (1024 * 1024)).toFixed(2)
+      : manifest.size
+        ? (manifest.size / (1024 * 1024)).toFixed(2)
+        : "?";
+    els.releaseMeta.textContent = `Latest: ${manifest.name || manifest.version} (${sizeMb} MB full image)`;
   } catch (err) {
     els.releaseMeta.textContent =
       "Firmware not bundled yet (run Release workflow, then redeploy Pages). You can still upload a .bin file.";
@@ -89,14 +139,15 @@ async function loadLatestReleaseMeta() {
   }
 }
 
-async function fetchLatestFirmware() {
+async function fetchFirmwareForInstall(mode) {
   const manifest = await loadFirmwareManifest();
-  const part = manifest.builds?.[0]?.parts?.[0];
+  const part = manifestPart(manifest, mode);
   if (!part?.path) {
     throw new Error("Firmware manifest has no image path");
   }
   const url = `${FIRMWARE_BASE}/${part.path}`;
-  const offset = part.offset ?? APP_FLASH_OFFSET;
+  const offset =
+    part.offset ?? (mode === "app" ? APP_FLASH_OFFSET : FULL_FLASH_OFFSET);
 
   log(`Downloading ${manifest.name || manifest.version || part.path}…`);
   const resp = await fetch(url, { cache: "no-store" });
@@ -136,7 +187,7 @@ async function connect() {
 
     log("Connecting…");
     await esploader.main();
-    log("Chip detected — ready to flash.");
+    log("Chip detected - ready to flash.");
     els.status.className = "ok";
     setStatus("Connected");
   } catch (err) {
@@ -167,15 +218,20 @@ async function disconnect() {
   log("Disconnected.");
 }
 
-async function flashBinary(data, label, address = APP_FLASH_OFFSET) {
+async function flashBinary(data, label, address = FULL_FLASH_OFFSET) {
   if (!esploader) {
     throw new Error("Not connected");
   }
 
   setProgress(0, `Preparing ${label}…`);
   log(
-    `Flashing ${label} at 0x${address.toString(16)} (${data.byteLength} bytes, no full-chip erase)…`,
+    `Flashing ${label} at 0x${address.toString(16)} (${data.byteLength} bytes)…`,
   );
+  if (address === FULL_FLASH_OFFSET) {
+    log("Full factory image - bootloader, partitions, and app. Clears Wi‑Fi and saved settings.");
+  } else {
+    log("App-only image - requires an existing FlightScnr bootloader and partition table.");
+  }
 
   // esptool-js 0.5.x expects a binary string, not Uint8Array (uses charCodeAt internally).
   const image =
@@ -198,6 +254,12 @@ async function flashBinary(data, label, address = APP_FLASH_OFFSET) {
   await esploader.after("hard_reset");
   setProgress(100, "Done");
   log("Flash complete. Unplug USB and reconnect to restart FlightScnr.");
+
+  if (address === FULL_FLASH_OFFSET && chipErased) {
+    chipErased = false;
+    updateInstallModeUI();
+    log("Full install complete - app-only updates are available again.");
+  }
 }
 
 async function runFlash(getData, label) {
@@ -231,8 +293,10 @@ async function eraseChipFlash() {
   log("Hard reset…");
   await esploader.after("hard_reset");
   setProgress(100, "Erase complete");
+  chipErased = true;
+  updateInstallModeUI();
   log(
-    "Chip erase complete. Flash is blank — use Install or upload a .bin to flash firmware.",
+    "Chip erase complete. Flash is blank - choose Full install (app-only is disabled until then).",
   );
 }
 
@@ -252,7 +316,9 @@ els.connectBtn.addEventListener("click", connect);
 els.disconnectBtn.addEventListener("click", disconnect);
 
 els.flashLatestBtn.addEventListener("click", () => {
-  runFlash(() => fetchLatestFirmware(), APP_ASSET);
+  const mode = getInstallMode();
+  const label = mode === "app" ? APP_ASSET : MERGED_ASSET;
+  runFlash(() => fetchFirmwareForInstall(mode), label);
 });
 
 els.eraseBtn.addEventListener("click", () => {
@@ -283,9 +349,11 @@ els.fileInput.addEventListener("change", async () => {
   if (!file) {
     return;
   }
-  const offset = /merged/i.test(file.name) ? 0 : APP_FLASH_OFFSET;
-  if (offset === 0) {
-    log("Warning: merged images at 0x0 replace the full flash and erase saved settings.");
+  const offset = /merged/i.test(file.name) ? FULL_FLASH_OFFSET : APP_FLASH_OFFSET;
+  if (offset === FULL_FLASH_OFFSET) {
+    log("Full factory image at 0x0 - clears Wi‑Fi and saved settings.");
+  } else {
+    log("App-only image at 0x10000 - requires an existing FlightScnr bootloader and partition table.");
   }
   await runFlash(async () => {
     log(`Reading ${file.name}…`);
@@ -309,6 +377,7 @@ navigator.serial?.addEventListener("disconnect", () => {
   els.eraseBtn.disabled = true;
 });
 
+updateInstallModeUI();
 loadLatestReleaseMeta();
 log("Ready. Use Chrome or Edge on desktop.");
 log("If the port is missing: push the screen down (BOOT) and hold, tap RESET on the back of the board, then Connect.");

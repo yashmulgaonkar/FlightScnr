@@ -19,6 +19,29 @@
         <a href="https://github.com/espressif/esptool-js">esptool-js</a> 0.5.7.
       </p>
 
+      <fieldset id="install-mode" class="install-mode">
+        <legend class="visually-hidden">Install mode</legend>
+        <label class="install-mode-option">
+          <input
+            type="radio"
+            name="install-mode"
+            id="install-mode-full"
+            value="full"
+            checked
+          />
+          Full install
+        </label>
+        <label class="install-mode-option" id="install-mode-app-label">
+          <input
+            type="radio"
+            name="install-mode"
+            id="install-mode-app"
+            value="app"
+          />
+          Update app only
+        </label>
+      </fieldset>
+
       <p class="button-row">
         <button id="connect-btn" type="button">Connect</button>
         <button id="flash-latest-btn" type="button" disabled>Install</button>
@@ -27,9 +50,6 @@
         <button id="disconnect-btn" type="button" class="secondary" disabled>
           Disconnect
         </button>
-      </p>
-
-      <p class="button-row danger-row">
         <button id="erase-btn" type="button" class="danger" disabled>
           Erase flash
         </button>
@@ -75,18 +95,20 @@
           <strong>Install</strong> again, and release once flashing begins.
         </li>
         <li>
-          Do not hold the screen in while plugging in USB — it is the
+          Do not hold the screen in while plugging in USB - it is the
           <strong>BOOT</strong> button (GPIO&nbsp;0) and can enter download mode
           unintentionally.
         </li>
       </ol>
       <br>
       <p class="meta">
-        <strong>Install</strong> updates the app at offset
-        <strong>0x10000</strong> and keeps Wi‑Fi and saved settings. Upload a
-        <code>merged</code> .bin only for a full factory flash at <strong>0x0</strong>.
-        <strong>Erase flash</strong> wipes the entire chip (same as a blank factory
-        part) — use only when you want to clear everything before reflashing.
+        Choose <strong>Full install</strong> for a first-time install, after
+        <strong>Erase flash</strong>, or when replacing factory firmware (flashes at
+        <strong>0x0</strong>; clears Wi‑Fi and saved settings).
+        <strong>Update app only</strong> flashes the application at
+        <strong>0x10000</strong> and keeps settings when bootloader and partitions
+        already match. <strong>Upload .bin</strong> uses the same offsets from the
+        filename (<code>merged</code> → 0x0, otherwise 0x10000).
       </p>
 
       <div class="log-section">
