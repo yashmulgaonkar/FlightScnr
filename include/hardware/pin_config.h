@@ -1,12 +1,13 @@
 #pragma once
 
-/** SH8601 AMOLED + CHSC5816 touch (T-Encoder Pro V1.0, DXQ120MYB2416A panel). */
-#ifndef DXQ120MYB2416A
-#define DXQ120MYB2416A
-#endif
+/** T-Encoder Pro V1.0 — 390×390 AMOLED QSPI (panel variant resolved at boot). */
 
 #ifndef CHSC5816_SLAVE_ADDRESS
 #define CHSC5816_SLAVE_ADDRESS 0x2E
+#endif
+
+#ifndef CST816_SLAVE_ADDRESS
+#define CST816_SLAVE_ADDRESS 0x15
 #endif
 
 #define BUZZER_DATA 17

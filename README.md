@@ -54,7 +54,7 @@ Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licen
 
 Range, distance units, brightness, radar theme color, clock timezone/format, and route API settings persist across reboots.
 
-**Note:** Do not hold the **knob** while powering on. It shares **GPIO 0** with the ESP32-S3 and will enter **USB download / bootloader** mode. Use the **3 s hold** while the app is already running to open the setup portal again.
+**Note:** Do not hold the screen in while powering on. That is the **BOOT** button (GPIO 0) and will enter **USB download / bootloader** mode. Use a **3 s hold** while the app is already running to reset Wi‑Fi (setup portal).
 
 ## First-time setup
 
@@ -107,6 +107,7 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 | Item          | Details                                                                                                                                                                      |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Board**     | [LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl). ESP32-S3-R8, 16 MB flash, 8 MB OPI PSRAM                                                                               |
+| **Display**   | 1.2″ 390×390 AMOLED. **Auto-detected** at boot: original `DXQ120` (SH8601 + CHSC5816 touch) or newer `TFD12` (CO5300 + CST816). One firmware fits both. See serial log: `Panel: …` |
 | **Enclosure** | [MakerWorld Link](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055). Not in this repo. Terms on the model page apply. |
 
 
@@ -126,6 +127,8 @@ pio run -e tencoder-pro -t upload
 pio device monitor
 ```
 
+**Panel selection:** On first boot, FlightScnr probes the touch controller over I2C (`CHSC5816` @ `0x2E` → original panel; `CST816` @ `0x15` → newer panel), saves the result to flash, and reuses it on later boots. Override in `platformio.ini` with `-D FLIGHTSCNR_PANEL_DXQ` or `-D FLIGHTSCNR_PANEL_TFD12`. If the wrong panel was saved, erase flash (WebFlasher **Erase chip** or full reflash) to re-detect.
+
 Each build downloads the latest [tar1090-db](https://github.com/wiedehopf/tar1090-db) aircraft database and regenerates the ICAO type lookup (e.g. `E75L` → Embraer ERJ-170-200). If the download fails, the last cached or committed lookup is used. Refresh manually with `python tools/icao_types_to_header.py`.
 
 ### Single merged binary (factory image)
@@ -137,7 +140,7 @@ pio run -t merge -e tencoder-pro
 
 Output: `.pio/build/tencoder-pro/firmware-merged.bin`. For a **full factory flash**, write at offset **0x0** (erases saved Wi‑Fi and settings). Normal updates use the app image at **0x10000** instead (see WebFlasher below).
 
-If upload fails, hold the board **BOOT** button (not the knob), tap reset, and retry.  
+If upload fails, hold the screen down (**BOOT**), run upload again, and release once flashing begins. If the port never appears, tap **RESET** on the back while holding the screen down.
 
 ### WebFlasher (browser based)
 
@@ -145,7 +148,7 @@ If upload fails, hold the board **BOOT** button (not the knob), tap reset, and r
 
 1. Connect the T-Encoder Pro via USB.
 2. Open WebFlasher, click **Connect**, then **Install**.
-3. If needed, hold **BOOT** while connecting.
+3. If **Connect** or **Install** fails, hold the screen in (**BOOT**) and retry until flashing starts. If the USB port never appears, hold the screen in, tap **RESET** on the back, then click **Connect**.
 
 ## Configuration
 

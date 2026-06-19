@@ -141,6 +141,7 @@ async function connect() {
     setStatus("Connected");
   } catch (err) {
     log(`Connect failed: ${err.message || err}`);
+    log("Push the screen down (BOOT) and hold, tap RESET on the back of the board, then try Connect again.");
     await disconnect();
   } finally {
     setBusy(false);
@@ -210,6 +211,7 @@ async function runFlash(getData, label) {
     }
   } catch (err) {
     log(`Flash failed: ${err.message || err}`);
+    log("Push the screen down (BOOT) and hold, tap RESET on the back of the board, then try Install again.");
     clearProgress();
   } finally {
     setBusy(false);
@@ -309,4 +311,5 @@ navigator.serial?.addEventListener("disconnect", () => {
 
 loadLatestReleaseMeta();
 log("Ready. Use Chrome or Edge on desktop.");
-log("Hold BOOT (not the knob) if the port does not appear.");
+log("If the port is missing: push the screen down (BOOT) and hold, tap RESET on the back of the board, then Connect.");
+log("If Connect or Install fails: hold the screen in (BOOT) and retry until flashing starts.");

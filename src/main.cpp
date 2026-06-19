@@ -9,6 +9,7 @@
 #include "hardware/buzzer.h"
 #include "hardware/display.h"
 #include "hardware/input.h"
+#include "hardware/panel.h"
 #include "services/adsb_client.h"
 #include "services/clock_time.h"
 #include "services/map_center.h"
@@ -423,8 +424,9 @@ void setup() {
   Serial.println();
   Serial.println("FlightScnr (T-Encoder Pro)");
 
-  inputInit();
+  hardware::panelBootResolve();
   displayInit();
+  inputInit();
   hardware::buzzerInit();
   hardware::buzzerBootLoad();
   services::map_center::bootLoad();

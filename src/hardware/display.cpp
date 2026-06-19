@@ -2,7 +2,11 @@
 
 #include "hardware/display_brightness.h"
 #include "hardware/display_font.h"
+#include "hardware/panel.h"
 #include "hardware/pin_config.h"
+
+#include "display/Arduino_CO5300.h"
+#include "display/Arduino_SH8601.h"
 
 namespace {
 
@@ -19,7 +23,17 @@ void displayInit() {
 
   s_bus = new Arduino_ESP32QSPI(LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2,
                                   LCD_SDIO3);
-  s_panel = new Arduino_SH8601(s_bus, LCD_RST, 0, false, LCD_WIDTH, LCD_HEIGHT);
+
+  if (hardware::panelUsesCo5300()) {
+    s_panel = new Arduino_CO5300(s_bus, LCD_RST, 0, false, LCD_WIDTH, LCD_HEIGHT,
+                                 0, 0, 0, 0);
+    Arduino_TFT::setPixelAlign2(true);
+    Serial.println("Display: CO5300");
+  } else {
+    s_panel = new Arduino_SH8601(s_bus, LCD_RST, 0, false, LCD_WIDTH, LCD_HEIGHT);
+    Arduino_TFT::setPixelAlign2(false);
+    Serial.println("Display: SH8601");
+  }
 
   if (!s_panel->begin(40000000)) {
     Serial.println("Display init failed");
@@ -32,7 +46,12 @@ void displayInit() {
     s_panel->Display_Brightness(brightness);
     delay(2);
   }
-  s_panel->SetContrast(SH8601_ContrastOff);
+
+  if (hardware::panelUsesCo5300()) {
+    s_panel->SetContrast(CO5300_ContrastOff);
+  } else {
+    s_panel->SetContrast(SH8601_ContrastOff);
+  }
 
   hardware::displayBrightnessBootLoad();
   hardware::displayApplyBrightness();

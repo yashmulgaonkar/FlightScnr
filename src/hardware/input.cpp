@@ -3,12 +3,16 @@
 #include <Wire.h>
 
 #include <cmath>
+#include <memory>
 
 #include "TouchDrvCHSC5816.hpp"
+#include "Arduino_DriveBus_Library.h"
 #include "config.h"
 #include "hardware/buzzer.h"
+#include "hardware/panel.h"
 #include "hardware/pin_config.h"
 #include "services/wifi_setup.h"
+#include "touch_chip/Arduino_CST816x.h"
 
 namespace {
 
@@ -36,6 +40,8 @@ uint8_t s_knob_previous = 0;
 unsigned long s_knob_scan_ms = 0;
 
 TouchDrvCHSC5816 s_touch;
+std::shared_ptr<Arduino_IIC_DriveBus> s_cst816_bus;
+std::unique_ptr<Arduino_IIC> s_cst816;
 bool s_touch_ready = false;
 bool s_touch_was_down = false;
 bool s_touch_tracking = false;
@@ -127,7 +133,13 @@ void pollEncoder() {
   portEXIT_CRITICAL(&s_input_mux);
 }
 
-void initTouch() {
+void onCst816Interrupt() {
+  if (s_cst816 != nullptr) {
+    s_cst816->IIC_Interrupt_Flag = true;
+  }
+}
+
+void initTouchChsc5816() {
   s_touch.setPins(TOUCH_RST, TOUCH_INT);
   if (!s_touch.begin(Wire, CHSC5816_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
     Serial.println("CHSC5816 touch init failed — encoder/knob only");
@@ -136,6 +148,30 @@ void initTouch() {
   }
   s_touch_ready = true;
   Serial.println("CHSC5816 touch ready");
+}
+
+void initTouchCst816() {
+  s_cst816_bus = std::make_shared<Arduino_HWIIC>(IIC_SDA, IIC_SCL, &Wire);
+  s_cst816 = std::unique_ptr<Arduino_IIC>(new Arduino_CST816x(
+      s_cst816_bus, CST816_SLAVE_ADDRESS, TOUCH_RST, TOUCH_INT, onCst816Interrupt));
+  if (!s_cst816->begin()) {
+    Serial.println("CST816 touch init failed — encoder/knob only");
+    s_touch_ready = false;
+    return;
+  }
+  s_cst816->IIC_Write_Device_State(
+      s_cst816->Arduino_IIC_Touch::Device::TOUCH_DEVICE_INTERRUPT_MODE,
+      s_cst816->Arduino_IIC_Touch::Device_Mode::TOUCH_DEVICE_INTERRUPT_PERIODIC);
+  s_touch_ready = true;
+  Serial.println("CST816 touch ready");
+}
+
+void initTouch() {
+  if (hardware::panelUsesCo5300()) {
+    initTouchCst816();
+  } else {
+    initTouchChsc5816();
+  }
 }
 
 void queueSwipe(SwipeGesture gesture) {
@@ -170,11 +206,7 @@ void finishTouchGesture() {
   }
 }
 
-void pollTouch() {
-  if (!s_touch_ready) {
-    return;
-  }
-
+void pollTouchChsc5816() {
   int16_t x[2] = {};
   int16_t y[2] = {};
   const uint8_t points = s_touch.getPoint(x, y);
@@ -196,6 +228,53 @@ void pollTouch() {
   }
 
   s_touch_was_down = down;
+}
+
+void pollTouchCst816() {
+  if (s_cst816 == nullptr) {
+    return;
+  }
+
+  const bool down =
+      s_cst816->IIC_Read_Device_Value(
+          s_cst816->Arduino_IIC_Touch::Value_Information::TOUCH_FINGER_NUMBER) > 0;
+  int16_t x = 0;
+  int16_t y = 0;
+  if (down) {
+    x = static_cast<int16_t>(s_cst816->IIC_Read_Device_Value(
+        s_cst816->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X));
+    y = static_cast<int16_t>(s_cst816->IIC_Read_Device_Value(
+        s_cst816->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y));
+  }
+
+  if (down && !s_touch_was_down) {
+    s_touch_start_x = x;
+    s_touch_start_y = y;
+    s_touch_last_x = x;
+    s_touch_last_y = y;
+    s_touch_tracking = true;
+    hardware::buzzerClick();
+  } else if (down && s_touch_tracking) {
+    s_touch_last_x = x;
+    s_touch_last_y = y;
+  } else if (!down && s_touch_was_down && s_touch_tracking) {
+    finishTouchGesture();
+    s_touch_tracking = false;
+  }
+
+  s_touch_was_down = down;
+}
+
+void pollTouch() {
+  if (!s_touch_ready) {
+    return;
+  }
+
+  if (hardware::panelUsesCo5300()) {
+    pollTouchCst816();
+  } else {
+    pollTouchChsc5816();
+  }
 }
 
 }  // namespace

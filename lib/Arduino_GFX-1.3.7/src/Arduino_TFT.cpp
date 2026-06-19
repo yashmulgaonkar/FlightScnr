@@ -8,6 +8,12 @@
 #include "font/glcdfont.h"
 #include "pin_config.h"
 
+bool Arduino_TFT::_pixel_align2 = false;
+
+void Arduino_TFT::setPixelAlign2(bool enable) { _pixel_align2 = enable; }
+
+bool Arduino_TFT::pixelAlign2() { return _pixel_align2; }
+
 Arduino_TFT::Arduino_TFT(
     Arduino_DataBus *bus, int8_t rst, uint8_t r,
     bool ips, int16_t w, int16_t h,
@@ -51,12 +57,16 @@ void Arduino_TFT::startWrite()
 void Arduino_TFT::writePixelPreclipped(int16_t x, int16_t y, uint16_t color)
 {
 #if defined TFD12MASBCTB4_V0_07
-    //  CO5300最小开窗为2x2
     writeAddrWindow(x, y, 2, 2);
     _bus->writeRepeat(color, 4);
 #else
-    writeAddrWindow(x, y, 1, 1);
-    _bus->writeRepeat(color, 1); 
+    if (_pixel_align2) {
+        writeAddrWindow(x, y, 2, 2);
+        _bus->writeRepeat(color, 4);
+    } else {
+        writeAddrWindow(x, y, 1, 1);
+        _bus->writeRepeat(color, 1);
+    }
 #endif
 }
 

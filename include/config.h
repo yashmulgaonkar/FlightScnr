@@ -47,7 +47,7 @@ constexpr unsigned long kKnobTapMinMs = 40UL;
 constexpr gpio_num_t kKnobPinA = GPIO_NUM_1;
 constexpr gpio_num_t kKnobPinB = GPIO_NUM_2;
 
-// --- Display: SH8601 AMOLED 1.2" round 390×390 (QSPI) ---
+// --- Display: 1.2" round 390×390 AMOLED QSPI (SH8601 or CO5300, auto-detected) ---
 constexpr int kDisplayWidth = 390;
 constexpr int kDisplayHeight = 390;
 
