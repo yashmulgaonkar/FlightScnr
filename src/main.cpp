@@ -19,6 +19,7 @@
 #include "ui/clock_screen.h"
 #include "ui/clock_settings_screen.h"
 #include "ui/details_screen.h"
+#include "ui/display_prefs.h"
 #include "ui/flight_detail_screen.h"
 #include "ui/info_screen.h"
 #include "ui/radar_accent.h"
@@ -163,6 +164,7 @@ void onFlightDetailStep(int8_t delta) {
   if (g_screen != AppScreen::FlightDetail || delta == 0) {
     return;
   }
+  noteSecondaryActivity();
   if (ui::flightDetailCycle(delta)) {
     showFlightDetail();
   }
@@ -263,6 +265,16 @@ void tickSecondaryScreenTimeout() {
     return;
   }
   if (g_screen == AppScreen::Radar || g_screen == AppScreen::Clock) {
+    return;
+  }
+  if (g_screen == AppScreen::FlightDetail) {
+    const unsigned long timeout_ms = ui::displayPrefsFlightDetailTimeoutMs();
+    if (timeout_ms == 0) {
+      return;
+    }
+    if (millis() - g_secondary_activity_ms >= timeout_ms) {
+      returnToRadar(true);
+    }
     return;
   }
   if (millis() - g_secondary_activity_ms >= config::kSecondaryScreenTimeoutMs) {
@@ -432,6 +444,7 @@ void setup() {
   services::map_center::bootLoad();
   ui::radar::scaleBootLoad();
   ui::radar::accentBootLoad();
+  ui::displayPrefsBootLoad();
   services::adsb::trafficFilterBootLoad();
   services::clock::bootLoad();
 

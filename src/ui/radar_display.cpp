@@ -9,6 +9,7 @@
 #include "hardware/display.h"
 #include "hardware/display_font.h"
 #include "hardware/panel.h"
+#include "ui/display_prefs.h"
 #include "services/adsb_client.h"
 #include "services/aircraft_type_lookup.h"
 #include "geo/flat_earth.h"
@@ -993,11 +994,13 @@ bool applyPendingContentPanelSync() {
 
 void radarDisplayRefreshSweep() {
   initPalette();
-  advanceSweepAngle();
 
   if (!s_content_ready) {
     const DrawScope scope(tft);
-    drawSweepAt(currentSweepAngleDeg());
+    if (displayPrefsSweepLineEnabled()) {
+      advanceSweepAngle();
+      drawSweepAt(currentSweepAngleDeg());
+    }
     drawAircraft();
     tft.setTextDatum(TextDatum::TopLeft);
     return;
@@ -1006,6 +1009,14 @@ void radarDisplayRefreshSweep() {
   hardware::gfxLog("[radar] sweep begin");
 
   const bool content_synced = applyPendingContentPanelSync();
+
+  if (!displayPrefsSweepLineEnabled()) {
+    s_sweep_track_valid = false;
+    hardware::gfxLog("[radar] sweep disabled");
+    return;
+  }
+
+  advanceSweepAngle();
 
   const uint16_t* content = s_content.buffer();
   const int content_stride = s_content.width();
@@ -1055,13 +1066,17 @@ void radarDisplayDraw() {
 
   if (rebuildBackgroundSprite() && rebuildContentLayer()) {
     blitStatic();
-    radarDisplayRefreshSweep();
+    if (displayPrefsSweepLineEnabled()) {
+      radarDisplayRefreshSweep();
+    }
     return;
   }
 
   const DrawScope scope(tft);
   drawStaticGrid(tft);
-  drawSweepAt(currentSweepAngleDeg());
+  if (displayPrefsSweepLineEnabled()) {
+    drawSweepAt(currentSweepAngleDeg());
+  }
   drawAircraft();
   tft.setTextDatum(TextDatum::TopLeft);
 }

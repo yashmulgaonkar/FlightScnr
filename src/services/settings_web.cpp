@@ -20,6 +20,7 @@
 #include "services/map_center.h"
 #include "services/route_cache_store.h"
 #include "services/settings_apply.h"
+#include "ui/display_prefs.h"
 #include "ui/radar_scale.h"
 
 namespace {
@@ -173,6 +174,34 @@ void handleSettingsPage() {
       ui::radar::showCompassRose() ? " checked" : "");
   if (card_n > 0) {
     used += static_cast<size_t>(card_n);
+  }
+
+  const int sweep_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<div class=\"chk\"><input id=\"show_sweep\" name=\"show_sweep\" type=\"checkbox\" "
+      "value=\"T\"%s><label for=\"show_sweep\">Show radar sweep line</label></div>",
+      ui::displayPrefsSweepLineEnabled() ? " checked" : "");
+  if (sweep_n > 0) {
+    used += static_cast<size_t>(sweep_n);
+  }
+
+  const unsigned long detail_ms = ui::displayPrefsFlightDetailTimeoutMs();
+  const unsigned long detail_sec = detail_ms / 1000UL;
+  const int detail_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<label for=\"detail_timeout\">Flight detail screen</label>"
+      "<select id=\"detail_timeout\" name=\"detail_timeout\">"
+      "<option value=\"0\"%s>Manual (swipe away)</option>"
+      "<option value=\"10\"%s>10 seconds</option>"
+      "<option value=\"20\"%s>20 seconds</option>"
+      "<option value=\"30\"%s>30 seconds</option>"
+      "</select>",
+      detail_sec == 0 ? " selected" : "",
+      detail_sec == 10 ? " selected" : "",
+      detail_sec == 20 ? " selected" : "",
+      detail_sec == 30 ? " selected" : "");
+  if (detail_n > 0) {
+    used += static_cast<size_t>(detail_n);
   }
 
   const uint8_t bright = hardware::displayBrightnessPercent();
@@ -425,7 +454,8 @@ void handleSave() {
       s_server->arg("flightaware_max_usd").c_str(),
       s_server->arg("flightaware_cost_usd").c_str(), s_server->arg("fr24_max_usd").c_str(),
       s_server->arg("fr24_cost_usd").c_str(), s_server->arg("ui_beep").c_str(),
-      s_server->arg("beep_tone").c_str(), s_server->arg("bright_pct").c_str());
+      s_server->arg("beep_tone").c_str(), s_server->arg("bright_pct").c_str(),
+      s_server->arg("show_sweep").c_str(), s_server->arg("detail_timeout").c_str());
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
 

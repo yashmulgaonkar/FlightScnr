@@ -7,6 +7,7 @@
 #include "services/map_center.h"
 #include "hardware/buzzer.h"
 #include "hardware/display_brightness.h"
+#include "ui/display_prefs.h"
 #include "ui/radar_scale.h"
 
 namespace {
@@ -40,7 +41,8 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
                            const char* flightaware_max_usd, const char* flightaware_cost_usd,
                            const char* fr24_max_usd, const char* fr24_cost_usd,
                            const char* ui_beep_checkbox, const char* beep_tone_str,
-                           const char* bright_pct_str) {
+                           const char* bright_pct_str, const char* sweep_line_checkbox,
+                           const char* detail_timeout_str) {
   bool loc_ok = false;
   if (radar_center_str != nullptr && radar_center_str[0] != '\0') {
     loc_ok = services::map_center::applyRadarCenterFromForm(radar_center_str);
@@ -60,6 +62,8 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
   hardware::saveBeepEnabledFromForm(ui_beep_checkbox);
   hardware::saveBeepToneFromForm(beep_tone_str);
   hardware::displayBrightnessSaveFromForm(bright_pct_str);
+  ui::displayPrefsSaveSweepLineFromForm(sweep_line_checkbox);
+  ui::displayPrefsSaveFlightDetailTimeoutFromForm(detail_timeout_str);
 
   uint8_t range_idx = 0;
   if (parseRangeIndex(range_index_str, &range_idx)) {
