@@ -654,6 +654,14 @@ bool flightDetailCycle(int delta) {
   return true;
 }
 
+const char* flightDetailSelectedCallsign() {
+  const services::adsb::Aircraft* ac = selectedAircraft();
+  if (ac == nullptr || ac->callsign[0] == '\0') {
+    return nullptr;
+  }
+  return ac->callsign;
+}
+
 void flightDetailDraw() {
   const uint16_t bg = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
   const uint16_t fg = tft.color565(255, 255, 255);

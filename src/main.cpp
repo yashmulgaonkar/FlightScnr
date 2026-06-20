@@ -75,6 +75,22 @@ void showFlightDetail() {
   g_radar_visible = false;
 }
 
+void requestFlightDetailRouteEnrich() {
+  const char* callsign = ui::flightDetailSelectedCallsign();
+  if (callsign != nullptr) {
+    services::route::onFlightDetailSelected(callsign);
+  }
+}
+
+void tickFlightDetailRouteEnrich() {
+  if (g_screen != AppScreen::FlightDetail) {
+    return;
+  }
+  if (services::route::detailEnrichmentReady() && services::route::detailEnrichmentConsume()) {
+    showFlightDetail();
+  }
+}
+
 void showSettings() {
   ui::infoScreenDraw();
   g_radar_visible = false;
@@ -97,6 +113,9 @@ void showDetails(bool boot_splash = false) {
 }
 
 void returnToRadar(bool from_idle_timeout = false) {
+  if (g_screen == AppScreen::FlightDetail) {
+    services::route::cancelDetailEnrichment();
+  }
   if (from_idle_timeout) {
     ui::infoScreenResetToMain();
     ui::clockSettingsResetFocus();
@@ -156,6 +175,7 @@ void openFlightDetailFromRadar(int16_t tap_x, int16_t tap_y, bool from_screen_ta
   }
   g_screen = AppScreen::FlightDetail;
   noteSecondaryActivity();
+  requestFlightDetailRouteEnrich();
   showFlightDetail();
   Serial.println("Screen: flight detail");
 }
@@ -166,6 +186,7 @@ void onFlightDetailStep(int8_t delta) {
   }
   noteSecondaryActivity();
   if (ui::flightDetailCycle(delta)) {
+    requestFlightDetailRouteEnrich();
     showFlightDetail();
   }
 }
@@ -467,6 +488,7 @@ void loop() {
   handleInput();
   settingsWebPoll();
   services::route::tickCacheFlush(millis());
+  tickFlightDetailRouteEnrich();
 
   if (WiFi.status() != WL_CONNECTED) {
     settingsWebStop();

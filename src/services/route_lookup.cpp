@@ -8,6 +8,9 @@
 
 #include <ArduinoJson.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 #include <cmath>
 #include <cctype>
 #include <cstring>
@@ -29,8 +32,6 @@ constexpr char kFr24Base[] =
     "https://fr24api.flightradar24.com/api/flight-summary/light";
 
 constexpr size_t kCacheSize = 64;
-/** New API lookups per ADS-B cycle (one unfamiliar callsign per cycle max). */
-constexpr unsigned kMaxApiCallsPerFetch = 1;
 
 struct RouteInfo {
   char airline[28];
@@ -49,7 +50,18 @@ struct CacheSlot {
 
 CacheSlot s_cache[kCacheSize];
 
+TaskHandle_t s_detail_task = nullptr;
+char s_detail_selection_callsign[9] = "";
+char s_detail_worker_callsign[9] = "";
+volatile bool s_detail_requested = false;
+volatile bool s_detail_busy = false;
+volatile bool s_detail_ready = false;
+RouteInfo s_detail_result = {};
+ApiSource s_detail_result_src = ApiSource::kNone;
+
 bool apiAvailable();
+
+bool lookupFromApis(const char* callsign, RouteInfo* route, ApiSource* source_out);
 
 void routeClear(RouteInfo* r) {
   if (r == nullptr) {
@@ -299,23 +311,6 @@ bool cacheResolve(const char* callsign, RouteInfo* out, ApiSource* src_out) {
   }
 
   return slot.api_done || routeHasData(slot.route) || slot.source == ApiSource::kPrefix;
-}
-
-/** First sight of a callsign: reserve a pending slot so live APIs run at most once. */
-void ensureSeenCallsign(const char* callsign) {
-  if (callsign == nullptr || callsign[0] == '\0') {
-    return;
-  }
-  if (findCache(callsign) >= 0) {
-    return;
-  }
-  route_cache::Entry file_entry;
-  if (route_cache::lookupPermanent(callsign, &file_entry)) {
-    return;
-  }
-  RouteInfo empty;
-  routeClear(&empty);
-  storeCache(callsign, empty, ApiSource::kNone, false);
 }
 
 bool apiLookupAlreadyDone(const char* callsign) {
@@ -760,26 +755,164 @@ void logRouteLine(const char* callsign, const RouteInfo& route, const char* tag)
                 route.airline[0] != '\0' ? route.airline : "(no airline)", leg, tag);
 }
 
-}  // namespace
-
-void init() {
-  apikeys::load();
-  memset(s_cache, 0, sizeof(s_cache));
-  if (route_cache::mount()) {
-    Serial.println("Route lookup: flash cache mounted (/route_cache.csv)");
+void applyRouteToCallsign(const char* callsign, const RouteInfo& info) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return;
   }
-  if (apiAvailable()) {
-    Serial.println("Route lookup: APIs enabled (AirLabs/FA/FR24 waterfall)");
-  } else if (apikeys::hasAirLabs() || apikeys::hasFlightAware() || apikeys::hasFr24()) {
-    Serial.println("Route lookup: API keys saved but all providers disabled");
-  } else {
-    Serial.println("Route lookup: no API keys - prefix fallback only");
+  services::adsb::applyRouteFieldsByCallsign(callsign, info.airline, info.origin, info.dest);
+}
+
+void enrichDetailBlocking(const char* callsign) {
+  routeClear(&s_detail_result);
+  s_detail_result_src = ApiSource::kNone;
+
+  RouteInfo cached;
+  routeClear(&cached);
+  ApiSource cached_src = ApiSource::kNone;
+  const bool cache_complete = cacheResolve(callsign, &cached, &cached_src);
+  if (routeHasData(cached)) {
+    s_detail_result = cached;
+    s_detail_result_src = cached_src;
+  }
+
+  if (cache_complete || apiLookupAlreadyDone(callsign)) {
+    if (routeHasData(s_detail_result)) {
+      logRouteLine(callsign, s_detail_result, sourceTag(s_detail_result_src));
+    }
+    return;
+  }
+
+  if (!apiAvailable()) {
+    if (lookupPrefixFallback(callsign, &s_detail_result)) {
+      s_detail_result_src = ApiSource::kPrefix;
+      storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
+      logRouteLine(callsign, s_detail_result, "pfx");
+    } else {
+      RouteInfo miss;
+      routeClear(&miss);
+      storeCache(callsign, miss, ApiSource::kNone, true);
+    }
+    return;
+  }
+
+  ApiSource live_src = ApiSource::kNone;
+  if (lookupFromApis(callsign, &s_detail_result, &live_src)) {
+    s_detail_result_src = live_src;
+    logRouteLine(callsign, s_detail_result, sourceTag(live_src));
+    return;
+  }
+
+  if (lookupPrefixFallback(callsign, &s_detail_result)) {
+    s_detail_result_src = ApiSource::kPrefix;
+    storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
+    logRouteLine(callsign, s_detail_result, "pfx");
+    return;
+  }
+
+  RouteInfo miss;
+  routeClear(&miss);
+  storeCache(callsign, miss, ApiSource::kNone, true);
+}
+
+void detailWorkerTask(void* /*arg*/) {
+  for (;;) {
+    if (s_detail_requested) {
+      s_detail_busy = true;
+      char callsign[sizeof(s_detail_worker_callsign)];
+      strncpy(callsign, s_detail_worker_callsign, sizeof(callsign) - 1);
+      callsign[sizeof(callsign) - 1] = '\0';
+      enrichDetailBlocking(callsign);
+      s_detail_requested = false;
+      s_detail_busy = false;
+      s_detail_ready = true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 
-void tickCacheFlush(unsigned long now_ms) {
-  route_cache::tick(now_ms, readRamCacheSlot, kCacheSize, nowSec(),
-                    config::kRouteLookupCacheTtlSec);
+void ensureDetailWorker() {
+  if (s_detail_task != nullptr) {
+    return;
+  }
+  xTaskCreatePinnedToCore(detailWorkerTask, "route_detail", 16384, nullptr, 1,
+                          &s_detail_task, 0);
+}
+
+void queueDetailEnrichment(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0' || !isIcaoRadioCallsign(callsign)) {
+    return;
+  }
+
+  RouteInfo cached;
+  routeClear(&cached);
+  ApiSource cached_src = ApiSource::kNone;
+  const bool cache_complete = cacheResolve(callsign, &cached, &cached_src);
+  if (routeHasData(cached)) {
+    applyRouteToCallsign(callsign, cached);
+  }
+  if (cache_complete || apiLookupAlreadyDone(callsign)) {
+    if (routeHasData(cached)) {
+      logRouteLine(callsign, cached, sourceTag(cached_src));
+    }
+    return;
+  }
+
+  ensureDetailWorker();
+  if (s_detail_busy || s_detail_requested) {
+    return;
+  }
+
+  strncpy(s_detail_worker_callsign, callsign, sizeof(s_detail_worker_callsign) - 1);
+  s_detail_worker_callsign[sizeof(s_detail_worker_callsign) - 1] = '\0';
+  s_detail_ready = false;
+  s_detail_requested = true;
+  Serial.printf("Route lookup: detail enrich %s\n", callsign);
+}
+
+void onFlightDetailSelectedImpl(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    s_detail_selection_callsign[0] = '\0';
+    return;
+  }
+
+  if (strcmp(callsign, s_detail_selection_callsign) == 0) {
+    return;
+  }
+
+  strncpy(s_detail_selection_callsign, callsign, sizeof(s_detail_selection_callsign) - 1);
+  s_detail_selection_callsign[sizeof(s_detail_selection_callsign) - 1] = '\0';
+  queueDetailEnrichment(callsign);
+}
+
+void cancelDetailEnrichmentImpl() {
+  s_detail_selection_callsign[0] = '\0';
+  s_detail_ready = false;
+}
+
+bool detailEnrichmentReadyImpl() { return s_detail_ready; }
+
+bool detailEnrichmentConsumeImpl() {
+  if (!s_detail_ready) {
+    return false;
+  }
+
+  const char* callsign = s_detail_selection_callsign;
+  if (callsign[0] == '\0') {
+    s_detail_ready = false;
+    return false;
+  }
+
+  if (strcmp(callsign, s_detail_worker_callsign) != 0) {
+    s_detail_ready = false;
+    return false;
+  }
+
+  if (routeHasData(s_detail_result)) {
+    applyRouteToCallsign(callsign, s_detail_result);
+  }
+
+  s_detail_ready = false;
+  return true;
 }
 
 bool lookupFromApis(const char* callsign, RouteInfo* route, ApiSource* source_out) {
@@ -825,6 +958,28 @@ bool lookupFromApis(const char* callsign, RouteInfo* route, ApiSource* source_ou
   return false;
 }
 
+}  // namespace
+
+void init() {
+  apikeys::load();
+  memset(s_cache, 0, sizeof(s_cache));
+  if (route_cache::mount()) {
+    Serial.println("Route lookup: flash cache mounted (/route_cache.csv)");
+  }
+  if (apiAvailable()) {
+    Serial.println("Route lookup: APIs on flight detail only (AirLabs/FA/FR24)");
+  } else if (apikeys::hasAirLabs() || apikeys::hasFlightAware() || apikeys::hasFr24()) {
+    Serial.println("Route lookup: API keys saved but all providers disabled");
+  } else {
+    Serial.println("Route lookup: no API keys - prefix fallback only");
+  }
+}
+
+void tickCacheFlush(unsigned long now_ms) {
+  route_cache::tick(now_ms, readRamCacheSlot, kCacheSize, nowSec(),
+                    config::kRouteLookupCacheTtlSec);
+}
+
 const char* sourceTag(ApiSource s) {
   switch (s) {
     case ApiSource::kCache:
@@ -847,93 +1002,38 @@ void enrichAircraft(services::adsb::Aircraft* planes, size_t count, double cente
   (void)center_lat;
   (void)center_lon;
 
-  if (count == 0) {
-    return;
-  }
-
-  if (!apiAvailable()) {
-    for (size_t i = 0; i < count; ++i) {
-      if (planes[i].airline[0] != '\0') {
-        continue;
-      }
-      RouteInfo info;
-      ApiSource src = ApiSource::kNone;
-      if (cacheResolve(planes[i].callsign, &info, &src)) {
-        applyRouteToAircraft(planes[i], info);
-        continue;
-      }
-      if (lookupPrefixFallback(planes[i].callsign, &info)) {
-        applyRouteToAircraft(planes[i], info);
-        storeCache(planes[i].callsign, info, ApiSource::kPrefix, false);
-      }
-    }
-    return;
-  }
-
-  uint8_t order[services::adsb::kMaxAircraft];
-  float dist_km[services::adsb::kMaxAircraft];
   for (size_t i = 0; i < count; ++i) {
-    order[i] = static_cast<uint8_t>(i);
-    const float cos_lat =
-        cosf(static_cast<float>(center_lat * (3.14159265 / 180.0)));
-    const float dx =
-        static_cast<float>(planes[i].lon - center_lon) * 111.0f * cos_lat;
-    const float dy = static_cast<float>(planes[i].lat - center_lat) * 111.0f;
-    dist_km[i] = sqrtf(dx * dx + dy * dy);
-  }
-
-  for (size_t i = 0; i + 1 < count; ++i) {
-    for (size_t j = i + 1; j < count; ++j) {
-      if (dist_km[order[j]] < dist_km[order[i]]) {
-        const uint8_t tmp = order[i];
-        order[i] = order[j];
-        order[j] = tmp;
-      }
-    }
-  }
-
-  unsigned api_calls = 0;
-
-  for (size_t row = 0; row < count; ++row) {
-    services::adsb::Aircraft& ac = planes[order[row]];
+    services::adsb::Aircraft& ac = planes[i];
     if (ac.callsign[0] == '\0' || !isIcaoRadioCallsign(ac.callsign)) {
+      continue;
+    }
+    if (ac.airline[0] != '\0' && ac.route_origin[0] != '\0' && ac.route_dest[0] != '\0') {
       continue;
     }
 
     RouteInfo info;
     routeClear(&info);
     ApiSource src = ApiSource::kNone;
-    const bool route_complete = cacheResolve(ac.callsign, &info, &src);
-    if (routeHasData(info)) {
+    if (cacheResolve(ac.callsign, &info, &src)) {
       applyRouteToAircraft(ac, info);
-    }
-    if (route_complete) {
       continue;
     }
 
-    ensureSeenCallsign(ac.callsign);
-
-    if (api_calls >= kMaxApiCallsPerFetch) {
-      continue;
-    }
-
-    if (apiLookupAlreadyDone(ac.callsign)) {
-      continue;
-    }
-
-    if (lookupFromApis(ac.callsign, &info, &src)) {
-      ++api_calls;
+    if (ac.airline[0] == '\0' && lookupPrefixFallback(ac.callsign, &info)) {
       applyRouteToAircraft(ac, info);
-      logRouteLine(ac.callsign, info, sourceTag(src));
-      continue;
-    }
-
-    if (lookupPrefixFallback(ac.callsign, &info)) {
-      applyRouteToAircraft(ac, info);
-      storeCache(ac.callsign, info, ApiSource::kPrefix, true);
-      logRouteLine(ac.callsign, info, "pfx");
+      storeCache(ac.callsign, info, ApiSource::kPrefix, false);
     }
   }
 }
+
+void onFlightDetailSelected(const char* callsign) {
+  onFlightDetailSelectedImpl(callsign);
+}
+
+void cancelDetailEnrichment() { cancelDetailEnrichmentImpl(); }
+
+bool detailEnrichmentReady() { return detailEnrichmentReadyImpl(); }
+
+bool detailEnrichmentConsume() { return detailEnrichmentConsumeImpl(); }
 
 }  // namespace services::route

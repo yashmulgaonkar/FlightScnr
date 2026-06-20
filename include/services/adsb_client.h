@@ -48,4 +48,8 @@ void trafficFilterBootLoad();
 int altitudeFloorFt();
 void saveAltitudeFloorFromForm(const char* value);
 
+/** Merge route fields into the live aircraft list entry for callsign. */
+void applyRouteFieldsByCallsign(const char* callsign, const char* airline,
+                                const char* origin, const char* dest);
+
 }  // namespace services::adsb

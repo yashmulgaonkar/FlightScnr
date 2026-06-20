@@ -23,4 +23,7 @@ void flightDetailSelectAtScreen(int16_t x, int16_t y);
 /** Cycle selection (+1 / -1). Returns false if no aircraft. */
 bool flightDetailCycle(int delta);
 
+/** Callsign of the aircraft currently selected on this screen (nullptr if none). */
+const char* flightDetailSelectedCallsign();
+
 }  // namespace ui

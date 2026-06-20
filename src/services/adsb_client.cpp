@@ -330,11 +330,61 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   fillRouteIcaoFromAdsb(ac, plane);
 }
 
+void applyRouteFieldsByCallsignImpl(const char* callsign, const char* airline,
+                                    const char* origin, const char* dest) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return;
+  }
+
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreTake(s_aircraft_mutex, portMAX_DELAY);
+  }
+
+  for (size_t i = 0; i < s_aircraft_count; ++i) {
+    if (strcmp(s_aircraft[i].callsign, callsign) != 0) {
+      continue;
+    }
+    Aircraft& ac = s_aircraft[i];
+    if (airline != nullptr && airline[0] != '\0') {
+      strncpy(ac.airline, airline, sizeof(ac.airline) - 1);
+      ac.airline[sizeof(ac.airline) - 1] = '\0';
+    }
+    if (origin != nullptr && origin[0] != '\0') {
+      char resolved[5];
+      if (services::airport::normalizeRouteCode(origin, resolved, sizeof(resolved))) {
+        strncpy(ac.route_origin, resolved, sizeof(ac.route_origin) - 1);
+      } else {
+        strncpy(ac.route_origin, origin, sizeof(ac.route_origin) - 1);
+      }
+      ac.route_origin[sizeof(ac.route_origin) - 1] = '\0';
+    }
+    if (dest != nullptr && dest[0] != '\0') {
+      char resolved[5];
+      if (services::airport::normalizeRouteCode(dest, resolved, sizeof(resolved))) {
+        strncpy(ac.route_dest, resolved, sizeof(ac.route_dest) - 1);
+      } else {
+        strncpy(ac.route_dest, dest, sizeof(ac.route_dest) - 1);
+      }
+      ac.route_dest[sizeof(ac.route_dest) - 1] = '\0';
+    }
+    break;
+  }
+
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreGive(s_aircraft_mutex);
+  }
+}
+
 }  // namespace
 
 size_t aircraftCount() { return s_aircraft_count; }
 
 const Aircraft* aircraftList() { return s_aircraft; }
+
+void applyRouteFieldsByCallsign(const char* callsign, const char* airline,
+                                const char* origin, const char* dest) {
+  applyRouteFieldsByCallsignImpl(callsign, airline, origin, dest);
+}
 
 void trafficFilterBootLoad() {
   Preferences prefs;
