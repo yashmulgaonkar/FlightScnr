@@ -38,4 +38,7 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots, uint3
 /** Stream /route_cache.csv as a CSV download (settings web GET handler). */
 void sendDownload(WebServer* server);
 
+/** LittleFS usage for diagnostics (false if not mounted). */
+bool flashUsage(size_t* used_bytes, size_t* total_bytes);
+
 }  // namespace services::route_cache
