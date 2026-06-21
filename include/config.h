@@ -87,6 +87,12 @@ constexpr int kFactoryAltitudeFloorFt = 500;
 /** Serial [gfx]/[radar] SPI debug (set false once stable). */
 constexpr bool kGfxDebug = false;
 
+/** Full ADS-B aircraft table on serial (very verbose). */
+constexpr bool kAdsbVerboseAircraftLog = false;
+
+/** Interval for [diag] serial diagnostics (ms). */
+constexpr unsigned long kDiagLogIntervalMs = 60000UL;  // 1 min (use 300000 for overnight)
+
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;
 constexpr uint16_t kTextOnBlack = 0xFFFF;

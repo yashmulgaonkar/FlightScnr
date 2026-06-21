@@ -5,7 +5,12 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+#include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <freertos/task.h>
+
 #include "config.h"
+#include "services/route_cache_store.h"
 #include "hardware/buzzer.h"
 #include "hardware/display.h"
 #include "hardware/input.h"
@@ -43,10 +48,110 @@ bool g_radar_visible = false;
 unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
+unsigned long g_last_adsb_ssl_recover_ms = 0;
 unsigned long g_last_radar_frame_ms = 0;
 unsigned long g_secondary_activity_ms = 0;
 unsigned long g_boot_details_until_ms = 0;
 uint32_t g_last_clock_minute_stamp = UINT32_MAX;
+unsigned long g_last_heap_log_ms = 0;
+unsigned long g_loop_max_ms = 0;
+
+const char* resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+      return "poweron";
+    case ESP_RST_SW:
+      return "sw";
+    case ESP_RST_PANIC:
+      return "panic";
+    case ESP_RST_INT_WDT:
+      return "int_wdt";
+    case ESP_RST_TASK_WDT:
+      return "task_wdt";
+    case ESP_RST_WDT:
+      return "wdt";
+    case ESP_RST_BROWNOUT:
+      return "brownout";
+    case ESP_RST_DEEPSLEEP:
+      return "deepsleep";
+    default:
+      return "other";
+  }
+}
+
+const char* screenName(AppScreen screen) {
+  switch (screen) {
+    case AppScreen::Radar:
+      return "radar";
+    case AppScreen::FlightDetail:
+      return "detail";
+    case AppScreen::Settings:
+      return "settings";
+    case AppScreen::Details:
+      return "details";
+    case AppScreen::Clock:
+      return "clock";
+    case AppScreen::ClockSettings:
+      return "clock_set";
+    default:
+      return "?";
+  }
+}
+
+void logDiagLine(const char* tag) {
+  const unsigned long uptime_sec = millis() / 1000UL;
+  const unsigned hours = static_cast<unsigned>(uptime_sec / 3600UL);
+  const unsigned mins = static_cast<unsigned>((uptime_sec % 3600UL) / 60UL);
+
+  const bool wifi_up = WiFi.status() == WL_CONNECTED;
+  const int rssi = wifi_up ? WiFi.RSSI() : 0;
+
+  char adsb_ok[16];
+  const uint32_t adsb_age_ms = services::adsb::lastFetchOkAgeMs();
+  if (adsb_age_ms == UINT32_MAX) {
+    strncpy(adsb_ok, "never", sizeof(adsb_ok) - 1);
+  } else {
+    snprintf(adsb_ok, sizeof(adsb_ok), "%lus", adsb_age_ms / 1000UL);
+  }
+  adsb_ok[sizeof(adsb_ok) - 1] = '\0';
+
+  size_t lfs_used = 0;
+  size_t lfs_total = 0;
+  const bool lfs_ok = services::route_cache::flashUsage(&lfs_used, &lfs_total);
+  char lfs_buf[24];
+  if (lfs_ok && lfs_total > 0) {
+    snprintf(lfs_buf, sizeof(lfs_buf), "%u/%uKB",
+             static_cast<unsigned>(lfs_used / 1024U),
+             static_cast<unsigned>(lfs_total / 1024U));
+  } else {
+    strncpy(lfs_buf, "n/a", sizeof(lfs_buf) - 1);
+    lfs_buf[sizeof(lfs_buf) - 1] = '\0';
+  }
+
+  const uint32_t loop_stack =
+      static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t));
+
+  Serial.printf(
+      "[diag] %s uptime=%uh%02um free=%u min=%u max_blk=%u psram=%u wifi=%s rssi=%d "
+      "screen=%s ac=%u adsb_ok=%s adsb_busy=%u adsb_fail=%u stk_loop=%u stk_adsb=%u "
+      "loop_max=%lums lfs=%s\n",
+      tag, hours, mins, ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(),
+      heap_caps_get_free_size(MALLOC_CAP_SPIRAM), wifi_up ? "up" : "down", rssi,
+      screenName(g_screen), static_cast<unsigned>(services::adsb::aircraftCount()), adsb_ok,
+      services::adsb::fetchInProgress() ? 1U : 0U, services::adsb::fetchFailStreak(),
+      loop_stack, services::adsb::fetchTaskStackFreeBytes(), g_loop_max_ms, lfs_buf);
+
+  g_loop_max_ms = 0;
+}
+
+void tickDiagLog() {
+  const unsigned long now = millis();
+  if (g_last_heap_log_ms != 0 && now - g_last_heap_log_ms < config::kDiagLogIntervalMs) {
+    return;
+  }
+  g_last_heap_log_ms = now;
+  logDiagLine("tick");
+}
 
 bool bootDetailsActive() { return g_boot_details_until_ms != 0; }
 
@@ -415,6 +520,9 @@ void tickRadarAnimation() {
 }
 
 void tickAdsbFetch() {
+  const unsigned long now = millis();
+  services::adsb::fetchWatchdog(now);
+
   const bool on_radar = g_screen == AppScreen::Radar && g_radar_visible;
   const bool on_detail = g_screen == AppScreen::FlightDetail;
   if (!on_radar && !on_detail) {
@@ -422,7 +530,8 @@ void tickAdsbFetch() {
   }
 
   if (services::adsb::fetchReady()) {
-    services::adsb::fetchConsume();
+    // Route APIs run only via onFlightDetailSelected(), not on ADS-B poll.
+    services::adsb::fetchProcessReady(false);
     if (g_screen == AppScreen::Radar && g_radar_visible) {
       ui::radarDisplayRefreshAircraft();
     } else if (g_screen == AppScreen::FlightDetail) {
@@ -430,12 +539,19 @@ void tickAdsbFetch() {
     }
   }
 
-  const unsigned long now = millis();
   if (now - g_last_adsb_fetch_ms < config::kTrafficPollIntervalMs) {
     return;
   }
   if (services::adsb::fetchInProgress()) {
     return;
+  }
+
+  if (WiFi.status() == WL_CONNECTED && services::adsb::fetchFailStreak() >= 5 &&
+      services::adsb::lastFetchOkAgeMs() > 60000UL &&
+      now - g_last_adsb_ssl_recover_ms >= 120000UL) {
+    g_last_adsb_ssl_recover_ms = now;
+    Serial.println("[adsb] repeated TLS failures — recycling WiFi");
+    wifiReconnect();
   }
 
   if (!on_radar && !on_detail) {
@@ -455,6 +571,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
+  Serial.printf("[diag] boot reset=%s fw=%s\n", resetReasonName(), config::kFirmwareVersion);
   Serial.println("FlightScnr (T-Encoder Pro)");
 
   hardware::panelBootResolve();
@@ -477,10 +594,12 @@ void setup() {
     g_boot_details_until_ms = millis() + config::kBootDetailsDurationMs;
     showDetails(true);
     Serial.println("Screen: details (boot splash)");
+    logDiagLine("boot");
   }
 }
 
 void loop() {
+  const unsigned long loop_start = millis();
   hardware::buzzerPoll();
   tickBootDetailsSplash();
   tickSecondaryScreenTimeout();
@@ -489,11 +608,12 @@ void loop() {
   settingsWebPoll();
   services::route::tickCacheFlush(millis());
   tickFlightDetailRouteEnrich();
+  tickDiagLog();
 
   if (WiFi.status() != WL_CONNECTED) {
     settingsWebStop();
     if (g_radar_visible) {
-      Serial.println("WiFi lost — will reconnect");
+      Serial.println("[wifi] lost — will reconnect");
       g_radar_visible = false;
     }
 
@@ -535,6 +655,11 @@ void loop() {
     } else if (g_screen == AppScreen::FlightDetail) {
       tickAdsbFetch();
     }
+  }
+
+  const unsigned long loop_ms = millis() - loop_start;
+  if (loop_ms > g_loop_max_ms) {
+    g_loop_max_ms = loop_ms;
   }
 
   delay(1);

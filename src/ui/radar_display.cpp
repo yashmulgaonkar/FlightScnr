@@ -700,6 +700,58 @@ IntRect unionSpokeBounds(const float* angles, int count, int margin) {
   return bounds;
 }
 
+void copyBgRegionToContent(const IntRect& rect) {
+  if (rectEmpty(rect)) {
+    return;
+  }
+  const IntRect clipped = clampRectToScreen(rect);
+  if (rectEmpty(clipped)) {
+    return;
+  }
+
+  const uint16_t* bg = s_bg.buffer();
+  uint16_t* content = s_content.bufferMut();
+  const int stride = s_bg.width();
+  for (int y = clipped.y; y < clipped.y + clipped.h; ++y) {
+    memcpy(content + static_cast<size_t>(y) * static_cast<size_t>(stride) +
+               static_cast<size_t>(clipped.x),
+           bg + static_cast<size_t>(y) * static_cast<size_t>(stride) +
+               static_cast<size_t>(clipped.x),
+           static_cast<size_t>(clipped.w) * sizeof(uint16_t));
+  }
+}
+
+void patchContentLayer(const IntRect& dirty) {
+  if (!s_bg_ready || !ensureContentSprite()) {
+    return;
+  }
+  copyBgRegionToContent(dirty);
+  {
+    const DrawScope scope(s_content.gfx());
+    drawAircraft();
+  }
+}
+
+void blitRegionToPanel(const IntRect& rect, const uint16_t* content, int stride) {
+  if (rectEmpty(rect) || content == nullptr) {
+    return;
+  }
+  const IntRect clipped = clampRectToScreen(rect);
+  if (rectEmpty(clipped)) {
+    return;
+  }
+
+  hardware::gfxLogf("[radar] blitRegion panel %dx%d @ (%d,%d)", clipped.w, clipped.h,
+                    clipped.x, clipped.y);
+  tft.blitRegionFromBuffer(static_cast<int16_t>(clipped.x),
+                           static_cast<int16_t>(clipped.y),
+                           static_cast<int16_t>(clipped.w),
+                           static_cast<int16_t>(clipped.h),
+                           content + static_cast<size_t>(clipped.y) * static_cast<size_t>(stride) +
+                               static_cast<size_t>(clipped.x),
+                           static_cast<int16_t>(stride));
+}
+
 void blitRegionFromContent(const IntRect& rect, const uint16_t* content, int stride) {
   if (rectEmpty(rect) || content == nullptr) {
     return;
@@ -1094,14 +1146,14 @@ void radarDisplayRefreshAircraft() {
 
   hardware::gfxLogf("[radar] adsb dirty %dx%d @ (%d,%d)", dirty.w, dirty.h, dirty.x, dirty.y);
 
-  if (!s_bg_ready || !rebuildContentLayer()) {
+  if (!s_bg_ready || !s_content_ready) {
     s_content_panel_sync = ContentPanelSync::BlitStatic;
     hardware::gfxLog("[radar] adsb pending blitStatic");
     return;
   }
 
-  s_content_panel_sync = ContentPanelSync::PushSprite;
-  hardware::gfxLog("[radar] adsb pending pushSprite");
+  patchContentLayer(dirty);
+  blitRegionToPanel(dirty, s_content.buffer(), s_content.width());
   savePrevAircraftMarkers();
 }
 

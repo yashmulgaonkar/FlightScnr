@@ -39,10 +39,25 @@ bool fetchRequest(double center_lat, double center_lon, float fetch_radius_km);
 /** True when a queued fetch finished and data is ready to display. */
 bool fetchReady();
 
+/** Publish staging to aircraftList(); optionally enrich routes first (skip on radar). */
+void fetchProcessReady(bool enrich_routes = true);
+
 /** Acknowledge fetchReady (call before reading aircraft for display). */
 void fetchConsume();
 
+/** Recover from a hung background fetch (call from main loop). */
+void fetchWatchdog(unsigned long now_ms);
+
 bool fetchInProgress();
+
+/** Milliseconds since last successful ADS-B poll (UINT32_MAX if never). */
+uint32_t lastFetchOkAgeMs();
+
+/** Consecutive failed ADS-B polls since last success. */
+uint32_t fetchFailStreak();
+
+/** Free stack space (bytes) on the adsb_fetch FreeRTOS task. */
+uint32_t fetchTaskStackFreeBytes();
 
 void trafficFilterBootLoad();
 int altitudeFloorFt();

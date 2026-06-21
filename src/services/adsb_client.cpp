@@ -27,63 +27,81 @@ namespace {
 
 constexpr char kApiBase[] = "https://opendata.adsb.fi/api/v3/lat/";
 constexpr float kKmPerNm = 1.852f;
+constexpr uint32_t kFetchHttpTimeoutMs = 8000;
+constexpr uint32_t kFetchHttpTimeoutSec = kFetchHttpTimeoutMs / 1000UL;
+constexpr uint32_t kFetchStallRecoveryMs = 25000;
 void logAircraftToSerial(const Aircraft* planes, size_t count, double center_lat,
                          double center_lon) {
-  Serial.printf("adsb: %u aircraft (center %.5f, %.5f)\n",
-                static_cast<unsigned>(count), center_lat, center_lon);
-  if (count == 0) {
+  (void)center_lat;
+  (void)center_lon;
+
+  static size_t s_last_logged_count = SIZE_MAX;
+
+  if (config::kAdsbVerboseAircraftLog) {
+    Serial.printf("[adsb] %u aircraft\n", static_cast<unsigned>(count));
+    if (count == 0) {
+      s_last_logged_count = 0;
+      return;
+    }
+
+    uint8_t order[kMaxAircraft];
+    float dist_km[kMaxAircraft];
+    for (size_t i = 0; i < count; ++i) {
+      order[i] = static_cast<uint8_t>(i);
+      float dx = 0.0f;
+      float dy = 0.0f;
+      geo::localOffsetKm(center_lat, center_lon, planes[i].lat, planes[i].lon, &dx, &dy,
+                         &dist_km[i]);
+    }
+
+    for (size_t i = 0; i + 1 < count; ++i) {
+      for (size_t j = i + 1; j < count; ++j) {
+        if (dist_km[order[j]] < dist_km[order[i]]) {
+          const uint8_t tmp = order[i];
+          order[i] = order[j];
+          order[j] = tmp;
+        }
+      }
+    }
+
+    Serial.println(
+        "  #  callsign airline              route    type alt       dist    brg  trk   gs");
+    for (size_t row = 0; row < count; ++row) {
+      const Aircraft& ac = planes[order[row]];
+      float dx = 0.0f;
+      float dy = 0.0f;
+      float dist = 0.0f;
+      geo::localOffsetKm(center_lat, center_lon, ac.lat, ac.lon, &dx, &dy, &dist);
+      const int brg = geo::bearingFromOffset(dx, dy);
+      const char* cs = ac.callsign[0] != '\0' ? ac.callsign : "-";
+      const char* airline = ac.airline[0] != '\0' ? ac.airline : "-";
+      const char* ty = ac.type[0] != '\0' ? ac.type : "-";
+      const char* alt = ac.alt[0] != '\0' ? ac.alt : "-";
+      char route[12];
+      route[0] = '\0';
+      if (ac.route_origin[0] != '\0' && ac.route_dest[0] != '\0') {
+        snprintf(route, sizeof(route), "%s->%s", ac.route_origin, ac.route_dest);
+      } else if (ac.route_origin[0] != '\0') {
+        snprintf(route, sizeof(route), "%s->?", ac.route_origin);
+      } else if (ac.route_dest[0] != '\0') {
+        snprintf(route, sizeof(route), "?->%s", ac.route_dest);
+      } else {
+        strncpy(route, "-", sizeof(route) - 1);
+        route[sizeof(route) - 1] = '\0';
+      }
+      Serial.printf(" %2u  %-7s %-22s %-8s %-4s %-9s %5.1f km %03d deg %4.0f deg %4.0f kt\n",
+                    static_cast<unsigned>(row + 1), cs, airline, route, ty, alt, dist, brg,
+                    ac.track_deg, ac.gs_knots);
+    }
+    s_last_logged_count = count;
     return;
   }
 
-  uint8_t order[kMaxAircraft];
-  float dist_km[kMaxAircraft];
-  for (size_t i = 0; i < count; ++i) {
-    order[i] = static_cast<uint8_t>(i);
-    float dx = 0.0f;
-    float dy = 0.0f;
-    geo::localOffsetKm(center_lat, center_lon, planes[i].lat, planes[i].lon, &dx, &dy,
-                       &dist_km[i]);
+  if (count == s_last_logged_count) {
+    return;
   }
-
-  for (size_t i = 0; i + 1 < count; ++i) {
-    for (size_t j = i + 1; j < count; ++j) {
-      if (dist_km[order[j]] < dist_km[order[i]]) {
-        const uint8_t tmp = order[i];
-        order[i] = order[j];
-        order[j] = tmp;
-      }
-    }
-  }
-
-  Serial.println(
-      "  #  callsign airline              route    type alt       dist    brg  trk   gs");
-  for (size_t row = 0; row < count; ++row) {
-    const Aircraft& ac = planes[order[row]];
-    float dx = 0.0f;
-    float dy = 0.0f;
-    float dist = 0.0f;
-    geo::localOffsetKm(center_lat, center_lon, ac.lat, ac.lon, &dx, &dy, &dist);
-    const int brg = geo::bearingFromOffset(dx, dy);
-    const char* cs = ac.callsign[0] != '\0' ? ac.callsign : "—";
-    const char* airline = ac.airline[0] != '\0' ? ac.airline : "—";
-    const char* ty = ac.type[0] != '\0' ? ac.type : "—";
-    const char* alt = ac.alt[0] != '\0' ? ac.alt : "—";
-    char route[12];
-    route[0] = '\0';
-    if (ac.route_origin[0] != '\0' && ac.route_dest[0] != '\0') {
-      snprintf(route, sizeof(route), "%s→%s", ac.route_origin, ac.route_dest);
-    } else if (ac.route_origin[0] != '\0') {
-      snprintf(route, sizeof(route), "%s→?", ac.route_origin);
-    } else if (ac.route_dest[0] != '\0') {
-      snprintf(route, sizeof(route), "?→%s", ac.route_dest);
-    } else {
-      strncpy(route, "—", sizeof(route) - 1);
-      route[sizeof(route) - 1] = '\0';
-    }
-    Serial.printf(" %2u  %-7s %-22s %-8s %-4s %-9s %5.1f km %03d° %4.0f° %4.0f kt\n",
-                  static_cast<unsigned>(row + 1), cs, airline, route, ty, alt, dist, brg,
-                  ac.track_deg, ac.gs_knots);
-  }
+  s_last_logged_count = count;
+  Serial.printf("[adsb] %u aircraft\n", static_cast<unsigned>(count));
 }
 
 constexpr char kPrefsNamespace[] = "flightscnr";
@@ -103,6 +121,10 @@ TaskHandle_t s_fetch_task = nullptr;
 volatile bool s_fetch_requested = false;
 volatile bool s_fetch_ready = false;
 volatile bool s_fetch_busy = false;
+
+unsigned long s_last_fetch_ok_ms = 0;
+unsigned long s_fetch_busy_since_ms = 0;
+uint32_t s_fetch_fail_streak = 0;
 
 double s_fetch_lat = 0.0;
 double s_fetch_lon = 0.0;
@@ -435,7 +457,7 @@ bool parseAircraftPayload(const String& payload, Aircraft* out, size_t* out_coun
   JsonDocument doc;
   const DeserializationError err = deserializeJson(doc, payload);
   if (err) {
-    Serial.printf("adsb: JSON parse error: %s\n", err.c_str());
+    Serial.printf("[adsb] JSON parse error: %s\n", err.c_str());
     return false;
   }
 
@@ -486,30 +508,39 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
 
   WiFiClientSecure client;
   client.setInsecure();
+  // WiFiClientSecure::setTimeout/setHandshakeTimeout take seconds, not milliseconds.
+  client.setTimeout(kFetchHttpTimeoutSec);
+  client.setHandshakeTimeout(kFetchHttpTimeoutSec);
 
   HTTPClient http;
   if (!http.begin(client, url)) {
-    Serial.println("adsb: http.begin failed");
+    Serial.println("[adsb] http.begin failed");
     return false;
   }
 
-  http.setTimeout(5000);
+  http.setConnectTimeout(kFetchHttpTimeoutMs);
+  http.setTimeout(kFetchHttpTimeoutMs);
+  http.setReuse(false);
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    Serial.printf("adsb: HTTP %d\n", code);
+    if (code == HTTPC_ERROR_CONNECTION_REFUSED) {
+      Serial.println("[adsb] HTTP -1 (TLS connect failed, see start_ssl_client above)");
+    } else {
+      Serial.printf("[adsb] HTTP %d\n", code);
+    }
     http.end();
+    client.stop();
     return false;
   }
 
   const String payload = http.getString();
   http.end();
+  client.stop();
 
   if (!parseAircraftPayload(payload, out, out_count)) {
     return false;
   }
 
-  services::route::enrichAircraft(out, *out_count, center_lat, center_lon);
-  logAircraftToSerial(out, *out_count, center_lat, center_lon);
   return true;
 }
 
@@ -517,24 +548,21 @@ void fetchWorkerTask(void* /*arg*/) {
   for (;;) {
     if (s_fetch_requested) {
       s_fetch_busy = true;
+      s_fetch_busy_since_ms = millis();
       size_t n = 0;
       const bool ok = fetchUpdateBlocking(s_fetch_lat, s_fetch_lon, s_fetch_radius_km,
                                         s_aircraft_staging, &n);
       if (ok) {
+        s_last_fetch_ok_ms = millis();
+        s_fetch_fail_streak = 0;
         s_aircraft_staging_count = n;
-        if (s_aircraft_mutex != nullptr) {
-          xSemaphoreTake(s_aircraft_mutex, portMAX_DELAY);
-        }
-        memcpy(s_aircraft, s_aircraft_staging,
-               n * sizeof(Aircraft));
-        s_aircraft_count = n;
-        if (s_aircraft_mutex != nullptr) {
-          xSemaphoreGive(s_aircraft_mutex);
-        }
         s_fetch_ready = true;
+      } else {
+        ++s_fetch_fail_streak;
       }
       s_fetch_requested = false;
       s_fetch_busy = false;
+      s_fetch_busy_since_ms = 0;
     }
     vTaskDelay(pdMS_TO_TICKS(5));
   }
@@ -567,8 +595,71 @@ bool fetchRequest(double center_lat, double center_lon, float fetch_radius_km) {
 
 bool fetchReady() { return s_fetch_ready; }
 
+void fetchProcessReady(const bool enrich_routes) {
+  if (!s_fetch_ready) {
+    return;
+  }
+
+  if (enrich_routes) {
+    services::route::enrichAircraft(s_aircraft_staging, s_aircraft_staging_count, s_fetch_lat,
+                                    s_fetch_lon);
+  }
+  logAircraftToSerial(s_aircraft_staging, s_aircraft_staging_count, s_fetch_lat, s_fetch_lon);
+
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreTake(s_aircraft_mutex, portMAX_DELAY);
+  }
+  memcpy(s_aircraft, s_aircraft_staging, s_aircraft_staging_count * sizeof(Aircraft));
+  s_aircraft_count = s_aircraft_staging_count;
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreGive(s_aircraft_mutex);
+  }
+  s_fetch_ready = false;
+}
+
 void fetchConsume() { s_fetch_ready = false; }
 
+void fetchWatchdog(unsigned long now_ms) {
+  if (!s_fetch_requested && !s_fetch_busy) {
+    return;
+  }
+  if (s_fetch_busy_since_ms == 0) {
+    return;
+  }
+  if (now_ms - s_fetch_busy_since_ms < kFetchStallRecoveryMs) {
+    return;
+  }
+
+  Serial.printf("[adsb] fetch stall recovery (%lums busy)\n",
+                now_ms - s_fetch_busy_since_ms);
+  if (s_fetch_task != nullptr) {
+    vTaskDelete(s_fetch_task);
+    s_fetch_task = nullptr;
+  }
+  s_fetch_requested = false;
+  s_fetch_busy = false;
+  s_fetch_ready = false;
+  s_fetch_busy_since_ms = 0;
+  ++s_fetch_fail_streak;
+  fetchInit();
+}
+
 bool fetchInProgress() { return s_fetch_requested || s_fetch_busy; }
+
+uint32_t lastFetchOkAgeMs() {
+  if (s_last_fetch_ok_ms == 0) {
+    return UINT32_MAX;
+  }
+  return static_cast<uint32_t>(millis() - s_last_fetch_ok_ms);
+}
+
+uint32_t fetchFailStreak() { return s_fetch_fail_streak; }
+
+uint32_t fetchTaskStackFreeBytes() {
+  if (s_fetch_task == nullptr) {
+    return 0;
+  }
+  return static_cast<uint32_t>(uxTaskGetStackHighWaterMark(s_fetch_task) * sizeof(StackType_t));
+}
 
 }  // namespace services::adsb

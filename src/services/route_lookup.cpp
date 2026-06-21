@@ -369,6 +369,8 @@ bool httpGetJson(const char* url, const char* header_name, const char* header_va
                  JsonDocument& doc) {
   WiFiClientSecure client;
   client.setInsecure();
+  client.setTimeout(8);
+  client.setHandshakeTimeout(8);
   HTTPClient http;
   if (!http.begin(client, url)) {
     return false;
@@ -376,7 +378,9 @@ bool httpGetJson(const char* url, const char* header_name, const char* header_va
   if (header_name != nullptr && header_value != nullptr) {
     http.addHeader(header_name, header_value);
   }
+  http.setConnectTimeout(8000);
   http.setTimeout(8000);
+  http.setReuse(false);
   const int http_code = http.GET();
   if (http_code != HTTP_CODE_OK) {
     http.end();
@@ -525,12 +529,16 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
 
   WiFiClientSecure client;
   client.setInsecure();
+  client.setTimeout(8);
+  client.setHandshakeTimeout(8);
   HTTPClient http;
   if (!http.begin(client, url)) {
     return false;
   }
   http.addHeader("x-apikey", api_key);
+  http.setConnectTimeout(8000);
   http.setTimeout(8000);
+  http.setReuse(false);
   const int http_code = http.GET();
   if (http_code != HTTP_CODE_OK) {
     http.end();
@@ -649,6 +657,8 @@ bool lookupFr24WithKey(const char* callsign, RouteInfo* route, const char* api_t
 
   WiFiClientSecure client;
   client.setInsecure();
+  client.setTimeout(10);
+  client.setHandshakeTimeout(10);
   HTTPClient http;
   if (!http.begin(client, url)) {
     return false;
@@ -658,7 +668,9 @@ bool lookupFr24WithKey(const char* callsign, RouteInfo* route, const char* api_t
   String auth = "Bearer ";
   auth += api_token;
   http.addHeader("Authorization", auth);
+  http.setConnectTimeout(10000);
   http.setTimeout(10000);
+  http.setReuse(false);
   const int http_code = http.GET();
   if (http_code != HTTP_CODE_OK) {
     http.end();
@@ -751,7 +763,7 @@ void logRouteLine(const char* callsign, const RouteInfo& route, const char* tag)
     strncpy(leg, "—", sizeof(leg) - 1);
     leg[sizeof(leg) - 1] = '\0';
   }
-  Serial.printf("  route %s → %s %s [%s]\n", callsign,
+  Serial.printf("[route] %s -> %s %s [%s]\n", callsign,
                 route.airline[0] != '\0' ? route.airline : "(no airline)", leg, tag);
 }
 

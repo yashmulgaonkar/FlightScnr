@@ -5,6 +5,8 @@
 #include <LittleFS.h>
 #include <WebServer.h>
 
+#include <freertos/semphr.h>
+
 #include <cstring>
 
 #include "config.h"
@@ -22,9 +24,39 @@ enum class MountState : uint8_t { kPending, kOk, kFailed };
 MountState s_mount = MountState::kPending;
 bool s_dirty = false;
 unsigned long s_last_flush_ms = 0;
+SemaphoreHandle_t s_fs_mutex = nullptr;
 
 /** Merge buffer for flush — must not live on loop task stack (~84 KB at 1500 rows). */
 Entry s_merged[config::kRouteCacheFileMaxEntries];
+
+void ensureFsMutex() {
+  if (s_fs_mutex == nullptr) {
+    s_fs_mutex = xSemaphoreCreateMutex();
+  }
+}
+
+struct FsLock {
+  bool acquire(TickType_t timeout) {
+    ensureFsMutex();
+    if (s_fs_mutex == nullptr) {
+      return false;
+    }
+    held_ = xSemaphoreTake(s_fs_mutex, timeout) == pdTRUE;
+    return held_;
+  }
+
+  ~FsLock() {
+    if (held_ && s_fs_mutex != nullptr) {
+      xSemaphoreGive(s_fs_mutex);
+    }
+  }
+
+  bool held_ = false;
+};
+
+void noteFlushAttempt(unsigned long now_ms) {
+  s_last_flush_ms = now_ms;
+}
 
 void ensureCacheFile() {
   if (!LittleFS.exists(kPath)) {
@@ -269,6 +301,10 @@ bool lookup(const char* callsign, Entry* out, uint32_t now_sec, uint32_t ttl_sec
   if (out == nullptr || callsign == nullptr || callsign[0] == '\0') {
     return false;
   }
+  FsLock lock;
+  if (!lock.acquire(pdMS_TO_TICKS(2000))) {
+    return false;
+  }
   if (!ensureMounted() || !LittleFS.exists(kPath)) {
     return false;
   }
@@ -310,6 +346,10 @@ bool lookup(const char* callsign, Entry* out, uint32_t now_sec, uint32_t ttl_sec
 
 bool lookupPermanent(const char* callsign, Entry* out) {
   if (out == nullptr || callsign == nullptr || callsign[0] == '\0') {
+    return false;
+  }
+  FsLock lock;
+  if (!lock.acquire(pdMS_TO_TICKS(2000))) {
     return false;
   }
   if (!ensureMounted() || !LittleFS.exists(kPath)) {
@@ -364,6 +404,11 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots,
     return;
   }
 
+  FsLock lock;
+  if (!lock.acquire(0)) {
+    return;
+  }
+
   if (read_slot == nullptr || !ensureMounted()) {
     return;
   }
@@ -409,7 +454,8 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots,
 
   File fout = LittleFS.open(kTmpPath, "w");
   if (!fout) {
-    Serial.println("route_cache: write open failed");
+    Serial.println("[route_cache] write open failed");
+    noteFlushAttempt(now_ms);
     return;
   }
   fout.print(kHeader);
@@ -418,19 +464,30 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots,
   }
   fout.close();
 
-  LittleFS.remove(kPath);
+  if (LittleFS.exists(kPath) && !LittleFS.remove(kPath)) {
+    Serial.println("[route_cache] remove failed (file busy?)");
+    LittleFS.remove(kTmpPath);
+    noteFlushAttempt(now_ms);
+    return;
+  }
   if (!LittleFS.rename(kTmpPath, kPath)) {
-    Serial.println("route_cache: rename failed");
+    Serial.println("[route_cache] rename failed");
+    noteFlushAttempt(now_ms);
     return;
   }
 
   s_dirty = false;
-  s_last_flush_ms = now_ms;
-  Serial.printf("route_cache: saved %u entries\n", static_cast<unsigned>(merged_count));
+  noteFlushAttempt(now_ms);
+  Serial.printf("[route_cache] saved %u entries\n", static_cast<unsigned>(merged_count));
 }
 
 void sendDownload(WebServer* server) {
   if (server == nullptr) {
+    return;
+  }
+  FsLock lock;
+  if (!lock.acquire(pdMS_TO_TICKS(5000))) {
+    server->send(503, "text/plain; charset=utf-8", "Route cache busy, try again");
     return;
   }
   if (!ensureMounted() || !LittleFS.exists(kPath)) {
@@ -448,6 +505,36 @@ void sendDownload(WebServer* server) {
   server->sendHeader("Cache-Control", "no-store");
   server->streamFile(f, "text/csv; charset=utf-8");
   f.close();
+}
+
+bool flashUsage(size_t* used_bytes, size_t* total_bytes) {
+  if (used_bytes != nullptr) {
+    *used_bytes = 0;
+  }
+  if (total_bytes != nullptr) {
+    *total_bytes = 0;
+  }
+  FsLock lock;
+  if (!lock.acquire(0)) {
+    return false;
+  }
+  if (!ensureMounted()) {
+    return false;
+  }
+  size_t used = 0;
+  size_t total = 0;
+  used = LittleFS.usedBytes();
+  total = LittleFS.totalBytes();
+  if (total == 0) {
+    return false;
+  }
+  if (used_bytes != nullptr) {
+    *used_bytes = used;
+  }
+  if (total_bytes != nullptr) {
+    *total_bytes = total;
+  }
+  return true;
 }
 
 }  // namespace services::route_cache
