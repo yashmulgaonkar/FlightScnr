@@ -20,6 +20,7 @@
 #include "services/airline_lookup.h"
 #include "services/airport_lookup.h"
 #include "services/api_keys.h"
+#include "services/https_lock.h"
 #include "services/route_cache_store.h"
 
 namespace services::route {
@@ -56,6 +57,8 @@ char s_detail_worker_callsign[9] = "";
 volatile bool s_detail_requested = false;
 volatile bool s_detail_busy = false;
 volatile bool s_detail_ready = false;
+char s_detail_pending_callsign[9] = "";
+volatile bool s_detail_has_pending = false;
 RouteInfo s_detail_result = {};
 ApiSource s_detail_result_src = ApiSource::kNone;
 
@@ -367,6 +370,11 @@ void copyJsonAirlineName(const JsonObject& obj, const char* key, char* out, size
 
 bool httpGetJson(const char* url, const char* header_name, const char* header_value,
                  JsonDocument& doc) {
+  services::https::ScopedLock tls(8000);
+  if (!tls.held()) {
+    return false;
+  }
+
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(8);
@@ -527,6 +535,11 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
   url += callsign;
   url += "?max_pages=1";
 
+  services::https::ScopedLock tls(8000);
+  if (!tls.held()) {
+    return false;
+  }
+
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(8);
@@ -655,6 +668,11 @@ bool lookupFr24WithKey(const char* callsign, RouteInfo* route, const char* api_t
   url += to_iso;
   url += "&limit=5&sort=desc";
 
+  services::https::ScopedLock tls(10000);
+  if (!tls.held()) {
+    return false;
+  }
+
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(10);
@@ -774,6 +792,70 @@ void applyRouteToCallsign(const char* callsign, const RouteInfo& info) {
   services::adsb::applyRouteFieldsByCallsign(callsign, info.airline, info.origin, info.dest);
 }
 
+void signalDetailReadyIfSelected(const char* callsign) {
+  if (callsign != nullptr && callsign[0] != '\0' &&
+      strcmp(callsign, s_detail_selection_callsign) == 0) {
+    s_detail_ready = true;
+  }
+}
+
+/** Cache-only path; returns true when no live API worker is needed. */
+bool tryDetailCacheOnly(const char* callsign) {
+  RouteInfo cached;
+  routeClear(&cached);
+  ApiSource cached_src = ApiSource::kNone;
+  const bool cache_complete = cacheResolve(callsign, &cached, &cached_src);
+  if (routeHasData(cached)) {
+    applyRouteToCallsign(callsign, cached);
+  }
+  if (cache_complete || apiLookupAlreadyDone(callsign)) {
+    if (routeHasData(cached)) {
+      logRouteLine(callsign, cached, sourceTag(cached_src));
+    }
+    signalDetailReadyIfSelected(callsign);
+    return true;
+  }
+  return false;
+}
+
+void setDetailPending(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return;
+  }
+  strncpy(s_detail_pending_callsign, callsign, sizeof(s_detail_pending_callsign) - 1);
+  s_detail_pending_callsign[sizeof(s_detail_pending_callsign) - 1] = '\0';
+  s_detail_has_pending = true;
+}
+
+void startDetailWorker(const char* callsign) {
+  strncpy(s_detail_worker_callsign, callsign, sizeof(s_detail_worker_callsign) - 1);
+  s_detail_worker_callsign[sizeof(s_detail_worker_callsign) - 1] = '\0';
+  s_detail_ready = false;
+  s_detail_requested = true;
+  Serial.printf("Route lookup: detail enrich %s\n", callsign);
+}
+
+void drainDetailPending() {
+  if (!s_detail_has_pending || s_detail_pending_callsign[0] == '\0') {
+    return;
+  }
+
+  char callsign[sizeof(s_detail_pending_callsign)];
+  strncpy(callsign, s_detail_pending_callsign, sizeof(callsign));
+  callsign[sizeof(callsign) - 1] = '\0';
+  s_detail_has_pending = false;
+  s_detail_pending_callsign[0] = '\0';
+
+  if (tryDetailCacheOnly(callsign)) {
+    return;
+  }
+  if (s_detail_busy || s_detail_requested) {
+    setDetailPending(callsign);
+    return;
+  }
+  startDetailWorker(callsign);
+}
+
 void enrichDetailBlocking(const char* callsign) {
   routeClear(&s_detail_result);
   s_detail_result_src = ApiSource::kNone;
@@ -837,6 +919,7 @@ void detailWorkerTask(void* /*arg*/) {
       s_detail_requested = false;
       s_detail_busy = false;
       s_detail_ready = true;
+      drainDetailPending();
     }
     vTaskDelay(pdMS_TO_TICKS(5));
   }
@@ -855,30 +938,17 @@ void queueDetailEnrichment(const char* callsign) {
     return;
   }
 
-  RouteInfo cached;
-  routeClear(&cached);
-  ApiSource cached_src = ApiSource::kNone;
-  const bool cache_complete = cacheResolve(callsign, &cached, &cached_src);
-  if (routeHasData(cached)) {
-    applyRouteToCallsign(callsign, cached);
-  }
-  if (cache_complete || apiLookupAlreadyDone(callsign)) {
-    if (routeHasData(cached)) {
-      logRouteLine(callsign, cached, sourceTag(cached_src));
-    }
+  if (tryDetailCacheOnly(callsign)) {
     return;
   }
 
   ensureDetailWorker();
   if (s_detail_busy || s_detail_requested) {
+    setDetailPending(callsign);
     return;
   }
 
-  strncpy(s_detail_worker_callsign, callsign, sizeof(s_detail_worker_callsign) - 1);
-  s_detail_worker_callsign[sizeof(s_detail_worker_callsign) - 1] = '\0';
-  s_detail_ready = false;
-  s_detail_requested = true;
-  Serial.printf("Route lookup: detail enrich %s\n", callsign);
+  startDetailWorker(callsign);
 }
 
 void onFlightDetailSelectedImpl(const char* callsign) {
@@ -899,6 +969,8 @@ void onFlightDetailSelectedImpl(const char* callsign) {
 void cancelDetailEnrichmentImpl() {
   s_detail_selection_callsign[0] = '\0';
   s_detail_ready = false;
+  s_detail_has_pending = false;
+  s_detail_pending_callsign[0] = '\0';
 }
 
 bool detailEnrichmentReadyImpl() { return s_detail_ready; }
@@ -973,6 +1045,7 @@ bool lookupFromApis(const char* callsign, RouteInfo* route, ApiSource* source_ou
 }  // namespace
 
 void init() {
+  services::https::init();
   apikeys::load();
   memset(s_cache, 0, sizeof(s_cache));
   if (route_cache::mount()) {

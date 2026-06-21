@@ -19,6 +19,7 @@
 #include "config.h"
 #include "geo/flat_earth.h"
 #include "services/airport_lookup.h"
+#include "services/https_lock.h"
 #include "services/route_lookup.h"
 
 namespace services::adsb {
@@ -506,6 +507,12 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
   url += "/dist/";
   url += String(dist_nm, 1);
 
+  services::https::ScopedLock tls(kFetchHttpTimeoutMs + 2000);
+  if (!tls.held()) {
+    Serial.println("[adsb] HTTPS busy (fetch skipped)");
+    return false;
+  }
+
   WiFiClientSecure client;
   client.setInsecure();
   // WiFiClientSecure::setTimeout/setHandshakeTimeout take seconds, not milliseconds.
@@ -572,6 +579,7 @@ void fetchInit() {
   if (s_fetch_task != nullptr) {
     return;
   }
+  services::https::init();
   if (s_aircraft_mutex == nullptr) {
     s_aircraft_mutex = xSemaphoreCreateMutex();
   }
