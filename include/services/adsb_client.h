@@ -39,8 +39,8 @@ bool fetchRequest(double center_lat, double center_lon, float fetch_radius_km);
 /** True when a queued fetch finished and data is ready to display. */
 bool fetchReady();
 
-/** Enrich staging data, publish to aircraftList(), then clear fetchReady. */
-void fetchProcessReady();
+/** Publish staging to aircraftList(); optionally enrich routes first (skip on radar). */
+void fetchProcessReady(bool enrich_routes = true);
 
 /** Acknowledge fetchReady (call before reading aircraft for display). */
 void fetchConsume();

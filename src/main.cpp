@@ -509,7 +509,8 @@ void tickAdsbFetch() {
   }
 
   if (services::adsb::fetchReady()) {
-    services::adsb::fetchProcessReady();
+    const bool enrich_routes = g_screen == AppScreen::FlightDetail;
+    services::adsb::fetchProcessReady(enrich_routes);
     if (g_screen == AppScreen::Radar && g_radar_visible) {
       ui::radarDisplayRefreshAircraft();
     } else if (g_screen == AppScreen::FlightDetail) {

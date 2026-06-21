@@ -545,13 +545,15 @@ bool fetchRequest(double center_lat, double center_lon, float fetch_radius_km) {
 
 bool fetchReady() { return s_fetch_ready; }
 
-void fetchProcessReady() {
+void fetchProcessReady(const bool enrich_routes) {
   if (!s_fetch_ready) {
     return;
   }
 
-  services::route::enrichAircraft(s_aircraft_staging, s_aircraft_staging_count, s_fetch_lat,
-                                  s_fetch_lon);
+  if (enrich_routes) {
+    services::route::enrichAircraft(s_aircraft_staging, s_aircraft_staging_count, s_fetch_lat,
+                                    s_fetch_lon);
+  }
   logAircraftToSerial(s_aircraft_staging, s_aircraft_staging_count, s_fetch_lat, s_fetch_lon);
 
   if (s_aircraft_mutex != nullptr) {
