@@ -180,10 +180,10 @@ void showFlightDetail() {
   g_radar_visible = false;
 }
 
-void requestFlightDetailRouteEnrich() {
+void requestFlightDetailRouteEnrich(const bool immediate) {
   const char* callsign = ui::flightDetailSelectedCallsign();
   if (callsign != nullptr) {
-    services::route::onFlightDetailSelected(callsign);
+    services::route::onFlightDetailSelected(callsign, immediate);
   }
 }
 
@@ -191,6 +191,7 @@ void tickFlightDetailRouteEnrich() {
   if (g_screen != AppScreen::FlightDetail) {
     return;
   }
+  services::route::tickDetailEnrichDebounce(millis());
   if (services::route::detailEnrichmentReady() && services::route::detailEnrichmentConsume()) {
     showFlightDetail();
   }
@@ -280,7 +281,8 @@ void openFlightDetailFromRadar(int16_t tap_x, int16_t tap_y, bool from_screen_ta
   }
   g_screen = AppScreen::FlightDetail;
   noteSecondaryActivity();
-  requestFlightDetailRouteEnrich();
+  inputDiscardPendingInteractions();
+  requestFlightDetailRouteEnrich(true);
   showFlightDetail();
   Serial.println("Screen: flight detail");
 }
@@ -291,7 +293,7 @@ void onFlightDetailStep(int8_t delta) {
   }
   noteSecondaryActivity();
   if (ui::flightDetailCycle(delta)) {
-    requestFlightDetailRouteEnrich();
+    requestFlightDetailRouteEnrich(false);
     showFlightDetail();
   }
 }

@@ -59,6 +59,10 @@ volatile bool s_detail_busy = false;
 volatile bool s_detail_ready = false;
 char s_detail_pending_callsign[9] = "";
 volatile bool s_detail_has_pending = false;
+char s_detail_debounce_callsign[9] = "";
+unsigned long s_detail_debounce_deadline_ms = 0;
+bool s_detail_debounce_pending = false;
+constexpr unsigned long kDetailEnrichDebounceMs = 400;
 RouteInfo s_detail_result = {};
 ApiSource s_detail_result_src = ApiSource::kNone;
 
@@ -792,11 +796,31 @@ void applyRouteToCallsign(const char* callsign, const RouteInfo& info) {
   services::adsb::applyRouteFieldsByCallsign(callsign, info.airline, info.origin, info.dest);
 }
 
+bool isCurrentDetailSelection(const char* callsign) {
+  return callsign != nullptr && callsign[0] != '\0' &&
+         strcmp(callsign, s_detail_selection_callsign) == 0;
+}
+
 void signalDetailReadyIfSelected(const char* callsign) {
-  if (callsign != nullptr && callsign[0] != '\0' &&
-      strcmp(callsign, s_detail_selection_callsign) == 0) {
+  if (isCurrentDetailSelection(callsign)) {
     s_detail_ready = true;
   }
+}
+
+void clearDetailDebounce() {
+  s_detail_debounce_pending = false;
+  s_detail_debounce_deadline_ms = 0;
+  s_detail_debounce_callsign[0] = '\0';
+}
+
+void scheduleDetailEnrichDebounce(const char* callsign, unsigned long now_ms) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return;
+  }
+  strncpy(s_detail_debounce_callsign, callsign, sizeof(s_detail_debounce_callsign) - 1);
+  s_detail_debounce_callsign[sizeof(s_detail_debounce_callsign) - 1] = '\0';
+  s_detail_debounce_deadline_ms = now_ms + kDetailEnrichDebounceMs;
+  s_detail_debounce_pending = true;
 }
 
 /** Cache-only path; returns true when no live API worker is needed. */
@@ -809,8 +833,8 @@ bool tryDetailCacheOnly(const char* callsign) {
     applyRouteToCallsign(callsign, cached);
   }
   if (cache_complete || apiLookupAlreadyDone(callsign)) {
-    if (routeHasData(cached)) {
-      logRouteLine(callsign, cached, sourceTag(cached_src));
+    if (routeHasData(cached) && isCurrentDetailSelection(callsign)) {
+      logRouteLine(callsign, cached, "cache");
     }
     signalDetailReadyIfSelected(callsign);
     return true;
@@ -837,6 +861,12 @@ void startDetailWorker(const char* callsign) {
 
 void drainDetailPending() {
   if (!s_detail_has_pending || s_detail_pending_callsign[0] == '\0') {
+    return;
+  }
+
+  if (!isCurrentDetailSelection(s_detail_pending_callsign)) {
+    s_detail_has_pending = false;
+    s_detail_pending_callsign[0] = '\0';
     return;
   }
 
@@ -870,9 +900,13 @@ void enrichDetailBlocking(const char* callsign) {
   }
 
   if (cache_complete || apiLookupAlreadyDone(callsign)) {
-    if (routeHasData(s_detail_result)) {
-      logRouteLine(callsign, s_detail_result, sourceTag(s_detail_result_src));
+    if (routeHasData(s_detail_result) && isCurrentDetailSelection(callsign)) {
+      logRouteLine(callsign, s_detail_result, "cache");
     }
+    return;
+  }
+
+  if (!isCurrentDetailSelection(callsign)) {
     return;
   }
 
@@ -880,7 +914,9 @@ void enrichDetailBlocking(const char* callsign) {
     if (lookupPrefixFallback(callsign, &s_detail_result)) {
       s_detail_result_src = ApiSource::kPrefix;
       storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
-      logRouteLine(callsign, s_detail_result, "pfx");
+      if (isCurrentDetailSelection(callsign)) {
+        logRouteLine(callsign, s_detail_result, "pfx");
+      }
     } else {
       RouteInfo miss;
       routeClear(&miss);
@@ -892,14 +928,18 @@ void enrichDetailBlocking(const char* callsign) {
   ApiSource live_src = ApiSource::kNone;
   if (lookupFromApis(callsign, &s_detail_result, &live_src)) {
     s_detail_result_src = live_src;
-    logRouteLine(callsign, s_detail_result, sourceTag(live_src));
+    if (isCurrentDetailSelection(callsign)) {
+      logRouteLine(callsign, s_detail_result, sourceTag(live_src));
+    }
     return;
   }
 
   if (lookupPrefixFallback(callsign, &s_detail_result)) {
     s_detail_result_src = ApiSource::kPrefix;
     storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
-    logRouteLine(callsign, s_detail_result, "pfx");
+    if (isCurrentDetailSelection(callsign)) {
+      logRouteLine(callsign, s_detail_result, "pfx");
+    }
     return;
   }
 
@@ -918,7 +958,9 @@ void detailWorkerTask(void* /*arg*/) {
       enrichDetailBlocking(callsign);
       s_detail_requested = false;
       s_detail_busy = false;
-      s_detail_ready = true;
+      if (isCurrentDetailSelection(callsign)) {
+        s_detail_ready = true;
+      }
       drainDetailPending();
     }
     vTaskDelay(pdMS_TO_TICKS(5));
@@ -951,18 +993,46 @@ void queueDetailEnrichment(const char* callsign) {
   startDetailWorker(callsign);
 }
 
-void onFlightDetailSelectedImpl(const char* callsign) {
+void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
   if (callsign == nullptr || callsign[0] == '\0') {
     s_detail_selection_callsign[0] = '\0';
+    clearDetailDebounce();
     return;
   }
 
-  if (strcmp(callsign, s_detail_selection_callsign) == 0) {
+  const bool selection_changed = strcmp(callsign, s_detail_selection_callsign) != 0;
+  if (selection_changed) {
+    strncpy(s_detail_selection_callsign, callsign, sizeof(s_detail_selection_callsign) - 1);
+    s_detail_selection_callsign[sizeof(s_detail_selection_callsign) - 1] = '\0';
+  } else if (!immediate) {
     return;
   }
 
-  strncpy(s_detail_selection_callsign, callsign, sizeof(s_detail_selection_callsign) - 1);
-  s_detail_selection_callsign[sizeof(s_detail_selection_callsign) - 1] = '\0';
+  if (immediate) {
+    clearDetailDebounce();
+    queueDetailEnrichment(callsign);
+    return;
+  }
+
+  scheduleDetailEnrichDebounce(callsign, millis());
+}
+
+void tickDetailEnrichDebounceImpl(unsigned long now_ms) {
+  if (!s_detail_debounce_pending || s_detail_debounce_callsign[0] == '\0') {
+    return;
+  }
+  if (now_ms < s_detail_debounce_deadline_ms) {
+    return;
+  }
+  if (!isCurrentDetailSelection(s_detail_debounce_callsign)) {
+    clearDetailDebounce();
+    return;
+  }
+
+  char callsign[sizeof(s_detail_debounce_callsign)];
+  strncpy(callsign, s_detail_debounce_callsign, sizeof(callsign));
+  callsign[sizeof(callsign) - 1] = '\0';
+  clearDetailDebounce();
   queueDetailEnrichment(callsign);
 }
 
@@ -971,6 +1041,7 @@ void cancelDetailEnrichmentImpl() {
   s_detail_ready = false;
   s_detail_has_pending = false;
   s_detail_pending_callsign[0] = '\0';
+  clearDetailDebounce();
 }
 
 bool detailEnrichmentReadyImpl() { return s_detail_ready; }
@@ -1111,8 +1182,12 @@ void enrichAircraft(services::adsb::Aircraft* planes, size_t count, double cente
   }
 }
 
-void onFlightDetailSelected(const char* callsign) {
-  onFlightDetailSelectedImpl(callsign);
+void onFlightDetailSelected(const char* callsign, const bool immediate) {
+  onFlightDetailSelectedImpl(callsign, immediate);
+}
+
+void tickDetailEnrichDebounce(unsigned long now_ms) {
+  tickDetailEnrichDebounceImpl(now_ms);
 }
 
 void cancelDetailEnrichment() { cancelDetailEnrichmentImpl(); }

@@ -30,9 +30,12 @@ void enrichAircraft(services::adsb::Aircraft* planes, size_t count, double cente
 
 /**
  * Flight-detail view opened or encoder moved to another aircraft.
- * Live APIs run at most once per selection when cache has no valid row.
+ * immediate=true on open/tap; false on encoder steps (debounced before API).
  */
-void onFlightDetailSelected(const char* callsign);
+void onFlightDetailSelected(const char* callsign, bool immediate = false);
+
+/** Fire debounced detail enrich after encoder settles (call from main loop). */
+void tickDetailEnrichDebounce(unsigned long now_ms);
 
 /** Clear detail enrichment state when leaving flight detail. */
 void cancelDetailEnrichment();
