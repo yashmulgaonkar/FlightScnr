@@ -30,6 +30,12 @@ constexpr size_t kMaxAircraft = 64;
 size_t aircraftCount();
 const Aircraft* aircraftList();
 
+/** Thread-safe snapshot for UI (holds mutex briefly). Returns aircraft count copied. */
+size_t copyAircraftSnapshot(Aircraft* dst, size_t max_count);
+
+/** Copy one list slot under mutex; returns false if index out of range. */
+bool copyAircraftAt(size_t index, Aircraft* dst);
+
 /** Start background fetch worker (call once after WiFi is available). */
 void fetchInit();
 
@@ -55,6 +61,9 @@ uint32_t lastFetchOkAgeMs();
 
 /** Consecutive failed ADS-B polls since last success. */
 uint32_t fetchFailStreak();
+
+/** Clear fail streak after a WiFi/TLS recycle. */
+void fetchResetFailStreak();
 
 /** Free stack space (bytes) on the adsb_fetch FreeRTOS task. */
 uint32_t fetchTaskStackFreeBytes();

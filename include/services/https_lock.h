@@ -12,6 +12,9 @@ bool lock(uint32_t timeout_ms);
 
 void unlock();
 
+/** True when another task holds the global HTTPS mutex. */
+bool busy();
+
 /** RAII guard — releases the lock on destruction if acquire succeeded. */
 class ScopedLock {
  public:

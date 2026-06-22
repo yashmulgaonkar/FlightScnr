@@ -33,6 +33,18 @@ void unlock() {
   }
 }
 
+bool busy() {
+  ensureMutex();
+  if (s_mutex == nullptr) {
+    return false;
+  }
+  if (xSemaphoreTake(s_mutex, 0) == pdTRUE) {
+    xSemaphoreGive(s_mutex);
+    return false;
+  }
+  return true;
+}
+
 ScopedLock::ScopedLock(uint32_t timeout_ms) {
   held_ = lock(timeout_ms);
 }

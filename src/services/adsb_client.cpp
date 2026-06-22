@@ -31,6 +31,45 @@ constexpr float kKmPerNm = 1.852f;
 constexpr uint32_t kFetchHttpTimeoutMs = 8000;
 constexpr uint32_t kFetchHttpTimeoutSec = kFetchHttpTimeoutMs / 1000UL;
 constexpr uint32_t kFetchStallRecoveryMs = 25000;
+
+void workerYield() { vTaskDelay(1); }
+
+bool readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
+  WiFiClient* stream = http.getStreamPtr();
+  if (stream == nullptr || payload == nullptr) {
+    return false;
+  }
+  payload->clear();
+  const int content_len = http.getSize();
+  if (content_len > 0) {
+    payload->reserve(static_cast<unsigned>(content_len));
+  }
+  const unsigned long deadline_ms = millis() + timeout_ms;
+  uint8_t buf[512];
+  while (http.connected() || stream->available()) {
+    if (millis() >= deadline_ms) {
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[fetch] http read timeout (%ums)\n", timeout_ms);
+      }
+      return false;
+    }
+    if (stream->available() == 0) {
+      if (!http.connected()) {
+        break;
+      }
+      workerYield();
+      continue;
+    }
+    const size_t n = stream->readBytes(buf, sizeof(buf));
+    if (n == 0) {
+      workerYield();
+      continue;
+    }
+    payload->concat(reinterpret_cast<const char*>(buf), n);
+  }
+  return payload->length() > 0;
+}
+
 void logAircraftToSerial(const Aircraft* planes, size_t count, double center_lat,
                          double center_lon) {
   (void)center_lat;
@@ -404,6 +443,40 @@ size_t aircraftCount() { return s_aircraft_count; }
 
 const Aircraft* aircraftList() { return s_aircraft; }
 
+size_t copyAircraftSnapshot(Aircraft* dst, size_t max_count) {
+  if (dst == nullptr || max_count == 0) {
+    return 0;
+  }
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreTake(s_aircraft_mutex, portMAX_DELAY);
+  }
+  const size_t n = s_aircraft_count <= max_count ? s_aircraft_count : max_count;
+  if (n > 0) {
+    memcpy(dst, s_aircraft, n * sizeof(Aircraft));
+  }
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreGive(s_aircraft_mutex);
+  }
+  return n;
+}
+
+bool copyAircraftAt(size_t index, Aircraft* dst) {
+  if (dst == nullptr) {
+    return false;
+  }
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreTake(s_aircraft_mutex, portMAX_DELAY);
+  }
+  const bool ok = index < s_aircraft_count;
+  if (ok) {
+    *dst = s_aircraft[index];
+  }
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreGive(s_aircraft_mutex);
+  }
+  return ok;
+}
+
 void applyRouteFieldsByCallsign(const char* callsign, const char* airline,
                                 const char* origin, const char* dest) {
   applyRouteFieldsByCallsignImpl(callsign, airline, origin, dest);
@@ -498,6 +571,10 @@ bool parseAircraftPayload(const String& payload, Aircraft* out, size_t* out_coun
 
 bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radius_km,
                        Aircraft* out, size_t* out_count) {
+  const unsigned long fetch_start_ms = millis();
+  if (config::kSerialTraceDebug) {
+    Serial.println("[fetch] begin HTTPS");
+  }
   const float dist_nm = kmToNauticalMiles(fetch_radius_km);
 
   String url = kApiBase;
@@ -509,6 +586,9 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
 
   services::https::ScopedLock tls(kFetchHttpTimeoutMs + 2000);
   if (!tls.held()) {
+    if (config::kSerialTraceDebug) {
+      Serial.println("[fetch] skip: https lock busy");
+    }
     Serial.println("[adsb] HTTPS busy (fetch skipped)");
     return false;
   }
@@ -540,14 +620,27 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
     return false;
   }
 
-  const String payload = http.getString();
+  String payload;
+  if (!readHttpPayload(http, &payload, kFetchHttpTimeoutMs + 4000U)) {
+    http.end();
+    client.stop();
+    return false;
+  }
   http.end();
   client.stop();
 
+  workerYield();
   if (!parseAircraftPayload(payload, out, out_count)) {
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[fetch] fail parse (%lums)\n", millis() - fetch_start_ms);
+    }
     return false;
   }
 
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[fetch] ok %u aircraft (%lums)\n", static_cast<unsigned>(*out_count),
+                  millis() - fetch_start_ms);
+  }
   return true;
 }
 
@@ -584,7 +677,7 @@ void fetchInit() {
     s_aircraft_mutex = xSemaphoreCreateMutex();
   }
   xTaskCreatePinnedToCore(fetchWorkerTask, "adsb_fetch", 16384, nullptr, 1, &s_fetch_task,
-                          0);
+                          1);
 }
 
 bool fetchRequest(double center_lat, double center_lon, float fetch_radius_km) {
@@ -662,6 +755,8 @@ uint32_t lastFetchOkAgeMs() {
 }
 
 uint32_t fetchFailStreak() { return s_fetch_fail_streak; }
+
+void fetchResetFailStreak() { s_fetch_fail_streak = 0; }
 
 uint32_t fetchTaskStackFreeBytes() {
   if (s_fetch_task == nullptr) {

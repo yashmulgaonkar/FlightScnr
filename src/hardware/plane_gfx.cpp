@@ -25,20 +25,6 @@ class GfxWriteLineAccess : public Arduino_GFX {
   }
 };
 
-class PanelSpiLock {
- public:
-  PanelSpiLock() {
-    if (s_panel_mutex != nullptr) {
-      xSemaphoreTake(s_panel_mutex, portMAX_DELAY);
-    }
-  }
-  ~PanelSpiLock() {
-    if (s_panel_mutex != nullptr) {
-      xSemaphoreGive(s_panel_mutex);
-    }
-  }
-};
-
 class SpriteCanvas : public Arduino_GFX {
  public:
   SpriteCanvas(uint16_t* buffer, int16_t w, int16_t h)
@@ -197,14 +183,30 @@ void PlaneGfx::drawLinePixelAlign2(int16_t x0, int16_t y0, int16_t x1, int16_t y
 }
 
 void PlaneGfx::fillScreen(uint16_t color) {
-  if (gfx_ != nullptr) {
-    gfx_->fillScreen(color);
+  if (gfx_ == nullptr) {
+    return;
+  }
+  const bool opened_here = hardware_panel_ && write_depth_ == 0;
+  if (opened_here) {
+    startWrite();
+  }
+  gfx_->fillScreen(color);
+  if (opened_here) {
+    endWrite();
   }
 }
 
 void PlaneGfx::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
-  if (gfx_ != nullptr) {
-    gfx_->fillRect(x, y, w, h, color);
+  if (gfx_ == nullptr) {
+    return;
+  }
+  const bool opened_here = hardware_panel_ && write_depth_ == 0;
+  if (opened_here) {
+    startWrite();
+  }
+  gfx_->fillRect(x, y, w, h, color);
+  if (opened_here) {
+    endWrite();
   }
 }
 
@@ -241,20 +243,18 @@ void PlaneGfx::drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
   if (gfx_ == nullptr) {
     return;
   }
-  if (write_depth_ > 0) {
-    drawLineInternal(x0, y0, x1, y1, color);
-    return;
+  const bool opened_here = write_depth_ == 0;
+  if (opened_here) {
+    startWrite();
   }
-  PanelSpiLock lock;
   if (targetUsesPixelAlign2()) {
-    gfx_->startWrite();
     drawLinePixelAlign2(x0, y0, x1, y1, color);
-    gfx_->endWrite();
-    return;
+  } else {
+    drawLineInternal(x0, y0, x1, y1, color);
   }
-  gfx_->startWrite();
-  drawLineInternal(x0, y0, x1, y1, color);
-  gfx_->endWrite();
+  if (opened_here) {
+    endWrite();
+  }
 }
 
 void PlaneGfx::drawWideLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
@@ -266,9 +266,8 @@ void PlaneGfx::drawWideLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
   const float offset = -half_width;
 
   const bool opened_here = write_depth_ == 0;
-  PanelSpiLock lock;
   if (opened_here) {
-    gfx_->startWrite();
+    startWrite();
   }
   for (int i = 0; i < steps; ++i) {
     const float t = offset + static_cast<float>(i);
@@ -277,7 +276,7 @@ void PlaneGfx::drawWideLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
     drawLineInternal(x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
   }
   if (opened_here) {
-    gfx_->endWrite();
+    endWrite();
   }
 }
 
@@ -402,6 +401,10 @@ void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
   if (gfx_ == nullptr || text == nullptr) {
     return;
   }
+  const bool opened_here = hardware_panel_ && write_depth_ == 0;
+  if (opened_here) {
+    startWrite();
+  }
   int16_t draw_x = x;
   int16_t draw_y = y;
   mapDatum(text, x, y, &draw_x, &draw_y);
@@ -411,6 +414,9 @@ void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
   }
   gfx_->setCursor(draw_x, draw_y);
   gfx_->print(text);
+  if (opened_here) {
+    endWrite();
+  }
 }
 
 void PlaneGfx::startWrite() {
@@ -418,6 +424,9 @@ void PlaneGfx::startWrite() {
     return;
   }
   if (write_depth_++ == 0) {
+    if (hardware_panel_ && s_panel_mutex != nullptr) {
+      xSemaphoreTake(s_panel_mutex, portMAX_DELAY);
+    }
     gfx_->startWrite();
   }
 }
@@ -428,6 +437,9 @@ void PlaneGfx::endWrite() {
   }
   if (--write_depth_ == 0) {
     gfx_->endWrite();
+    if (hardware_panel_ && s_panel_mutex != nullptr) {
+      xSemaphoreGive(s_panel_mutex);
+    }
   }
 }
 
@@ -439,7 +451,6 @@ void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
 
   hardware::gfxLogf("[gfx] flush %dx%d @ (%d,%d) begin", w, h, x, y);
 
-  PanelSpiLock lock;
   if (!hardware_panel_) {
     gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(src), w, h);
     hardware::gfxLog("[gfx] flush ok");
@@ -449,7 +460,10 @@ void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
   // QSPI writePixels asserts when a single CS session spans >4096 pixels.
   // One row per addr window keeps each writePixels under that limit.
   auto* panel = static_cast<Arduino_TFT*>(gfx_);
-  panel->startWrite();
+  const bool opened_here = write_depth_ == 0;
+  if (opened_here) {
+    startWrite();
+  }
   if (targetUsesPixelAlign2()) {
     for (int16_t row = 0; row + 2 <= h; row += 2) {
       uint16_t* row_ptr =
@@ -460,12 +474,14 @@ void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
   } else {
     for (int16_t row = 0; row < h; ++row) {
       uint16_t* row_ptr =
-          const_cast<uint16_t*>(src + static_cast<size_t>(row) * static_cast<size_t>(w));
+          const_cast<uint16_t*>(src + static_cast<uint16_t>(row) * static_cast<size_t>(w));
       panel->writeAddrWindow(x, static_cast<int16_t>(y + row), static_cast<uint16_t>(w), 1);
       panel->writePixels(row_ptr, static_cast<uint32_t>(w));
     }
   }
-  panel->endWrite();
+  if (opened_here) {
+    endWrite();
+  }
 
   hardware::gfxLog("[gfx] flush ok");
 }

@@ -38,6 +38,8 @@ const int kCircleRadius = kCenterX - kBezelInsetPx;
 uint8_t s_order[services::adsb::kMaxAircraft];
 size_t s_order_count = 0;
 size_t s_sel = 0;
+services::adsb::Aircraft s_planes[services::adsb::kMaxAircraft];
+size_t s_plane_count = 0;
 
 float aircraftDistKm(const services::adsb::Aircraft& ac) {
   float dx = 0.0f;
@@ -267,8 +269,8 @@ void redrawCenterLineAt(int y, const char* text, UiTextStyle style, uint16_t fg,
 }
 
 void rebuildOrderByDistance() {
-  const size_t n = services::adsb::aircraftCount();
-  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
+  s_plane_count = services::adsb::copyAircraftSnapshot(s_planes, services::adsb::kMaxAircraft);
+  const size_t n = s_plane_count;
   s_order_count = n;
   for (size_t i = 0; i < n; ++i) {
     s_order[i] = static_cast<uint8_t>(i);
@@ -276,7 +278,7 @@ void rebuildOrderByDistance() {
 
   for (size_t i = 0; i + 1 < n; ++i) {
     for (size_t j = i + 1; j < n; ++j) {
-      if (aircraftDistKm(planes[s_order[j]]) < aircraftDistKm(planes[s_order[i]])) {
+      if (aircraftDistKm(s_planes[s_order[j]]) < aircraftDistKm(s_planes[s_order[i]])) {
         const uint8_t tmp = s_order[i];
         s_order[i] = s_order[j];
         s_order[j] = tmp;
@@ -285,11 +287,72 @@ void rebuildOrderByDistance() {
   }
 }
 
-const services::adsb::Aircraft* selectedAircraft() {
-  if (s_order_count == 0 || s_sel >= s_order_count) {
-    return nullptr;
+bool orderEntryInBounds(size_t order_idx) {
+  return order_idx < s_order_count && s_order[order_idx] < s_plane_count;
+}
+
+bool orderStaleWithAircraftList() {
+  const size_t n = services::adsb::copyAircraftSnapshot(s_planes, services::adsb::kMaxAircraft);
+  if (n != s_plane_count) {
+    return true;
   }
-  return &services::adsb::aircraftList()[s_order[s_sel]];
+  if (s_order_count != n) {
+    return true;
+  }
+  for (size_t i = 0; i < s_order_count; ++i) {
+    if (s_order[i] >= n) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void resyncOrderPreservingSelection() {
+  char keep_callsign[sizeof(services::adsb::Aircraft::callsign)] = {};
+  if (orderEntryInBounds(s_sel)) {
+    const services::adsb::Aircraft& ac = s_planes[s_order[s_sel]];
+    if (ac.callsign[0] != '\0') {
+      strncpy(keep_callsign, ac.callsign, sizeof(keep_callsign) - 1);
+      keep_callsign[sizeof(keep_callsign) - 1] = '\0';
+    }
+  }
+
+  rebuildOrderByDistance();
+
+  if (keep_callsign[0] != '\0') {
+    for (size_t i = 0; i < s_order_count; ++i) {
+      if (!orderEntryInBounds(i)) {
+        continue;
+      }
+      const services::adsb::Aircraft& ac = s_planes[s_order[i]];
+      if (strcmp(ac.callsign, keep_callsign) == 0) {
+        s_sel = i;
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[detail] resync kept %s sel=%u/%u\n", keep_callsign,
+                        static_cast<unsigned>(s_sel + 1),
+                        static_cast<unsigned>(s_order_count));
+        }
+        return;
+      }
+    }
+  }
+
+  if (s_sel >= s_order_count && s_order_count > 0) {
+    s_sel = 0;
+  }
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] resync planes=%u sel=%u\n",
+                  static_cast<unsigned>(s_order_count),
+                  static_cast<unsigned>(s_sel + 1));
+  }
+}
+
+bool copySelectedAircraft(services::adsb::Aircraft* out) {
+  if (out == nullptr || !orderEntryInBounds(s_sel)) {
+    return false;
+  }
+  *out = s_planes[s_order[s_sel]];
+  return true;
 }
 
 bool iataForIcao(const char* icao, char* iata_out) {
@@ -491,6 +554,8 @@ struct FlightDetailSnapshot {
 };
 
 FlightDetailSnapshot s_snapshot;
+FlightDetailStrings s_draw_strings;
+FlightDetailLayout s_draw_layout;
 
 void populateFlightDetailStrings(const services::adsb::Aircraft& ac,
                                  FlightDetailStrings* out) {
@@ -607,13 +672,15 @@ void flightDetailSelectAtScreen(int16_t x, int16_t y) {
     return;
   }
 
-  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
   int best_i = 0;
   int best_d2 = INT32_MAX;
   const int pick_r2 = kTapPickRadiusPx * kTapPickRadiusPx;
 
   for (size_t i = 0; i < s_order_count; ++i) {
-    const services::adsb::Aircraft& ac = planes[s_order[i]];
+    if (!orderEntryInBounds(i)) {
+      continue;
+    }
+    const services::adsb::Aircraft& ac = s_planes[s_order[i]];
     int sx = 0;
     int sy = 0;
     latLonToScreen(ac.lat, ac.lon, &sx, &sy);
@@ -635,6 +702,13 @@ void flightDetailSelectAtScreen(int16_t x, int16_t y) {
 }
 
 bool flightDetailCycle(int delta) {
+  if (orderStaleWithAircraftList()) {
+    if (config::kSerialTraceDebug) {
+      Serial.println("[detail] order stale before cycle");
+    }
+    resyncOrderPreservingSelection();
+    s_snapshot.valid = false;
+  }
   if (s_order_count == 0) {
     return false;
   }
@@ -651,32 +725,43 @@ bool flightDetailCycle(int delta) {
   }
   s_sel = static_cast<size_t>(idx);
   s_snapshot.valid = false;
+  if (config::kSerialTraceDebug) {
+    const char* cs = flightDetailSelectedCallsign();
+    Serial.printf("[detail] cycle sel=%u/%u callsign=%s\n",
+                  static_cast<unsigned>(s_sel + 1), static_cast<unsigned>(s_order_count),
+                  cs != nullptr ? cs : "(none)");
+  }
   return true;
 }
 
 const char* flightDetailSelectedCallsign() {
-  const services::adsb::Aircraft* ac = selectedAircraft();
-  if (ac == nullptr || ac->callsign[0] == '\0') {
+  static services::adsb::Aircraft ac;
+  if (!copySelectedAircraft(&ac) || ac.callsign[0] == '\0') {
     return nullptr;
   }
-  return ac->callsign;
+  return ac.callsign;
 }
 
 void flightDetailDraw() {
+  const unsigned long draw_start_ms = millis();
   const uint16_t bg = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
   const uint16_t fg = tft.color565(255, 255, 255);
   const uint16_t label_fg = tft.color565(180, 200, 220);
   const uint16_t route_fg = tft.color565(100, 220, 255);
   const uint16_t hint_fg = tft.color565(120, 140, 160);
 
-  tft.fillScreen(bg);
-
-  if (s_order_count == 0) {
-    rebuildOrderByDistance();
+  if (s_order_count == 0 || orderStaleWithAircraftList()) {
+    if (config::kSerialTraceDebug) {
+      Serial.println("[detail] order stale before draw");
+    }
+    resyncOrderPreservingSelection();
+    s_snapshot.valid = false;
   }
 
-  const services::adsb::Aircraft* ac = selectedAircraft();
-  if (ac == nullptr) {
+  services::adsb::Aircraft ac = {};
+  if (!copySelectedAircraft(&ac)) {
+    tft.startWrite();
+    tft.fillScreen(bg);
     s_snapshot.valid = false;
     int y = kCenterY - 20;
     drawCenterLine("Flight", &y, displayFontTitle(), fg, bg);
@@ -684,13 +769,27 @@ void flightDetailDraw() {
     drawCenterLine("Swipe right", &y, displayFontDetail(), hint_fg, bg);
     drawCenterLine("for radar", &y, displayFontDetail(), hint_fg, bg);
     tft.setTextDatum(TextDatum::TopLeft);
+    tft.endWrite();
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[detail] draw empty (%lums)\n", millis() - draw_start_ms);
+    }
     return;
   }
 
-  FlightDetailStrings s = {};
-  FlightDetailLayout layout = {};
-  populateFlightDetailStrings(*ac, &s);
+  FlightDetailStrings& s = s_draw_strings;
+  FlightDetailLayout& layout = s_draw_layout;
+  s = {};
+  layout = {};
+  populateFlightDetailStrings(ac, &s);
   computeFlightDetailLayout(s, &layout);
+
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] draw begin %s layout=%dms\n", s.callsign,
+                  static_cast<int>(millis() - draw_start_ms));
+  }
+
+  tft.startWrite();
+  tft.fillScreen(bg);
 
   const int title_h = displayFontHeight(tft, displayFontTitle());
 
@@ -715,26 +814,40 @@ void flightDetailDraw() {
   drawCenterLine("Swipe right", &y, displayFontDetail(), hint_fg, bg);
 
   tft.setTextDatum(TextDatum::TopLeft);
+  tft.endWrite();
   saveSnapshot(s, layout);
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] draw done %s (%lums)\n", s.callsign,
+                  millis() - draw_start_ms);
+  }
 }
 
 void flightDetailRefresh() {
-  if (s_order_count == 0) {
-    rebuildOrderByDistance();
+  if (s_order_count == 0 || orderStaleWithAircraftList()) {
+    if (config::kSerialTraceDebug) {
+      Serial.println("[detail] order stale before refresh -> full draw");
+    }
+    resyncOrderPreservingSelection();
+    s_snapshot.valid = false;
   }
 
-  const services::adsb::Aircraft* ac = selectedAircraft();
-  if (ac == nullptr) {
+  services::adsb::Aircraft ac = {};
+  if (!copySelectedAircraft(&ac)) {
     flightDetailDraw();
     return;
   }
 
-  FlightDetailStrings s = {};
-  FlightDetailLayout layout = {};
-  populateFlightDetailStrings(*ac, &s);
+  FlightDetailStrings& s = s_draw_strings;
+  FlightDetailLayout& layout = s_draw_layout;
+  s = {};
+  layout = {};
+  populateFlightDetailStrings(ac, &s);
   computeFlightDetailLayout(s, &layout);
 
   if (!snapshotStaticMatches(s, layout)) {
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[detail] refresh static changed %s -> full draw\n", s.callsign);
+    }
     flightDetailDraw();
     return;
   }
@@ -744,10 +857,15 @@ void flightDetailRefresh() {
     return;
   }
 
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] refresh partial %s alt/speed\n", s.callsign);
+  }
+
   const uint16_t bg = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
   const uint16_t fg = tft.color565(255, 255, 255);
   const UiTextStyle detail_style = displayFontDetail();
 
+  tft.startWrite();
   if (strcmp(s.alt, s_snapshot.text.alt) != 0) {
     redrawCenterLineAt(s_snapshot.layout.y_alt, s.alt, detail_style, fg, bg);
     strncpy(s_snapshot.text.alt, s.alt, sizeof(s_snapshot.text.alt) - 1);
@@ -758,6 +876,7 @@ void flightDetailRefresh() {
     strncpy(s_snapshot.text.speed, s.speed, sizeof(s_snapshot.text.speed) - 1);
     s_snapshot.text.speed[sizeof(s_snapshot.text.speed) - 1] = '\0';
   }
+  tft.endWrite();
 }
 
 }  // namespace ui

@@ -16,6 +16,7 @@
 #include "hardware/input.h"
 #include "hardware/panel.h"
 #include "services/adsb_client.h"
+#include "services/https_lock.h"
 #include "services/clock_time.h"
 #include "services/map_center.h"
 #include "services/route_lookup.h"
@@ -49,6 +50,7 @@ unsigned long g_wifi_down_since = 0;
 unsigned long g_last_reconnect_ms = 0;
 unsigned long g_last_adsb_fetch_ms = 0;
 unsigned long g_last_adsb_ssl_recover_ms = 0;
+unsigned long g_last_tls_proactive_refresh_ms = 0;
 unsigned long g_last_radar_frame_ms = 0;
 unsigned long g_secondary_activity_ms = 0;
 unsigned long g_boot_details_until_ms = 0;
@@ -182,6 +184,11 @@ void showFlightDetail() {
 
 void requestFlightDetailRouteEnrich(const bool immediate) {
   const char* callsign = ui::flightDetailSelectedCallsign();
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] enrich request %s immediate=%d\n",
+                  callsign != nullptr ? callsign : "(none)",
+                  immediate ? 1 : 0);
+  }
   if (callsign != nullptr) {
     services::route::onFlightDetailSelected(callsign, immediate);
   }
@@ -191,8 +198,15 @@ void tickFlightDetailRouteEnrich() {
   if (g_screen != AppScreen::FlightDetail) {
     return;
   }
-  services::route::tickDetailEnrichDebounce(millis());
+  const unsigned long now = millis();
+  services::route::tickDetailEnrichDebounce(now);
+  services::route::tickDetailWorkerWatchdog(now);
   if (services::route::detailEnrichmentReady() && services::route::detailEnrichmentConsume()) {
+    if (config::kSerialTraceDebug) {
+      const char* cs = ui::flightDetailSelectedCallsign();
+      Serial.printf("[detail] enrich ready -> redraw %s\n",
+                    cs != nullptr ? cs : "(none)");
+    }
     showFlightDetail();
   }
 }
@@ -292,6 +306,9 @@ void onFlightDetailStep(int8_t delta) {
     return;
   }
   noteSecondaryActivity();
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] encoder step %+d\n", static_cast<int>(delta));
+  }
   if (ui::flightDetailCycle(delta)) {
     requestFlightDetailRouteEnrich(false);
     showFlightDetail();
@@ -521,6 +538,45 @@ void tickRadarAnimation() {
   ui::radarDisplayRefreshSweep();
 }
 
+bool canRecycleWifiForTls(unsigned long now) {
+  return WiFi.status() == WL_CONNECTED && !services::adsb::fetchInProgress() &&
+         !services::https::busy() &&
+         now - g_last_adsb_ssl_recover_ms >= config::kTlsRecoverCooldownMs;
+}
+
+void recycleWifiForTls(unsigned long now, const char* reason) {
+  g_last_adsb_ssl_recover_ms = now;
+  g_last_tls_proactive_refresh_ms = now;
+  g_last_adsb_fetch_ms = now;
+  services::adsb::fetchResetFailStreak();
+  Serial.printf("[adsb] %s — recycling WiFi\n", reason);
+  wifiReconnect();
+}
+
+void tryTlsWifiRefresh(unsigned long now) {
+  if (!canRecycleWifiForTls(now)) {
+    return;
+  }
+
+  if (config::kTlsProactiveRefreshMs > 0 &&
+      now - g_last_tls_proactive_refresh_ms >= config::kTlsProactiveRefreshMs) {
+    recycleWifiForTls(now, "proactive TLS refresh");
+    return;
+  }
+
+  if (services::adsb::fetchFailStreak() >= config::kTlsRecoverFailStreak &&
+      services::adsb::lastFetchOkAgeMs() > config::kTlsRecoverStaleMs) {
+    recycleWifiForTls(now, "repeated TLS failures");
+  }
+}
+
+unsigned long adsbFetchPollIntervalMs() {
+  if (services::adsb::fetchFailStreak() >= 2) {
+    return config::kAdsbFetchBackoffMs;
+  }
+  return config::kTrafficPollIntervalMs;
+}
+
 void tickAdsbFetch() {
   const unsigned long now = millis();
   services::adsb::fetchWatchdog(now);
@@ -541,19 +597,33 @@ void tickAdsbFetch() {
     }
   }
 
-  if (now - g_last_adsb_fetch_ms < config::kTrafficPollIntervalMs) {
+  tryTlsWifiRefresh(now);
+
+  if (now - g_last_adsb_fetch_ms < adsbFetchPollIntervalMs()) {
     return;
   }
   if (services::adsb::fetchInProgress()) {
     return;
   }
-
-  if (WiFi.status() == WL_CONNECTED && services::adsb::fetchFailStreak() >= 5 &&
-      services::adsb::lastFetchOkAgeMs() > 60000UL &&
-      now - g_last_adsb_ssl_recover_ms >= 120000UL) {
-    g_last_adsb_ssl_recover_ms = now;
-    Serial.println("[adsb] repeated TLS failures — recycling WiFi");
-    wifiReconnect();
+  if (services::https::busy()) {
+    if (config::kSerialTraceDebug) {
+      static unsigned long s_last_https_defer_log_ms = 0;
+      if (now - s_last_https_defer_log_ms >= 3000UL) {
+        Serial.println("[fetch] defer: https busy");
+        s_last_https_defer_log_ms = now;
+      }
+    }
+    return;
+  }
+  if (on_detail && services::route::detailWorkerBusy()) {
+    if (config::kSerialTraceDebug) {
+      static unsigned long s_last_detail_defer_log_ms = 0;
+      if (now - s_last_detail_defer_log_ms >= 3000UL) {
+        Serial.println("[fetch] defer: route detail worker busy");
+        s_last_detail_defer_log_ms = now;
+      }
+    }
+    return;
   }
 
   if (!on_radar && !on_detail) {
@@ -564,6 +634,9 @@ void tickAdsbFetch() {
   if (services::adsb::fetchRequest(services::map_center::latitude(),
                                    services::map_center::longitude(), fetch_km)) {
     g_last_adsb_fetch_ms = now;
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[fetch] queued (screen=%s)\n", on_detail ? "detail" : "radar");
+    }
   }
 }
 
@@ -592,6 +665,7 @@ void setup() {
     services::clock::startNtp();
     services::route::init();
     services::adsb::fetchInit();
+    g_last_tls_proactive_refresh_ms = millis();
     g_screen = AppScreen::Details;
     g_boot_details_until_ms = millis() + config::kBootDetailsDurationMs;
     showDetails(true);

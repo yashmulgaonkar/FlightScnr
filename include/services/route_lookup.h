@@ -37,6 +37,9 @@ void onFlightDetailSelected(const char* callsign, bool immediate = false);
 /** Fire debounced detail enrich after encoder settles (call from main loop). */
 void tickDetailEnrichDebounce(unsigned long now_ms);
 
+/** Log and queue pending when route worker is slow on a stale callsign (call from main loop). */
+void tickDetailWorkerWatchdog(unsigned long now_ms);
+
 /** Clear detail enrichment state when leaving flight detail. */
 void cancelDetailEnrichment();
 
@@ -45,6 +48,9 @@ bool detailEnrichmentReady();
 
 /** Apply enrichment result to the aircraft list; returns true if UI should refresh. */
 bool detailEnrichmentConsume();
+
+/** True when route detail worker is running or queued. */
+bool detailWorkerBusy();
 
 const char* sourceTag(ApiSource s);
 

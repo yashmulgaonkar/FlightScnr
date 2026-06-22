@@ -59,6 +59,7 @@ volatile bool s_detail_busy = false;
 volatile bool s_detail_ready = false;
 char s_detail_pending_callsign[9] = "";
 volatile bool s_detail_has_pending = false;
+unsigned long s_detail_worker_start_ms = 0;
 char s_detail_debounce_callsign[9] = "";
 unsigned long s_detail_debounce_deadline_ms = 0;
 bool s_detail_debounce_pending = false;
@@ -66,9 +67,67 @@ constexpr unsigned long kDetailEnrichDebounceMs = 400;
 RouteInfo s_detail_result = {};
 ApiSource s_detail_result_src = ApiSource::kNone;
 
+enum class DetailStep : uint8_t {
+  kIdle = 0,
+  kCache,
+  kAirLabs,
+  kFlightAware,
+  kFr24,
+  kPrefix,
+  kDone,
+};
+
+DetailStep s_detail_step = DetailStep::kIdle;
+char s_detail_work_callsign[9] = "";
+
 bool apiAvailable();
 
-bool lookupFromApis(const char* callsign, RouteInfo* route, ApiSource* source_out);
+bool isCurrentDetailSelection(const char* callsign);
+
+void workerYield() { vTaskDelay(1); }
+
+bool readHttpPayload(HTTPClient& http, String* payload, const char* worker_callsign,
+                     uint32_t timeout_ms) {
+  WiFiClient* stream = http.getStreamPtr();
+  if (stream == nullptr || payload == nullptr) {
+    return false;
+  }
+  payload->clear();
+  const int content_len = http.getSize();
+  if (content_len > 0) {
+    payload->reserve(static_cast<unsigned>(content_len));
+  }
+  const unsigned long deadline_ms = millis() + timeout_ms;
+  uint8_t buf[512];
+  while (http.connected() || stream->available()) {
+    if (millis() >= deadline_ms) {
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[detail] http read timeout (%ums)\n", timeout_ms);
+      }
+      return false;
+    }
+    if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[detail] http read abort worker=%s\n", worker_callsign);
+      }
+      return false;
+    }
+    if (stream->available() == 0) {
+      if (!http.connected()) {
+        break;
+      }
+      workerYield();
+      continue;
+    }
+    const size_t n = stream->readBytes(buf, sizeof(buf));
+    if (n == 0) {
+      workerYield();
+      continue;
+    }
+    payload->concat(reinterpret_cast<const char*>(buf), n);
+  }
+  return payload->length() > 0;
+}
 
 void routeClear(RouteInfo* r) {
   if (r == nullptr) {
@@ -373,16 +432,23 @@ void copyJsonAirlineName(const JsonObject& obj, const char* key, char* out, size
 }
 
 bool httpGetJson(const char* url, const char* header_name, const char* header_value,
-                 JsonDocument& doc) {
-  services::https::ScopedLock tls(8000);
+                 JsonDocument& doc, const char* worker_callsign, uint32_t timeout_ms) {
+  if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
+    return false;
+  }
+  services::https::ScopedLock tls(timeout_ms);
   if (!tls.held()) {
+    return false;
+  }
+  if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
     return false;
   }
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(8);
-  client.setHandshakeTimeout(8);
+  const uint32_t timeout_sec = (timeout_ms + 999U) / 1000U;
+  client.setTimeout(timeout_sec);
+  client.setHandshakeTimeout(timeout_sec);
   HTTPClient http;
   if (!http.begin(client, url)) {
     return false;
@@ -390,16 +456,31 @@ bool httpGetJson(const char* url, const char* header_name, const char* header_va
   if (header_name != nullptr && header_value != nullptr) {
     http.addHeader(header_name, header_value);
   }
-  http.setConnectTimeout(8000);
-  http.setTimeout(8000);
+  http.setConnectTimeout(timeout_ms);
+  http.setTimeout(timeout_ms);
   http.setReuse(false);
-  const int http_code = http.GET();
+  const int http_code = http.sendRequest("GET");
   if (http_code != HTTP_CODE_OK) {
+    http.end();
+    client.stop();
+    return false;
+  }
+  if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
     http.end();
     return false;
   }
-  const String payload = http.getString();
+  String payload;
+  if (!readHttpPayload(http, &payload, worker_callsign, timeout_ms)) {
+    http.end();
+    client.stop();
+    return false;
+  }
   http.end();
+  client.stop();
+  workerYield();
+  if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
+    return false;
+  }
   return !deserializeJson(doc, payload);
 }
 
@@ -455,7 +536,7 @@ bool lookupAirLabsWithKey(const char* callsign, RouteInfo* route, const char* ap
   url += api_key;
 
   JsonDocument doc;
-  if (!httpGetJson(url.c_str(), nullptr, nullptr, doc)) {
+  if (!httpGetJson(url.c_str(), nullptr, nullptr, doc, callsign, config::kDetailApiTimeoutMs)) {
     return false;
   }
 
@@ -487,11 +568,13 @@ bool lookupAirLabsWithKey(const char* callsign, RouteInfo* route, const char* ap
   return routeHasData(*route);
 }
 
-bool lookupAirLabs(const char* callsign, RouteInfo* route) {
+bool lookupAirLabsFirstKey(const char* callsign, RouteInfo* route) {
   if (!apikeys::useAirLabs() || !apikeys::hasAirLabs() || route == nullptr) {
     return false;
   }
-
+  if (!isCurrentDetailSelection(callsign)) {
+    return false;
+  }
   const size_t key_count = apikeys::airLabsKeyCount();
   for (size_t i = 0; i < key_count; ++i) {
     if (!apikeys::canUseAirLabsAt(i)) {
@@ -500,9 +583,7 @@ bool lookupAirLabs(const char* callsign, RouteInfo* route) {
     const bool ok =
         lookupAirLabsWithKey(callsign, route, apikeys::airLabsKeyAt(i), i);
     apikeys::recordAirLabsCallAt(i);
-    if (ok) {
-      return true;
-    }
+    return ok;
   }
   return false;
 }
@@ -539,31 +620,52 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
   url += callsign;
   url += "?max_pages=1";
 
-  services::https::ScopedLock tls(8000);
+  services::https::ScopedLock tls(config::kDetailApiTimeoutMs);
   if (!tls.held()) {
+    return false;
+  }
+  if (!isCurrentDetailSelection(callsign)) {
     return false;
   }
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(8);
-  client.setHandshakeTimeout(8);
+  const uint32_t timeout_sec =
+      (config::kDetailApiTimeoutMs + 999U) / 1000U;
+  client.setTimeout(timeout_sec);
+  client.setHandshakeTimeout(timeout_sec);
   HTTPClient http;
   if (!http.begin(client, url)) {
     return false;
   }
   http.addHeader("x-apikey", api_key);
-  http.setConnectTimeout(8000);
-  http.setTimeout(8000);
+  http.setConnectTimeout(config::kDetailApiTimeoutMs);
+  http.setTimeout(config::kDetailApiTimeoutMs);
   http.setReuse(false);
-  const int http_code = http.GET();
+  const int http_code = http.sendRequest("GET");
   if (http_code != HTTP_CODE_OK) {
     http.end();
+    client.stop();
     return false;
   }
-  const String payload = http.getString();
+  if (!isCurrentDetailSelection(callsign)) {
+    http.end();
+    client.stop();
+    return false;
+  }
+  String payload;
+  if (!readHttpPayload(http, &payload, callsign, config::kDetailApiTimeoutMs)) {
+    http.end();
+    client.stop();
+    return false;
+  }
   http.end();
+  client.stop();
 
+  workerYield();
+  if (!isCurrentDetailSelection(callsign)) {
+    return false;
+  }
   JsonDocument doc;
   if (deserializeJson(doc, payload)) {
     return false;
@@ -614,11 +716,13 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
   return routeHasData(*route);
 }
 
-bool lookupFlightAware(const char* callsign, RouteInfo* route) {
+bool lookupFlightAwareFirstKey(const char* callsign, RouteInfo* route) {
   if (!apikeys::useFlightAware() || !apikeys::hasFlightAware() || route == nullptr) {
     return false;
   }
-
+  if (!isCurrentDetailSelection(callsign)) {
+    return false;
+  }
   const size_t key_count = apikeys::flightAwareKeyCount();
   for (size_t i = 0; i < key_count; ++i) {
     if (!apikeys::canUseFlightAwareAt(i)) {
@@ -626,9 +730,7 @@ bool lookupFlightAware(const char* callsign, RouteInfo* route) {
     }
     const bool ok = lookupFlightAwareWithKey(callsign, route, apikeys::flightAwareKeyAt(i));
     apikeys::recordFlightAwareCallAt(i);
-    if (ok) {
-      return true;
-    }
+    return ok;
   }
   return false;
 }
@@ -672,15 +774,20 @@ bool lookupFr24WithKey(const char* callsign, RouteInfo* route, const char* api_t
   url += to_iso;
   url += "&limit=5&sort=desc";
 
-  services::https::ScopedLock tls(10000);
+  services::https::ScopedLock tls(config::kDetailApiTimeoutMs);
   if (!tls.held()) {
+    return false;
+  }
+  if (!isCurrentDetailSelection(callsign)) {
     return false;
   }
 
   WiFiClientSecure client;
   client.setInsecure();
-  client.setTimeout(10);
-  client.setHandshakeTimeout(10);
+  const uint32_t timeout_sec =
+      (config::kDetailApiTimeoutMs + 999U) / 1000U;
+  client.setTimeout(timeout_sec);
+  client.setHandshakeTimeout(timeout_sec);
   HTTPClient http;
   if (!http.begin(client, url)) {
     return false;
@@ -690,17 +797,33 @@ bool lookupFr24WithKey(const char* callsign, RouteInfo* route, const char* api_t
   String auth = "Bearer ";
   auth += api_token;
   http.addHeader("Authorization", auth);
-  http.setConnectTimeout(10000);
-  http.setTimeout(10000);
+  http.setConnectTimeout(config::kDetailApiTimeoutMs);
+  http.setTimeout(config::kDetailApiTimeoutMs);
   http.setReuse(false);
-  const int http_code = http.GET();
+  const int http_code = http.sendRequest("GET");
   if (http_code != HTTP_CODE_OK) {
     http.end();
+    client.stop();
     return false;
   }
-  const String payload = http.getString();
+  if (!isCurrentDetailSelection(callsign)) {
+    http.end();
+    client.stop();
+    return false;
+  }
+  String payload;
+  if (!readHttpPayload(http, &payload, callsign, config::kDetailApiTimeoutMs)) {
+    http.end();
+    client.stop();
+    return false;
+  }
   http.end();
+  client.stop();
 
+  workerYield();
+  if (!isCurrentDetailSelection(callsign)) {
+    return false;
+  }
   JsonDocument doc;
   if (deserializeJson(doc, payload)) {
     return false;
@@ -744,11 +867,13 @@ bool lookupFr24WithKey(const char* callsign, RouteInfo* route, const char* api_t
   return routeHasData(*route);
 }
 
-bool lookupFr24(const char* callsign, RouteInfo* route) {
+bool lookupFr24FirstKey(const char* callsign, RouteInfo* route) {
   if (!apikeys::useFr24() || !apikeys::hasFr24() || route == nullptr) {
     return false;
   }
-
+  if (!isCurrentDetailSelection(callsign)) {
+    return false;
+  }
   const size_t key_count = apikeys::fr24KeyCount();
   for (size_t i = 0; i < key_count; ++i) {
     if (!apikeys::canUseFr24At(i)) {
@@ -756,9 +881,7 @@ bool lookupFr24(const char* callsign, RouteInfo* route) {
     }
     const bool ok = lookupFr24WithKey(callsign, route, apikeys::fr24KeyAt(i));
     apikeys::recordFr24CallAt(i);
-    if (ok) {
-      return true;
-    }
+    return ok;
   }
   return false;
 }
@@ -821,6 +944,9 @@ void scheduleDetailEnrichDebounce(const char* callsign, unsigned long now_ms) {
   s_detail_debounce_callsign[sizeof(s_detail_debounce_callsign) - 1] = '\0';
   s_detail_debounce_deadline_ms = now_ms + kDetailEnrichDebounceMs;
   s_detail_debounce_pending = true;
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] debounce %s %lums\n", callsign, kDetailEnrichDebounceMs);
+  }
 }
 
 /** Cache-only path; returns true when no live API worker is needed. */
@@ -849,6 +975,9 @@ void setDetailPending(const char* callsign) {
   strncpy(s_detail_pending_callsign, callsign, sizeof(s_detail_pending_callsign) - 1);
   s_detail_pending_callsign[sizeof(s_detail_pending_callsign) - 1] = '\0';
   s_detail_has_pending = true;
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] pending %s (worker busy)\n", callsign);
+  }
 }
 
 void startDetailWorker(const char* callsign) {
@@ -886,83 +1015,197 @@ void drainDetailPending() {
   startDetailWorker(callsign);
 }
 
-void enrichDetailBlocking(const char* callsign) {
+void detailWorkerCancelWork() {
+  if (config::kSerialTraceDebug && s_detail_work_callsign[0] != '\0') {
+    Serial.printf("[detail] worker cancel %s\n", s_detail_work_callsign);
+  }
+  s_detail_step = DetailStep::kIdle;
+  s_detail_busy = false;
+  s_detail_worker_start_ms = 0;
+  s_detail_work_callsign[0] = '\0';
   routeClear(&s_detail_result);
   s_detail_result_src = ApiSource::kNone;
+}
 
-  RouteInfo cached;
-  routeClear(&cached);
-  ApiSource cached_src = ApiSource::kNone;
-  const bool cache_complete = cacheResolve(callsign, &cached, &cached_src);
-  if (routeHasData(cached)) {
-    s_detail_result = cached;
-    s_detail_result_src = cached_src;
+/** Returns true when work was cancelled (selection cleared). */
+bool detailWorkerRetargetIfNeeded() {
+  if (s_detail_selection_callsign[0] == '\0') {
+    detailWorkerCancelWork();
+    return true;
   }
+  if (isCurrentDetailSelection(s_detail_work_callsign)) {
+    return false;
+  }
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] worker retarget %s -> %s\n", s_detail_work_callsign,
+                  s_detail_selection_callsign);
+  }
+  strncpy(s_detail_work_callsign, s_detail_selection_callsign, sizeof(s_detail_work_callsign) - 1);
+  s_detail_work_callsign[sizeof(s_detail_work_callsign) - 1] = '\0';
+  strncpy(s_detail_worker_callsign, s_detail_selection_callsign,
+          sizeof(s_detail_worker_callsign) - 1);
+  s_detail_worker_callsign[sizeof(s_detail_worker_callsign) - 1] = '\0';
+  s_detail_worker_start_ms = millis();
+  s_detail_step = DetailStep::kCache;
+  routeClear(&s_detail_result);
+  s_detail_result_src = ApiSource::kNone;
+  s_detail_ready = false;
+  if (s_detail_has_pending &&
+      strcmp(s_detail_pending_callsign, s_detail_selection_callsign) == 0) {
+    s_detail_has_pending = false;
+    s_detail_pending_callsign[0] = '\0';
+  }
+  return false;
+}
 
-  if (cache_complete || apiLookupAlreadyDone(callsign)) {
-    if (routeHasData(s_detail_result) && isCurrentDetailSelection(callsign)) {
-      logRouteLine(callsign, s_detail_result, "cache");
-    }
+void detailWorkerFinishJob() {
+  const char* callsign = s_detail_work_callsign;
+  const unsigned long elapsed =
+      s_detail_worker_start_ms > 0 ? millis() - s_detail_worker_start_ms : 0;
+  const bool still_selected = isCurrentDetailSelection(callsign);
+  if (still_selected) {
+    s_detail_ready = true;
+  }
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] worker done %s (%lums) still_selected=%d\n", callsign, elapsed,
+                  still_selected ? 1 : 0);
+  }
+  s_detail_step = DetailStep::kIdle;
+  s_detail_busy = false;
+  s_detail_worker_start_ms = 0;
+  s_detail_work_callsign[0] = '\0';
+  drainDetailPending();
+}
+
+void detailWorkerRunStep() {
+  const char* callsign = s_detail_work_callsign;
+  if (callsign[0] == '\0') {
+    detailWorkerCancelWork();
     return;
   }
 
-  if (!isCurrentDetailSelection(callsign)) {
-    return;
-  }
-
-  if (!apiAvailable()) {
-    if (lookupPrefixFallback(callsign, &s_detail_result)) {
-      s_detail_result_src = ApiSource::kPrefix;
-      storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
-      if (isCurrentDetailSelection(callsign)) {
-        logRouteLine(callsign, s_detail_result, "pfx");
+  switch (s_detail_step) {
+    case DetailStep::kCache: {
+      RouteInfo cached;
+      routeClear(&cached);
+      ApiSource cached_src = ApiSource::kNone;
+      const bool cache_complete = cacheResolve(callsign, &cached, &cached_src);
+      if (routeHasData(cached)) {
+        s_detail_result = cached;
+        s_detail_result_src = cached_src;
+        applyRouteToCallsign(callsign, cached);
       }
-    } else {
+      if (cache_complete || apiLookupAlreadyDone(callsign)) {
+        if (routeHasData(s_detail_result) && isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, s_detail_result, "cache");
+        }
+        s_detail_step = DetailStep::kDone;
+        return;
+      }
+      s_detail_step = apiAvailable() ? DetailStep::kAirLabs : DetailStep::kPrefix;
+      return;
+    }
+    case DetailStep::kAirLabs: {
+      RouteInfo live;
+      routeClear(&live);
+      if (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs() &&
+          lookupAirLabsFirstKey(callsign, &live)) {
+        s_detail_result = live;
+        s_detail_result_src = ApiSource::kAirLabs;
+        storeCache(callsign, live, ApiSource::kAirLabs, true);
+        if (isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, live, "AL");
+        }
+        s_detail_step = DetailStep::kDone;
+        return;
+      }
+      s_detail_step = DetailStep::kFlightAware;
+      return;
+    }
+    case DetailStep::kFlightAware: {
+      RouteInfo live;
+      routeClear(&live);
+      if (apikeys::useFlightAware() && apikeys::hasFlightAware() &&
+          apikeys::canUseFlightAware() && lookupFlightAwareFirstKey(callsign, &live)) {
+        s_detail_result = live;
+        s_detail_result_src = ApiSource::kFlightAware;
+        storeCache(callsign, live, ApiSource::kFlightAware, true);
+        if (isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, live, "FA");
+        }
+        s_detail_step = DetailStep::kDone;
+        return;
+      }
+      s_detail_step = DetailStep::kFr24;
+      return;
+    }
+    case DetailStep::kFr24: {
+      RouteInfo live;
+      routeClear(&live);
+      if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24() &&
+          lookupFr24FirstKey(callsign, &live)) {
+        s_detail_result = live;
+        s_detail_result_src = ApiSource::kFr24;
+        storeCache(callsign, live, ApiSource::kFr24, true);
+        if (isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, live, "FR");
+        }
+        s_detail_step = DetailStep::kDone;
+        return;
+      }
       RouteInfo miss;
       routeClear(&miss);
       storeCache(callsign, miss, ApiSource::kNone, true);
+      s_detail_step = DetailStep::kPrefix;
+      return;
     }
-    return;
-  }
-
-  ApiSource live_src = ApiSource::kNone;
-  if (lookupFromApis(callsign, &s_detail_result, &live_src)) {
-    s_detail_result_src = live_src;
-    if (isCurrentDetailSelection(callsign)) {
-      logRouteLine(callsign, s_detail_result, sourceTag(live_src));
+    case DetailStep::kPrefix: {
+      if (lookupPrefixFallback(callsign, &s_detail_result)) {
+        s_detail_result_src = ApiSource::kPrefix;
+        storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
+        if (isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, s_detail_result, "pfx");
+        }
+      } else {
+        RouteInfo miss;
+        routeClear(&miss);
+        storeCache(callsign, miss, ApiSource::kNone, true);
+      }
+      s_detail_step = DetailStep::kDone;
+      return;
     }
-    return;
+    case DetailStep::kDone:
+      detailWorkerFinishJob();
+      return;
+    default:
+      detailWorkerCancelWork();
+      return;
   }
-
-  if (lookupPrefixFallback(callsign, &s_detail_result)) {
-    s_detail_result_src = ApiSource::kPrefix;
-    storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
-    if (isCurrentDetailSelection(callsign)) {
-      logRouteLine(callsign, s_detail_result, "pfx");
-    }
-    return;
-  }
-
-  RouteInfo miss;
-  routeClear(&miss);
-  storeCache(callsign, miss, ApiSource::kNone, true);
 }
 
 void detailWorkerTask(void* /*arg*/) {
   for (;;) {
-    if (s_detail_requested) {
+    if (s_detail_requested && s_detail_step == DetailStep::kIdle) {
       s_detail_busy = true;
-      char callsign[sizeof(s_detail_worker_callsign)];
-      strncpy(callsign, s_detail_worker_callsign, sizeof(callsign) - 1);
-      callsign[sizeof(callsign) - 1] = '\0';
-      enrichDetailBlocking(callsign);
+      s_detail_worker_start_ms = millis();
+      strncpy(s_detail_work_callsign, s_detail_worker_callsign, sizeof(s_detail_work_callsign) - 1);
+      s_detail_work_callsign[sizeof(s_detail_work_callsign) - 1] = '\0';
       s_detail_requested = false;
-      s_detail_busy = false;
-      if (isCurrentDetailSelection(callsign)) {
-        s_detail_ready = true;
+      s_detail_ready = false;
+      routeClear(&s_detail_result);
+      s_detail_result_src = ApiSource::kNone;
+      s_detail_step = DetailStep::kCache;
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[detail] worker begin %s\n", s_detail_work_callsign);
       }
-      drainDetailPending();
     }
+
+    if (s_detail_step != DetailStep::kIdle) {
+      if (!detailWorkerRetargetIfNeeded()) {
+        detailWorkerRunStep();
+      }
+    }
+
     vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
@@ -972,7 +1215,7 @@ void ensureDetailWorker() {
     return;
   }
   xTaskCreatePinnedToCore(detailWorkerTask, "route_detail", 16384, nullptr, 1,
-                          &s_detail_task, 0);
+                          &s_detail_task, 1);
 }
 
 void queueDetailEnrichment(const char* callsign) {
@@ -980,12 +1223,11 @@ void queueDetailEnrichment(const char* callsign) {
     return;
   }
 
-  if (tryDetailCacheOnly(callsign)) {
-    return;
-  }
-
   ensureDetailWorker();
   if (s_detail_busy || s_detail_requested) {
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[detail] queue busy -> pending %s\n", callsign);
+    }
     setDetailPending(callsign);
     return;
   }
@@ -1004,16 +1246,31 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
   if (selection_changed) {
     strncpy(s_detail_selection_callsign, callsign, sizeof(s_detail_selection_callsign) - 1);
     s_detail_selection_callsign[sizeof(s_detail_selection_callsign) - 1] = '\0';
+    s_detail_ready = false;
+    if ((s_detail_busy || s_detail_requested) &&
+        strcmp(callsign, s_detail_worker_callsign) != 0) {
+      setDetailPending(callsign);
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[detail] bump pending %s (worker on %s)\n", callsign,
+                      s_detail_worker_callsign);
+      }
+    }
   } else if (!immediate) {
     return;
   }
 
   if (immediate) {
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[detail] selected %s immediate\n", callsign);
+    }
     clearDetailDebounce();
     queueDetailEnrichment(callsign);
     return;
   }
 
+  if (config::kSerialTraceDebug && selection_changed) {
+    Serial.printf("[detail] selected %s debounced\n", callsign);
+  }
   scheduleDetailEnrichDebounce(callsign, millis());
 }
 
@@ -1033,6 +1290,9 @@ void tickDetailEnrichDebounceImpl(unsigned long now_ms) {
   strncpy(callsign, s_detail_debounce_callsign, sizeof(callsign));
   callsign[sizeof(callsign) - 1] = '\0';
   clearDetailDebounce();
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] debounce fire %s\n", callsign);
+  }
   queueDetailEnrichment(callsign);
 }
 
@@ -1070,47 +1330,31 @@ bool detailEnrichmentConsumeImpl() {
   return true;
 }
 
-bool lookupFromApis(const char* callsign, RouteInfo* route, ApiSource* source_out) {
-  if (route == nullptr) {
-    return false;
-  }
-  routeClear(route);
-
-  if (!apiAvailable() || apiLookupAlreadyDone(callsign)) {
-    return false;
+void tickDetailWorkerWatchdogImpl(unsigned long now_ms) {
+  if (!s_detail_busy || s_detail_worker_start_ms == 0) {
+    return;
   }
 
-  if (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs() &&
-      lookupAirLabs(callsign, route)) {
-    storeCache(callsign, *route, ApiSource::kAirLabs, true);
-    if (source_out != nullptr) {
-      *source_out = ApiSource::kAirLabs;
-    }
-    return true;
+  const unsigned long busy_ms = now_ms - s_detail_worker_start_ms;
+  const bool stale = s_detail_work_callsign[0] != '\0' &&
+                     !isCurrentDetailSelection(s_detail_work_callsign);
+  if (!stale || busy_ms < config::kDetailWorkerStaleStallMs) {
+    return;
   }
 
-  if (apikeys::useFlightAware() && apikeys::hasFlightAware() &&
-      apikeys::canUseFlightAware() && lookupFlightAware(callsign, route)) {
-    storeCache(callsign, *route, ApiSource::kFlightAware, true);
-    if (source_out != nullptr) {
-      *source_out = ApiSource::kFlightAware;
-    }
-    return true;
+  static unsigned long s_last_slow_log_ms = 0;
+  if (now_ms - s_last_slow_log_ms < 5000UL) {
+    return;
   }
+  s_last_slow_log_ms = now_ms;
 
-  if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24() &&
-      lookupFr24(callsign, route)) {
-    storeCache(callsign, *route, ApiSource::kFr24, true);
-    if (source_out != nullptr) {
-      *source_out = ApiSource::kFr24;
-    }
-    return true;
+  Serial.printf("[detail] worker slow stale %s sel=%s (%lums)\n", s_detail_work_callsign,
+                s_detail_selection_callsign, busy_ms);
+
+  if (s_detail_selection_callsign[0] != '\0' &&
+      strcmp(s_detail_selection_callsign, s_detail_work_callsign) != 0) {
+    setDetailPending(s_detail_selection_callsign);
   }
-
-  RouteInfo miss;
-  routeClear(&miss);
-  storeCache(callsign, miss, ApiSource::kNone, true);
-  return false;
 }
 
 }  // namespace
@@ -1190,10 +1434,16 @@ void tickDetailEnrichDebounce(unsigned long now_ms) {
   tickDetailEnrichDebounceImpl(now_ms);
 }
 
+void tickDetailWorkerWatchdog(unsigned long now_ms) {
+  tickDetailWorkerWatchdogImpl(now_ms);
+}
+
 void cancelDetailEnrichment() { cancelDetailEnrichmentImpl(); }
 
 bool detailEnrichmentReady() { return detailEnrichmentReadyImpl(); }
 
 bool detailEnrichmentConsume() { return detailEnrichmentConsumeImpl(); }
+
+bool detailWorkerBusy() { return s_detail_busy || s_detail_requested; }
 
 }  // namespace services::route

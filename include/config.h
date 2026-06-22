@@ -87,11 +87,34 @@ constexpr int kFactoryAltitudeFloorFt = 500;
 /** Serial [gfx]/[radar] SPI debug (set false once stable). */
 constexpr bool kGfxDebug = false;
 
+/** Serial [detail]/[fetch] trace for scroll, draw, enrich, TLS (disable once stable). */
+constexpr bool kSerialTraceDebug = true;
+
 /** Full ADS-B aircraft table on serial (very verbose). */
 constexpr bool kAdsbVerboseAircraftLog = false;
 
 /** Interval for [diag] serial diagnostics (ms). 0 = off. */
-constexpr unsigned long kDiagLogIntervalMs = 300000UL;  // 5 min (overnight dev); 60000 = 1 min
+constexpr unsigned long kDiagLogIntervalMs = 60000UL;  // 5 min (overnight dev); 60000 = 1 min
+
+/** Proactive WiFi/TLS refresh interval (0 = disabled). */
+constexpr unsigned long kTlsProactiveRefreshMs = 4UL * 60UL * 60UL * 1000UL;
+
+/** Reactive TLS recovery: recycle WiFi after this many consecutive ADS-B failures. */
+constexpr uint32_t kTlsRecoverFailStreak = 3;
+/** ...and no successful ADS-B fetch for at least this long (ms). */
+constexpr uint32_t kTlsRecoverStaleMs = 15000UL;
+/** Minimum time between proactive or reactive WiFi recycles (ms). */
+constexpr unsigned long kTlsRecoverCooldownMs = 90000UL;
+
+/** ADS-B poll interval while TLS failures are stacking (ms). */
+constexpr unsigned long kAdsbFetchBackoffMs = 15000UL;
+
+/** Route detail API connect/read timeout (ms). Keep short for fast scroll cancel. */
+constexpr uint32_t kDetailApiTimeoutMs = 4000;
+/** Restart route worker if stuck on a stale callsign (ms). */
+constexpr unsigned long kDetailWorkerStallMs = 12000UL;
+/** Faster recovery when the worker is enriching a callsign you scrolled past. */
+constexpr unsigned long kDetailWorkerStaleStallMs = 6000UL;
 
 // --- UI colors (RGB565) — status screens ---
 constexpr uint16_t kColorBlack = 0x0000;
