@@ -118,10 +118,6 @@ RouteJsonAllocator s_route_json_allocator;
 
 volatile bool s_route_tls_hard_fail = false;
 
-bool routeHttpShouldAbort() {
-  return s_route_tls_hard_fail || !services::https::heapReadyForRouteApi();
-}
-
 const JsonDocument& flightAwareJsonFilter() {
   static bool ready = false;
   static JsonDocument filter;
@@ -585,6 +581,28 @@ bool waitForRouteTlsHeap(const char* worker_callsign, uint32_t timeout_ms) {
          !services::adsb::fetchInProgress() && !services::https::busy();
 }
 
+/** Cooperative sprite release + TLS idle wait before live route API calls. */
+bool prepareRouteHttp(const char* worker_callsign, uint32_t timeout_ms) {
+  if (worker_callsign == nullptr || worker_callsign[0] == '\0' ||
+      !isCurrentDetailSelection(worker_callsign)) {
+    return false;
+  }
+  if (s_route_tls_hard_fail) {
+    return false;
+  }
+  const bool heap_ok = services::https::heapReadyForRouteApi();
+  const bool tls_idle =
+      !services::adsb::fetchInProgress() && !services::https::busy();
+  if (heap_ok && tls_idle) {
+    return true;
+  }
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] heap wait %s free=%u max_blk=%u\n", worker_callsign,
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  }
+  return waitForRouteTlsHeap(worker_callsign, timeout_ms);
+}
+
 bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign,
                  uint32_t timeout_ms, const HttpHeader* headers, size_t header_count,
                  const JsonDocument* json_filter = nullptr) {
@@ -855,7 +873,7 @@ bool lookupAirLabsUrl(const char* base_url, const char* query, const char* calls
 
 bool lookupAirLabsIdent(const char* ident, const char* worker_callsign, RouteInfo* route,
                         const char* api_key, size_t key_index) {
-  if (ident == nullptr || ident[0] == '\0' || routeHttpShouldAbort()) {
+  if (ident == nullptr || ident[0] == '\0' || s_route_tls_hard_fail) {
     return false;
   }
   char query[72];
@@ -863,14 +881,14 @@ bool lookupAirLabsIdent(const char* ident, const char* worker_callsign, RouteInf
   if (lookupAirLabsUrl(kAirLabsBase, query, worker_callsign, route, api_key, key_index)) {
     return true;
   }
-  if (routeHttpShouldAbort()) {
+  if (s_route_tls_hard_fail) {
     return false;
   }
   snprintf(query, sizeof(query), "flight_icao=%s&limit=1", ident);
   if (lookupAirLabsUrl(kAirLabsRoutesBase, query, worker_callsign, route, api_key, key_index)) {
     return true;
   }
-  if (routeHttpShouldAbort()) {
+  if (s_route_tls_hard_fail) {
     return false;
   }
   char flight_iata[16] = "";
@@ -879,7 +897,7 @@ bool lookupAirLabsIdent(const char* ident, const char* worker_callsign, RouteInf
     if (lookupAirLabsUrl(kAirLabsBase, query, worker_callsign, route, api_key, key_index)) {
       return true;
     }
-    if (routeHttpShouldAbort()) {
+    if (s_route_tls_hard_fail) {
       return false;
     }
     snprintf(query, sizeof(query), "flight_iata=%s&limit=1", flight_iata);
@@ -901,7 +919,7 @@ bool lookupAirLabsWithKey(const char* callsign, RouteInfo* route, const char* ap
   if (lookupAirLabsIdent(callsign, callsign, route, api_key, key_index)) {
     return true;
   }
-  if (routeHttpShouldAbort()) {
+  if (s_route_tls_hard_fail) {
     return false;
   }
 
@@ -1425,8 +1443,14 @@ void detailWorkerRunStep() {
       RouteInfo live;
       routeClear(&live);
       bool ok = false;
-      if (routeHttpShouldAbort()) {
-        s_detail_step = DetailStep::kPrefix;
+      if (s_route_tls_hard_fail) {
+        s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kAirLabs);
+      } else if (!prepareRouteHttp(callsign, config::kDetailApiTimeoutMs)) {
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", callsign,
+                        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        }
+        s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kAirLabs);
       } else if (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs() &&
                  lookupAirLabsFirstKey(callsign, &live)) {
         s_detail_result = live;
@@ -1449,8 +1473,14 @@ void detailWorkerRunStep() {
       RouteInfo live;
       routeClear(&live);
       bool ok = false;
-      if (routeHttpShouldAbort()) {
-        s_detail_step = DetailStep::kPrefix;
+      if (s_route_tls_hard_fail) {
+        s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kFlightAware);
+      } else if (!prepareRouteHttp(callsign, config::kDetailApiTimeoutMs)) {
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", callsign,
+                        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        }
+        s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kFlightAware);
       } else if (apikeys::useFlightAware() && apikeys::hasFlightAware() &&
                  apikeys::canUseFlightAware() && lookupFlightAwareFirstKey(callsign, &live)) {
         s_detail_result = live;
@@ -1473,8 +1503,16 @@ void detailWorkerRunStep() {
       RouteInfo live;
       routeClear(&live);
       bool ok = false;
-      if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24() &&
-          lookupFr24FirstKey(callsign, &live)) {
+      if (s_route_tls_hard_fail) {
+        s_detail_step = DetailStep::kPrefix;
+      } else if (!prepareRouteHttp(callsign, config::kDetailApiTimeoutMs)) {
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", callsign,
+                        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        }
+        s_detail_step = DetailStep::kPrefix;
+      } else if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24() &&
+                 lookupFr24FirstKey(callsign, &live)) {
         s_detail_result = live;
         s_detail_result_src = ApiSource::kFr24;
         storeCache(callsign, live, ApiSource::kFr24, true);
