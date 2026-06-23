@@ -63,6 +63,9 @@ constexpr double kFactoryLongitude = -122.37227;
 /** ADS-B poll interval (adsb.fi public limit ~1 req/s). */
 constexpr unsigned long kTrafficPollIntervalMs = 2000;
 
+/** ADS-B poll interval on flight detail when route enrichment is idle (ms). */
+constexpr unsigned long kAdsbFetchPollIntervalDetailMs = 10000UL;
+
 /** NTP servers (applied after Wi-Fi connect; timezone from clock settings). */
 constexpr char kNtpServer1[] = "pool.ntp.org";
 constexpr char kNtpServer2[] = "time.nist.gov";

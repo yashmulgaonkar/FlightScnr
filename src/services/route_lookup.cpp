@@ -62,6 +62,10 @@ char s_detail_worker_callsign[9] = "";
 volatile bool s_detail_requested = false;
 volatile bool s_detail_busy = false;
 volatile bool s_detail_ready = false;
+char s_detail_ready_callsign[9] = "";
+volatile bool s_detail_immediate_deferred = false;
+volatile bool s_detail_sprite_release_pending = false;
+volatile bool s_detail_sprite_released_ack = false;
 char s_detail_pending_callsign[9] = "";
 volatile bool s_detail_has_pending = false;
 unsigned long s_detail_worker_start_ms = 0;
@@ -559,22 +563,26 @@ void copyRouteFromFaAirport(const JsonObject& ap, char* out, size_t out_len) {
 
 /** Wait briefly for ADS-B TLS to finish before route API calls. */
 bool waitForRouteTlsHeap(const char* worker_callsign, uint32_t timeout_ms) {
-  ui::flightDetailReleaseSprite();
+  s_detail_sprite_released_ack = false;
+  s_detail_sprite_release_pending = true;
   const unsigned long deadline =
       millis() + (timeout_ms < 3500U ? timeout_ms : 3500U);
   while (millis() < deadline) {
     if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
+      s_detail_sprite_release_pending = false;
       return false;
     }
-    if (services::https::heapReadyForRouteApi() && !services::adsb::fetchInProgress() &&
-        !services::https::busy()) {
+    if (s_detail_sprite_released_ack && services::https::heapReadyForRouteApi() &&
+        !services::adsb::fetchInProgress() && !services::https::busy()) {
+      s_detail_sprite_release_pending = false;
       return true;
     }
     workerYield();
     vTaskDelay(pdMS_TO_TICKS(40));
   }
-  return services::https::heapReadyForRouteApi() && !services::adsb::fetchInProgress() &&
-         !services::https::busy();
+  s_detail_sprite_release_pending = false;
+  return s_detail_sprite_released_ack && services::https::heapReadyForRouteApi() &&
+         !services::adsb::fetchInProgress() && !services::https::busy();
 }
 
 bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign,
@@ -1211,18 +1219,59 @@ void scheduleDetailEnrichDebounce(const char* callsign, unsigned long now_ms) {
   }
 }
 
+void signalDetailUiRefresh(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0' ||
+      !isCurrentDetailSelection(callsign)) {
+    return;
+  }
+  strncpy(s_detail_ready_callsign, callsign, sizeof(s_detail_ready_callsign) - 1);
+  s_detail_ready_callsign[sizeof(s_detail_ready_callsign) - 1] = '\0';
+  s_detail_ready = true;
+}
+
+bool routeAlreadyOnAircraft(const char* callsign, const RouteInfo& info) {
+  services::adsb::Aircraft ac = {};
+  if (!services::adsb::copyAircraftByCallsign(callsign, &ac)) {
+    return false;
+  }
+  char want_origin[5] = {};
+  char want_dest[5] = {};
+  copyRouteIcao(info.origin, want_origin, sizeof(want_origin));
+  copyRouteIcao(info.dest, want_dest, sizeof(want_dest));
+  const bool airline_ok =
+      info.airline[0] == '\0' || strcmp(ac.airline, info.airline) == 0;
+  if (info.origin[0] != '\0' && info.dest[0] != '\0') {
+    return strcmp(ac.route_origin, want_origin) == 0 &&
+           strcmp(ac.route_dest, want_dest) == 0 && airline_ok;
+  }
+  return airline_ok && info.airline[0] != '\0';
+}
+
 /** Cache-only path; returns true when no live API worker is needed. */
 bool tryDetailCacheOnly(const char* callsign) {
   RouteInfo cached;
   routeClear(&cached);
   ApiSource cached_src = ApiSource::kNone;
   const bool cache_complete = cacheResolveRam(callsign, &cached, &cached_src);
-  if (routeHasData(cached)) {
+  const bool already_on_ac =
+      routeHasData(cached) && routeAlreadyOnAircraft(callsign, cached);
+  const bool recently_drawn = ui::flightDetailRecentlyRedrawn(callsign, 800UL);
+
+  if (routeHasData(cached) && !already_on_ac) {
     applyRouteToCallsign(callsign, cached);
   }
   if (cache_complete || apiLookupAlreadyDoneRam(callsign)) {
     if (routeHasData(cached) && isCurrentDetailSelection(callsign)) {
-      logRouteLine(callsign, cached, "cache");
+      s_detail_result = cached;
+      s_detail_result_src = cached_src;
+      if (!already_on_ac || !recently_drawn) {
+        if (!already_on_ac) {
+          logRouteLine(callsign, cached, "cache");
+        }
+        signalDetailUiRefresh(callsign);
+      } else if (config::kSerialTraceDebug) {
+        Serial.printf("[detail] cache skip %s (already on screen)\n", callsign);
+      }
     }
     return true;
   }
@@ -1327,7 +1376,7 @@ void detailWorkerFinishJob() {
       s_detail_worker_start_ms > 0 ? millis() - s_detail_worker_start_ms : 0;
   const bool still_selected = isCurrentDetailSelection(callsign);
   if (still_selected) {
-    s_detail_ready = true;
+    signalDetailUiRefresh(callsign);
   }
   if (config::kSerialTraceDebug) {
     Serial.printf("[detail] worker done %s (%lums) still_selected=%d\n", callsign, elapsed,
@@ -1531,6 +1580,23 @@ void queueDetailEnrichment(const char* callsign) {
   startDetailWorker(callsign);
 }
 
+void tickDetailImmediateDefer() {
+  if (!s_detail_immediate_deferred || s_detail_selection_callsign[0] == '\0') {
+    return;
+  }
+  if (services::adsb::fetchInProgress() || services::https::busy()) {
+    return;
+  }
+  if (!services::https::heapReadyForRouteApi()) {
+    return;
+  }
+  s_detail_immediate_deferred = false;
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] immediate defer fire %s\n", s_detail_selection_callsign);
+  }
+  queueDetailEnrichment(s_detail_selection_callsign);
+}
+
 void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
   if (callsign == nullptr || callsign[0] == '\0') {
     s_detail_selection_callsign[0] = '\0';
@@ -1543,6 +1609,7 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
     strncpy(s_detail_selection_callsign, callsign, sizeof(s_detail_selection_callsign) - 1);
     s_detail_selection_callsign[sizeof(s_detail_selection_callsign) - 1] = '\0';
     s_detail_ready = false;
+    s_detail_immediate_deferred = false;
     if ((s_detail_busy || s_detail_requested) &&
         strcmp(callsign, s_detail_worker_callsign) != 0) {
       setDetailPending(callsign);
@@ -1560,6 +1627,15 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
       Serial.printf("[detail] selected %s immediate\n", callsign);
     }
     clearDetailDebounce();
+    s_detail_immediate_deferred = false;
+    if (services::adsb::fetchInProgress() || services::https::busy() ||
+        !services::https::heapReadyForRouteApi()) {
+      s_detail_immediate_deferred = true;
+      if (config::kSerialTraceDebug) {
+        Serial.println("[detail] immediate enrich deferred (tls busy)");
+      }
+      return;
+    }
     queueDetailEnrichment(callsign);
     return;
   }
@@ -1571,6 +1647,7 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
 }
 
 void tickDetailEnrichDebounceImpl(unsigned long now_ms) {
+  tickDetailImmediateDefer();
   if (!s_detail_debounce_pending || s_detail_debounce_callsign[0] == '\0') {
     return;
   }
@@ -1595,6 +1672,10 @@ void tickDetailEnrichDebounceImpl(unsigned long now_ms) {
 void cancelDetailEnrichmentImpl() {
   s_detail_selection_callsign[0] = '\0';
   s_detail_ready = false;
+  s_detail_ready_callsign[0] = '\0';
+  s_detail_immediate_deferred = false;
+  s_detail_sprite_release_pending = false;
+  s_detail_sprite_released_ack = false;
   s_detail_has_pending = false;
   s_detail_pending_callsign[0] = '\0';
   clearDetailDebounce();
@@ -1608,45 +1689,19 @@ bool detailEnrichmentConsumeImpl() {
     return false;
   }
 
-  const char* callsign = s_detail_selection_callsign;
-  if (callsign[0] == '\0') {
+  if (s_detail_ready_callsign[0] == '\0' ||
+      !isCurrentDetailSelection(s_detail_ready_callsign)) {
     s_detail_ready = false;
-    return false;
-  }
-
-  if (strcmp(callsign, s_detail_worker_callsign) != 0) {
-    s_detail_ready = false;
+    s_detail_ready_callsign[0] = '\0';
     return false;
   }
 
   if (routeHasData(s_detail_result)) {
-    services::adsb::Aircraft ac = {};
-    if (services::adsb::copyAircraftByCallsign(callsign, &ac)) {
-      char want_origin[5] = {};
-      char want_dest[5] = {};
-      if (services::airport::normalizeRouteCode(s_detail_result.origin, want_origin,
-                                                sizeof(want_origin))) {
-      } else {
-        strncpy(want_origin, s_detail_result.origin, sizeof(want_origin) - 1);
-      }
-      if (services::airport::normalizeRouteCode(s_detail_result.dest, want_dest,
-                                                sizeof(want_dest))) {
-      } else {
-        strncpy(want_dest, s_detail_result.dest, sizeof(want_dest) - 1);
-      }
-      const bool route_same =
-          strcmp(ac.route_origin, want_origin) == 0 && strcmp(ac.route_dest, want_dest) == 0 &&
-          (s_detail_result.airline[0] == '\0' ||
-           strcmp(ac.airline, s_detail_result.airline) == 0);
-      if (route_same) {
-        s_detail_ready = false;
-        return false;
-      }
-    }
-    applyRouteToCallsign(callsign, s_detail_result);
+    applyRouteToCallsign(s_detail_ready_callsign, s_detail_result);
   }
 
   s_detail_ready = false;
+  s_detail_ready_callsign[0] = '\0';
   return true;
 }
 
@@ -1773,6 +1828,30 @@ bool detailEnrichmentReady() { return detailEnrichmentReadyImpl(); }
 bool detailEnrichmentConsume() { return detailEnrichmentConsumeImpl(); }
 
 bool detailWorkerBusy() { return s_detail_busy || s_detail_requested; }
+
+bool detailAdsbFetchPaused() {
+  if (s_detail_debounce_pending || s_detail_has_pending) {
+    return true;
+  }
+  if (s_detail_busy || s_detail_requested) {
+    return true;
+  }
+  return s_detail_step != DetailStep::kIdle;
+}
+
+bool detailBlocksUiDraw() {
+  return s_detail_sprite_release_pending || s_detail_busy || s_detail_requested;
+}
+
+void tickDetailSpriteReleaseImpl() {
+  if (!s_detail_sprite_release_pending || s_detail_sprite_released_ack) {
+    return;
+  }
+  ui::flightDetailReleaseSprite();
+  s_detail_sprite_released_ack = true;
+}
+
+void tickDetailSpriteRelease() { tickDetailSpriteReleaseImpl(); }
 
 const char* detailSelectionCallsign() { return s_detail_selection_callsign; }
 

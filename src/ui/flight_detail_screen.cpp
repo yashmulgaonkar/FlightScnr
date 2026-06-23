@@ -93,6 +93,9 @@ size_t s_sel = 0;
 services::adsb::Aircraft s_planes[services::adsb::kMaxAircraft];
 size_t s_plane_count = 0;
 
+char s_recent_enrich_redraw_callsign[16] = "";
+unsigned long s_recent_enrich_redraw_ms = 0;
+
 float aircraftDistKm(const services::adsb::Aircraft& ac) {
   float dx = 0.0f;
   float dy = 0.0f;
@@ -972,6 +975,9 @@ const char* flightDetailSelectedCallsign() {
 
 void flightDetailDraw() {
   const unsigned long draw_start_ms = millis();
+  if (services::route::detailBlocksUiDraw()) {
+    return;
+  }
   if (!ensureDetailSprite()) {
     return;
   }
@@ -1081,6 +1087,9 @@ void flightDetailDraw() {
 }
 
 void flightDetailRefresh() {
+  if (services::route::detailBlocksUiDraw()) {
+    return;
+  }
   resyncOrderPreservingSelection();
 
   services::adsb::Aircraft ac = {};
@@ -1106,8 +1115,45 @@ void flightDetailRefresh() {
 
   if (!snapshotStaticMatches(s, layout, airline_placeholder, route_placeholder,
                              alternate_airline, alternate_route, alt_phase)) {
+    if (flightDetailRecentlyRedrawn(s.callsign, 400UL)) {
+      const bool index_changed = strcmp(s.index_line, s_snapshot.text.index_line) != 0;
+      const bool alt_changed = strcmp(s.alt, s_snapshot.text.alt) != 0;
+      const bool speed_changed = strcmp(s.speed, s_snapshot.text.speed) != 0;
+      updateSnapshotSelectionIndex(s);
+      s_snapshot.order_count = s_order_count;
+      if (!index_changed && !alt_changed && !speed_changed) {
+        return;
+      }
+      if (!ensureDetailSprite()) {
+        flightDetailDraw();
+        return;
+      }
+      const uint16_t bg = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
+      const uint16_t fg = tft.color565(255, 255, 255);
+      const uint16_t hint_fg = tft.color565(120, 140, 160);
+      const UiTextStyle detail_style = displayFontDetail();
+      if (index_changed) {
+        const int detail_h = displayFontHeight(tft, detail_style);
+        const int y_index = s_snapshot.layout.y_speed + detail_h + kFooterGap;
+        redrawCenterLineAt(y_index, s.index_line, detail_style, hint_fg, bg);
+      }
+      if (alt_changed) {
+        redrawCenterLineAt(s_snapshot.layout.y_alt, s.alt, detail_style, fg, bg);
+        strncpy(s_snapshot.text.alt, s.alt, sizeof(s_snapshot.text.alt) - 1);
+        s_snapshot.text.alt[sizeof(s_snapshot.text.alt) - 1] = '\0';
+      }
+      if (speed_changed) {
+        redrawCenterLineAt(s_snapshot.layout.y_speed, s.speed, detail_style, fg, bg);
+        strncpy(s_snapshot.text.speed, s.speed, sizeof(s_snapshot.text.speed) - 1);
+        s_snapshot.text.speed[sizeof(s_snapshot.text.speed) - 1] = '\0';
+      }
+      return;
+    }
     if (config::kSerialTraceDebug) {
       Serial.printf("[detail] refresh static changed %s -> full draw\n", s.callsign);
+    }
+    if (services::route::detailBlocksUiDraw()) {
+      return;
     }
     flightDetailDraw();
     return;
@@ -1159,6 +1205,34 @@ void flightDetailRefresh() {
 
 void flightDetailTick(unsigned long now_ms) { tickNoApisAlternateLabels(now_ms); }
 
-void flightDetailReleaseSprite() { releaseDetailSprite(); }
+void flightDetailReleaseSprite() {
+  s_recent_enrich_redraw_callsign[0] = '\0';
+  s_recent_enrich_redraw_ms = 0;
+  releaseDetailSprite();
+}
+
+void flightDetailMarkEnrichRedrawn(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    s_recent_enrich_redraw_callsign[0] = '\0';
+    s_recent_enrich_redraw_ms = 0;
+    return;
+  }
+  strncpy(s_recent_enrich_redraw_callsign, callsign, sizeof(s_recent_enrich_redraw_callsign) - 1);
+  s_recent_enrich_redraw_callsign[sizeof(s_recent_enrich_redraw_callsign) - 1] = '\0';
+  s_recent_enrich_redraw_ms = millis();
+}
+
+bool flightDetailRecentlyRedrawn(const char* callsign, unsigned long window_ms) {
+  if (s_recent_enrich_redraw_ms == 0) {
+    return false;
+  }
+  if (millis() - s_recent_enrich_redraw_ms >= window_ms) {
+    return false;
+  }
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return true;
+  }
+  return strcmp(callsign, s_recent_enrich_redraw_callsign) == 0;
+}
 
 }  // namespace ui

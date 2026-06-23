@@ -52,6 +52,15 @@ bool detailEnrichmentConsume();
 /** True when route detail worker is running or queued. */
 bool detailWorkerBusy();
 
+/** True when ADS-B HTTPS should not start (detail enrich/debounce pending). */
+bool detailAdsbFetchPaused();
+
+/** True when route worker needs exclusive heap (main must not draw flight detail). */
+bool detailBlocksUiDraw();
+
+/** Release flight-detail sprite when the route worker requests it (main loop only). */
+void tickDetailSpriteRelease();
+
 /** Current flight-detail selection tracked by the route worker (may be empty). */
 const char* detailSelectionCallsign();
 

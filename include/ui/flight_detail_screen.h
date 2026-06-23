@@ -32,4 +32,10 @@ const char* flightDetailSelectedCallsign();
 /** Free the off-screen canvas (~300KB PSRAM) when leaving flight detail. */
 void flightDetailReleaseSprite();
 
+/** Mark that enrich just redrew this callsign (coalesce duplicate full draws). */
+void flightDetailMarkEnrichRedrawn(const char* callsign);
+
+/** True if callsign was fully redrawn within window_ms (0 = any callsign). */
+bool flightDetailRecentlyRedrawn(const char* callsign, unsigned long window_ms);
+
 }  // namespace ui

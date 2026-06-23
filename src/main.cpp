@@ -216,9 +216,6 @@ bool tlsBlocksPanel() {
   return services::adsb::fetchInProgress() || services::https::busy();
 }
 
-bool deferAdsbForRouteWorker() {
-  return services::route::detailWorkerBusy();
-}
 
 void completeDeferredRadarDraw() {
   if (!g_radar_full_draw_pending || g_screen != AppScreen::Radar || !g_radar_visible) {
@@ -263,7 +260,7 @@ void showFlightDetail() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
-  if (tlsBlocksPanel()) {
+  if (tlsBlocksPanel() || services::route::detailBlocksUiDraw()) {
     g_flight_detail_draw_pending = true;
     if (config::kSerialTraceDebug) {
       Serial.println("[detail] defer draw (tls busy)");
@@ -296,6 +293,7 @@ void tickFlightDetailRouteEnrich() {
     return;
   }
   const unsigned long now = millis();
+  services::route::tickDetailSpriteRelease();
   services::route::tickDetailEnrichDebounce(now);
   services::route::tickDetailWorkerWatchdog(now);
 
@@ -314,6 +312,7 @@ void tickFlightDetailRouteEnrich() {
                     cs != nullptr ? cs : "(none)");
     }
     showFlightDetail();
+    ui::flightDetailMarkEnrichRedrawn(ui::flightDetailSelectedCallsign());
     return;
   }
 
@@ -733,9 +732,12 @@ void tryTlsWifiRefresh(unsigned long now) {
   }
 }
 
-unsigned long adsbFetchPollIntervalMs() {
+unsigned long adsbFetchPollIntervalMs(bool on_detail) {
   if (services::adsb::fetchFailStreak() >= 2) {
     return config::kAdsbFetchBackoffMs;
+  }
+  if (on_detail) {
+    return config::kAdsbFetchPollIntervalDetailMs;
   }
   return config::kTrafficPollIntervalMs;
 }
@@ -751,6 +753,10 @@ void tickAdsbFetch() {
     return;
   }
 
+  if (on_detail) {
+    services::route::tickDetailSpriteRelease();
+  }
+
   if (services::adsb::fetchReady()) {
     // Route cache on ADS-B poll only while flight detail is open (radar tags
     // do not use route fields; skipping enrich avoids LittleFS work on the loop).
@@ -762,7 +768,7 @@ void tickAdsbFetch() {
       PanelSession panel(tft);
       ui::radarDisplayRefreshAircraft();
     } else if (on_detail) {
-      if (!tlsBlocksPanel()) {
+      if (!tlsBlocksPanel() && !services::route::detailBlocksUiDraw()) {
         PanelSession panel(tft);
         ui::flightDetailRefresh();
       }
@@ -771,13 +777,14 @@ void tickAdsbFetch() {
 
   completeDeferredRadarDraw();
 
-  if (g_flight_detail_draw_pending && on_detail && !tlsBlocksPanel()) {
+  if (g_flight_detail_draw_pending && on_detail && !tlsBlocksPanel() &&
+      !services::route::detailBlocksUiDraw()) {
     showFlightDetail();
   }
 
   tryTlsWifiRefresh(now);
 
-  if (now - g_last_adsb_fetch_ms < adsbFetchPollIntervalMs()) {
+  if (now - g_last_adsb_fetch_ms < adsbFetchPollIntervalMs(on_detail)) {
     return;
   }
   if (services::adsb::fetchInProgress()) {
@@ -793,11 +800,11 @@ void tickAdsbFetch() {
     }
     return;
   }
-  if (on_detail && (deferAdsbForRouteWorker() || !services::https::heapReadyForRouteApi())) {
+  if (on_detail && services::route::detailAdsbFetchPaused()) {
     if (config::kSerialTraceDebug) {
       static unsigned long s_last_detail_defer_log_ms = 0;
       if (now - s_last_detail_defer_log_ms >= 3000UL) {
-        Serial.println("[fetch] defer: route detail worker busy");
+        Serial.println("[fetch] defer: detail route active");
         s_last_detail_defer_log_ms = now;
       }
     }
