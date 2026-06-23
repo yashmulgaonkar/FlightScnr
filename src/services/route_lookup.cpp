@@ -1510,4 +1510,27 @@ bool detailEnrichmentConsume() { return detailEnrichmentConsumeImpl(); }
 
 bool detailWorkerBusy() { return s_detail_busy || s_detail_requested; }
 
+bool liveRouteApiAvailable() { return apiAvailable(); }
+
+bool detailEnrichmentInFlight(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0' ||
+      !isCurrentDetailSelection(callsign)) {
+    return false;
+  }
+  if (s_detail_debounce_pending && strcmp(s_detail_debounce_callsign, callsign) == 0) {
+    return true;
+  }
+  if (s_detail_has_pending && strcmp(s_detail_pending_callsign, callsign) == 0) {
+    return true;
+  }
+  if (s_detail_requested && strcmp(s_detail_worker_callsign, callsign) == 0) {
+    return true;
+  }
+  if (s_detail_step != DetailStep::kIdle &&
+      strcmp(s_detail_work_callsign, callsign) == 0) {
+    return true;
+  }
+  return false;
+}
+
 }  // namespace services::route

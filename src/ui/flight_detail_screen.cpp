@@ -16,10 +16,14 @@
 #include "data/airports_lookup.h"
 #include "geo/flat_earth.h"
 #include "services/map_center.h"
+#include "services/route_lookup.h"
 #include "ui/radar_scale.h"
 #include "ui/radar_theme.h"
 
 namespace ui {
+
+void flightDetailDraw();
+
 namespace {
 
 constexpr int kBezelInsetPx = 10;
@@ -512,6 +516,76 @@ void formatTypeLine(const services::adsb::Aircraft& ac, char* out, size_t out_le
 }
 
 constexpr int kTypeMaxLines = 4;
+constexpr char kFetchingDetails[] = "Fetching Details";
+constexpr char kNoApisEnabled[] = "No APIs Enabled";
+constexpr char kAirlineUnknown[] = "Airline unknown";
+constexpr char kRouteUnknown[] = "Route unknown";
+constexpr unsigned long kNoApisAlternateMs = 1000UL;
+
+enum class EnrichFieldPlaceholder : uint8_t { None, Fetching };
+
+bool alternateNoApisAirline(const services::adsb::Aircraft& ac) {
+  return !services::route::liveRouteApiAvailable() && ac.airline[0] == '\0';
+}
+
+bool alternateNoApisRoute(const services::adsb::Aircraft& ac) {
+  return !services::route::liveRouteApiAvailable() && ac.route_origin[0] == '\0' &&
+         ac.route_dest[0] == '\0';
+}
+
+uint8_t noApisAlternatePhase(unsigned long now_ms) {
+  return static_cast<uint8_t>((now_ms / kNoApisAlternateMs) % 2UL);
+}
+
+EnrichFieldPlaceholder enrichAirlinePlaceholder(const services::adsb::Aircraft& ac) {
+  if (ac.airline[0] != '\0' || alternateNoApisAirline(ac)) {
+    return EnrichFieldPlaceholder::None;
+  }
+  if (services::route::liveRouteApiAvailable() &&
+      services::route::detailEnrichmentInFlight(ac.callsign)) {
+    return EnrichFieldPlaceholder::Fetching;
+  }
+  return EnrichFieldPlaceholder::None;
+}
+
+EnrichFieldPlaceholder enrichRoutePlaceholder(const services::adsb::Aircraft& ac) {
+  if (ac.route_origin[0] != '\0' || ac.route_dest[0] != '\0' || alternateNoApisRoute(ac)) {
+    return EnrichFieldPlaceholder::None;
+  }
+  if (services::route::liveRouteApiAvailable() &&
+      services::route::detailEnrichmentInFlight(ac.callsign)) {
+    return EnrichFieldPlaceholder::Fetching;
+  }
+  return EnrichFieldPlaceholder::None;
+}
+
+uint16_t fetchingDetailColor() { return tft.color565(255, 200, 0); }
+
+uint16_t noApisDetailColor() { return tft.color565(255, 80, 80); }
+
+const char* alternateNoApisAirlineText(unsigned long now_ms) {
+  return noApisAlternatePhase(now_ms) == 0 ? kNoApisEnabled : kAirlineUnknown;
+}
+
+const char* alternateNoApisRouteText(unsigned long now_ms) {
+  return noApisAlternatePhase(now_ms) == 0 ? kNoApisEnabled : kRouteUnknown;
+}
+
+uint16_t alternateNoApisAirlineColor(unsigned long now_ms, uint16_t route_fg) {
+  return noApisAlternatePhase(now_ms) == 0 ? noApisDetailColor() : route_fg;
+}
+
+uint16_t alternateNoApisRouteColor(unsigned long now_ms, uint16_t route_fg) {
+  return noApisAlternatePhase(now_ms) == 0 ? noApisDetailColor() : route_fg;
+}
+
+void drawEnrichPlaceholder(const char* text, int* y, UiTextStyle style,
+                           EnrichFieldPlaceholder placeholder, uint16_t bg) {
+  if (placeholder != EnrichFieldPlaceholder::Fetching || text[0] == '\0') {
+    return;
+  }
+  drawCenterLine(text, y, style, fetchingDetailColor(), bg);
+}
 
 struct FlightDetailStrings {
   char callsign[16];
@@ -526,6 +600,8 @@ struct FlightDetailStrings {
 
 struct FlightDetailLayout {
   int y_start = 0;
+  int y_airline = 0;
+  int y_route = 0;
   int y_alt = 0;
   int y_speed = 0;
 };
@@ -534,6 +610,11 @@ struct FlightDetailSnapshot {
   bool valid = false;
   size_t sel = 0;
   size_t order_count = 0;
+  EnrichFieldPlaceholder airline_placeholder = EnrichFieldPlaceholder::None;
+  EnrichFieldPlaceholder route_placeholder = EnrichFieldPlaceholder::None;
+  bool alternate_no_apis_airline = false;
+  bool alternate_no_apis_route = false;
+  uint8_t no_apis_alt_phase = 0;
   FlightDetailStrings text = {};
   FlightDetailLayout layout = {};
 };
@@ -567,7 +648,9 @@ void populateFlightDetailStrings(const services::adsb::Aircraft& ac,
            static_cast<unsigned>(s_sel + 1), static_cast<unsigned>(s_order_count));
 }
 
-void computeFlightDetailLayout(const FlightDetailStrings& s, FlightDetailLayout* layout) {
+void computeFlightDetailLayout(const FlightDetailStrings& s,
+                               EnrichFieldPlaceholder route_placeholder,
+                               bool alternate_no_apis_route, FlightDetailLayout* layout) {
   const int title_h = displayFontHeight(tft, displayFontTitle());
   const int callsign_h = displayFontHeight(tft, displayFontBody());
   const int body_h = displayFontHeight(tft, displayFontBody());
@@ -588,7 +671,9 @@ void computeFlightDetailLayout(const FlightDetailStrings& s, FlightDetailLayout*
 
   const int route_y = y + title_h + kTitleGap + callsign_h + kLineGap + body_h + kSectionGap;
   const int route_lines =
-      routeDisplayLines(s.route_origin, s.route_dest, route_y, body_h);
+      (route_placeholder != EnrichFieldPlaceholder::None || alternate_no_apis_route)
+          ? 1
+          : routeDisplayLines(s.route_origin, s.route_dest, route_y, body_h);
   const int route_block_h = route_lines * (body_h + kLineGap);
 
   const int pre_type_h_adj = title_h + kTitleGap + callsign_h + kLineGap + body_h +
@@ -613,18 +698,36 @@ void computeFlightDetailLayout(const FlightDetailStrings& s, FlightDetailLayout*
 
   int y_alt = y + pre_type_h_adj + type_block_h + kLineGap;
   layout->y_start = y;
+  layout->y_airline = y + title_h + kTitleGap + callsign_h + kLineGap;
+  layout->y_route = layout->y_airline + body_h + kSectionGap;
   layout->y_alt = y_alt;
   layout->y_speed = y_alt + detail_h + kLineGap;
 }
 
-bool snapshotStaticMatches(const FlightDetailStrings& s,
-                           const FlightDetailLayout& layout) {
+bool snapshotStaticMatches(const FlightDetailStrings& s, const FlightDetailLayout& layout,
+                           EnrichFieldPlaceholder airline_placeholder,
+                           EnrichFieldPlaceholder route_placeholder,
+                           bool alternate_no_apis_airline, bool alternate_no_apis_route,
+                           uint8_t no_apis_alt_phase) {
   if (!s_snapshot.valid || s_order_count != s_snapshot.order_count) {
     return false;
   }
   if (layout.y_alt != s_snapshot.layout.y_alt ||
       layout.y_speed != s_snapshot.layout.y_speed) {
     return false;
+  }
+  if (airline_placeholder != s_snapshot.airline_placeholder ||
+      route_placeholder != s_snapshot.route_placeholder) {
+    return false;
+  }
+  if (alternate_no_apis_airline != s_snapshot.alternate_no_apis_airline ||
+      alternate_no_apis_route != s_snapshot.alternate_no_apis_route ||
+      no_apis_alt_phase != s_snapshot.no_apis_alt_phase) {
+    return false;
+  }
+  if (alternate_no_apis_airline || alternate_no_apis_route) {
+    return strcmp(s.callsign, s_snapshot.text.callsign) == 0 &&
+           strcmp(s.type, s_snapshot.text.type) == 0;
   }
   return strcmp(s.callsign, s_snapshot.text.callsign) == 0 &&
          strcmp(s.airline, s_snapshot.text.airline) == 0 &&
@@ -642,12 +745,58 @@ void updateSnapshotSelectionIndex(const FlightDetailStrings& s) {
   s_snapshot.text.index_line[sizeof(s_snapshot.text.index_line) - 1] = '\0';
 }
 
-void saveSnapshot(const FlightDetailStrings& s, const FlightDetailLayout& layout) {
+void saveSnapshot(const FlightDetailStrings& s, const FlightDetailLayout& layout,
+                  EnrichFieldPlaceholder airline_placeholder,
+                  EnrichFieldPlaceholder route_placeholder,
+                  bool alternate_no_apis_airline, bool alternate_no_apis_route,
+                  uint8_t no_apis_alt_phase) {
   s_snapshot.valid = true;
   s_snapshot.sel = s_sel;
   s_snapshot.order_count = s_order_count;
+  s_snapshot.airline_placeholder = airline_placeholder;
+  s_snapshot.route_placeholder = route_placeholder;
+  s_snapshot.alternate_no_apis_airline = alternate_no_apis_airline;
+  s_snapshot.alternate_no_apis_route = alternate_no_apis_route;
+  s_snapshot.no_apis_alt_phase = no_apis_alt_phase;
   s_snapshot.text = s;
   s_snapshot.layout = layout;
+}
+
+void tickNoApisAlternateLabels(unsigned long now_ms) {
+  if (!s_snapshot.valid) {
+    return;
+  }
+  if (!s_snapshot.alternate_no_apis_airline && !s_snapshot.alternate_no_apis_route) {
+    return;
+  }
+
+  const uint8_t phase = noApisAlternatePhase(now_ms);
+  if (phase == s_snapshot.no_apis_alt_phase) {
+    return;
+  }
+
+  const uint16_t bg = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
+  const uint16_t route_fg = tft.color565(100, 220, 255);
+  const UiTextStyle body_style = displayFontBody();
+
+  tft.startWrite();
+  if (s_snapshot.alternate_no_apis_airline) {
+    const char* text = alternateNoApisAirlineText(now_ms);
+    redrawCenterLineAt(s_snapshot.layout.y_airline, text, body_style,
+                       alternateNoApisAirlineColor(now_ms, route_fg), bg);
+    strncpy(s_snapshot.text.airline, text, sizeof(s_snapshot.text.airline) - 1);
+    s_snapshot.text.airline[sizeof(s_snapshot.text.airline) - 1] = '\0';
+  }
+  if (s_snapshot.alternate_no_apis_route) {
+    const char* text = alternateNoApisRouteText(now_ms);
+    redrawCenterLineAt(s_snapshot.layout.y_route, text, body_style,
+                       alternateNoApisRouteColor(now_ms, route_fg), bg);
+    strncpy(s_snapshot.text.route_origin, text, sizeof(s_snapshot.text.route_origin) - 1);
+    s_snapshot.text.route_origin[sizeof(s_snapshot.text.route_origin) - 1] = '\0';
+    s_snapshot.text.route_dest[0] = '\0';
+  }
+  tft.endWrite();
+  s_snapshot.no_apis_alt_phase = phase;
 }
 
 }  // namespace
@@ -763,7 +912,13 @@ void flightDetailDraw() {
   s = {};
   layout = {};
   populateFlightDetailStrings(ac, &s);
-  computeFlightDetailLayout(s, &layout);
+  const EnrichFieldPlaceholder airline_placeholder = enrichAirlinePlaceholder(ac);
+  const EnrichFieldPlaceholder route_placeholder = enrichRoutePlaceholder(ac);
+  const bool alternate_airline = alternateNoApisAirline(ac);
+  const bool alternate_route = alternateNoApisRoute(ac);
+  const unsigned long now_ms = millis();
+  const uint8_t alt_phase = noApisAlternatePhase(now_ms);
+  computeFlightDetailLayout(s, route_placeholder, alternate_route, &layout);
 
   if (config::kSerialTraceDebug) {
     Serial.printf("[detail] draw begin %s layout=%dms\n", s.callsign,
@@ -783,9 +938,23 @@ void flightDetailDraw() {
   y += title_h + kTitleGap;
 
   drawCenterLine(s.callsign, &y, displayFontBody(), fg, bg);
-  drawCenterLine(s.airline, &y, displayFontBody(), label_fg, bg);
+  if (airline_placeholder == EnrichFieldPlaceholder::Fetching) {
+    drawEnrichPlaceholder(kFetchingDetails, &y, displayFontBody(), airline_placeholder, bg);
+  } else if (alternate_airline) {
+    drawCenterLine(alternateNoApisAirlineText(now_ms), &y, displayFontBody(),
+                   alternateNoApisAirlineColor(now_ms, route_fg), bg);
+  } else {
+    drawCenterLine(s.airline, &y, displayFontBody(), label_fg, bg);
+  }
   y += kSectionGap - kLineGap;
-  drawRouteLabels(s.route_origin, s.route_dest, &y, route_fg, bg);
+  if (route_placeholder == EnrichFieldPlaceholder::Fetching) {
+    drawEnrichPlaceholder(kFetchingDetails, &y, displayFontBody(), route_placeholder, bg);
+  } else if (alternate_route) {
+    drawCenterLine(alternateNoApisRouteText(now_ms), &y, displayFontBody(),
+                   alternateNoApisRouteColor(now_ms, route_fg), bg);
+  } else {
+    drawRouteLabels(s.route_origin, s.route_dest, &y, route_fg, bg);
+  }
   drawCenterWrapped(s.type, &y, displayFontDetail(), label_fg, bg, kTypeMaxLines);
   drawCenterLine(s.alt, &y, displayFontDetail(), fg, bg);
   drawCenterLine(s.speed, &y, displayFontDetail(), fg, bg);
@@ -797,7 +966,24 @@ void flightDetailDraw() {
 
   tft.setTextDatum(TextDatum::TopLeft);
   tft.endWrite();
-  saveSnapshot(s, layout);
+  if (airline_placeholder == EnrichFieldPlaceholder::Fetching) {
+    strncpy(s.airline, kFetchingDetails, sizeof(s.airline) - 1);
+    s.airline[sizeof(s.airline) - 1] = '\0';
+  } else if (alternate_airline) {
+    strncpy(s.airline, alternateNoApisAirlineText(now_ms), sizeof(s.airline) - 1);
+    s.airline[sizeof(s.airline) - 1] = '\0';
+  }
+  if (route_placeholder == EnrichFieldPlaceholder::Fetching) {
+    strncpy(s.route_origin, kFetchingDetails, sizeof(s.route_origin) - 1);
+    s.route_origin[sizeof(s.route_origin) - 1] = '\0';
+    s.route_dest[0] = '\0';
+  } else if (alternate_route) {
+    strncpy(s.route_origin, alternateNoApisRouteText(now_ms), sizeof(s.route_origin) - 1);
+    s.route_origin[sizeof(s.route_origin) - 1] = '\0';
+    s.route_dest[0] = '\0';
+  }
+  saveSnapshot(s, layout, airline_placeholder, route_placeholder, alternate_airline,
+                 alternate_route, alt_phase);
   if (config::kSerialTraceDebug) {
     Serial.printf("[detail] draw done %s (%lums)\n", s.callsign,
                   millis() - draw_start_ms);
@@ -818,9 +1004,15 @@ void flightDetailRefresh() {
   s = {};
   layout = {};
   populateFlightDetailStrings(ac, &s);
-  computeFlightDetailLayout(s, &layout);
+  const EnrichFieldPlaceholder airline_placeholder = enrichAirlinePlaceholder(ac);
+  const EnrichFieldPlaceholder route_placeholder = enrichRoutePlaceholder(ac);
+  const bool alternate_airline = alternateNoApisAirline(ac);
+  const bool alternate_route = alternateNoApisRoute(ac);
+  const uint8_t alt_phase = noApisAlternatePhase(millis());
+  computeFlightDetailLayout(s, route_placeholder, alternate_route, &layout);
 
-  if (!snapshotStaticMatches(s, layout)) {
+  if (!snapshotStaticMatches(s, layout, airline_placeholder, route_placeholder,
+                             alternate_airline, alternate_route, alt_phase)) {
     if (config::kSerialTraceDebug) {
       Serial.printf("[detail] refresh static changed %s -> full draw\n", s.callsign);
     }
@@ -856,5 +1048,7 @@ void flightDetailRefresh() {
   }
   tft.endWrite();
 }
+
+void flightDetailTick(unsigned long now_ms) { tickNoApisAlternateLabels(now_ms); }
 
 }  // namespace ui

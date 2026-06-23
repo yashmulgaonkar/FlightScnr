@@ -52,6 +52,12 @@ bool detailEnrichmentConsume();
 /** True when route detail worker is running or queued. */
 bool detailWorkerBusy();
 
+/** True when at least one live route API can be used (AirLabs / FA / FR24). */
+bool liveRouteApiAvailable();
+
+/** True when live route enrichment is pending or running for this callsign. */
+bool detailEnrichmentInFlight(const char* callsign);
+
 const char* sourceTag(ApiSource s);
 
 }  // namespace services::route

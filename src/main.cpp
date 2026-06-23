@@ -195,20 +195,35 @@ void requestFlightDetailRouteEnrich(const bool immediate) {
 }
 
 void tickFlightDetailRouteEnrich() {
+  static bool s_detail_enrich_in_flight = false;
   if (g_screen != AppScreen::FlightDetail) {
+    s_detail_enrich_in_flight = false;
     return;
   }
   const unsigned long now = millis();
   services::route::tickDetailEnrichDebounce(now);
   services::route::tickDetailWorkerWatchdog(now);
+
   if (services::route::detailEnrichmentReady() && services::route::detailEnrichmentConsume()) {
+    s_detail_enrich_in_flight = false;
     if (config::kSerialTraceDebug) {
       const char* cs = ui::flightDetailSelectedCallsign();
       Serial.printf("[detail] enrich ready -> redraw %s\n",
                     cs != nullptr ? cs : "(none)");
     }
     showFlightDetail();
+    return;
   }
+
+  const char* callsign = ui::flightDetailSelectedCallsign();
+  const bool in_flight =
+      callsign != nullptr && services::route::detailEnrichmentInFlight(callsign);
+  if (in_flight != s_detail_enrich_in_flight) {
+    s_detail_enrich_in_flight = in_flight;
+    ui::flightDetailDraw();
+  }
+
+  ui::flightDetailTick(now);
 }
 
 void showSettings() {

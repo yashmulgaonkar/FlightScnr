@@ -14,6 +14,9 @@ void flightDetailDraw();
 /** Update alt/speed in place when ADS-B data changes; full redraw if layout changes. */
 void flightDetailRefresh();
 
+/** Redraw when no-API alternate labels toggle (call from main loop on flight detail). */
+void flightDetailTick(unsigned long now_ms);
+
 /** Rebuild list sorted by distance; select closest aircraft. */
 void flightDetailSelectClosest();
 
