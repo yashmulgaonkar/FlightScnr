@@ -52,6 +52,9 @@ bool detailEnrichmentConsume();
 /** True when route detail worker is running or queued. */
 bool detailWorkerBusy();
 
+/** Current flight-detail selection tracked by the route worker (may be empty). */
+const char* detailSelectionCallsign();
+
 /** True when at least one live route API can be used (AirLabs / FA / FR24). */
 bool liveRouteApiAvailable();
 

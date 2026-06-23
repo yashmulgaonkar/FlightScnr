@@ -34,11 +34,14 @@ constexpr OverrideEntry kOverrides[] = {
     {"UAL", "United Airlines"},
     {"DAL", "Delta Air Lines"},
     {"SWA", "Southwest Airlines"},
+    {"JBU", "JetBlue Airways"},
     {"BAW", "British Airways"},
     {"VIR", "Virgin Atlantic"},
     {"VLG", "Vueling"},
+    {"VOI", "Volaris"},
     {"FLJ", "Flexjet"},
     {"FDX", "FedEx"},
+    {"UPS", "UPS"},
     {"ETD", "Etihad Airways"},
     {"LOG", "Loganair"},
     {"DLH", "Lufthansa"},
@@ -69,7 +72,7 @@ constexpr IataIcaoEntry kIataToIcao[] = {
     {"CX", "CPA"}, {"NH", "ANA"}, {"JL", "JAL"}, {"KE", "KAL"}, {"OZ", "AAR"},
     {"MU", "CES"}, {"CZ", "CSN"}, {"CA", "CCA"}, {"AI", "AIC"}, {"QF", "QFA"},
     {"NZ", "ANZ"}, {"VA", "VOZ"}, {"AM", "AMX"}, {"LA", "LAN"}, {"AV", "AVA"},
-    {"FX", "FDX"}, {"LM", "LOG"},
+    {"FX", "FDX"}, {"5X", "UPS"}, {"LM", "LOG"},
 };
 
 const char* iataFromIcao(const char* icao) {

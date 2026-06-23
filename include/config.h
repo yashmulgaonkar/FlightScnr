@@ -117,7 +117,7 @@ constexpr uint32_t kMinContiguousHeapForAdsbTls = 16384;
 /** Defer route API HTTPS if internal free heap is below this. */
 constexpr uint32_t kMinFreeHeapForRouteHttps = 24000;
 /** Route API TLS + JSON (detail screen shares heap with ADS-B TLS). */
-constexpr uint32_t kMinContiguousHeapForRouteTls = 16384;
+constexpr uint32_t kMinContiguousHeapForRouteTls = 20480;
 
 /** Route detail API connect/read timeout (ms). Keep short for fast scroll cancel. */
 constexpr uint32_t kDetailApiTimeoutMs = 4000;

@@ -299,6 +299,13 @@ void tickFlightDetailRouteEnrich() {
   services::route::tickDetailEnrichDebounce(now);
   services::route::tickDetailWorkerWatchdog(now);
 
+  const char* ui_callsign = ui::flightDetailSelectedCallsign();
+  const char* route_callsign = services::route::detailSelectionCallsign();
+  if (ui_callsign != nullptr && route_callsign != nullptr &&
+      strcmp(ui_callsign, route_callsign) != 0) {
+    services::route::onFlightDetailSelected(ui_callsign, false);
+  }
+
   if (services::route::detailEnrichmentReady() && services::route::detailEnrichmentConsume()) {
     s_detail_enrich_in_flight = false;
     if (config::kSerialTraceDebug) {
@@ -786,7 +793,7 @@ void tickAdsbFetch() {
     }
     return;
   }
-  if (on_detail && deferAdsbForRouteWorker()) {
+  if (on_detail && (deferAdsbForRouteWorker() || !services::https::heapReadyForRouteApi())) {
     if (config::kSerialTraceDebug) {
       static unsigned long s_last_detail_defer_log_ms = 0;
       if (now - s_last_detail_defer_log_ms >= 3000UL) {
