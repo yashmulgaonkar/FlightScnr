@@ -109,6 +109,16 @@ constexpr unsigned long kTlsRecoverCooldownMs = 90000UL;
 /** ADS-B poll interval while TLS failures are stacking (ms). */
 constexpr unsigned long kAdsbFetchBackoffMs = 15000UL;
 
+/** Defer ADS-B HTTPS if internal free heap is below this. */
+constexpr uint32_t kMinFreeHeapForAdsbHttps = 28000;
+/** ADS-B TLS + JSON — 16KB contiguous (max_blk often ~18KB after detail/web). */
+constexpr uint32_t kMinContiguousHeapForAdsbTls = 16384;
+
+/** Defer route API HTTPS if internal free heap is below this. */
+constexpr uint32_t kMinFreeHeapForRouteHttps = 24000;
+/** Route API TLS + JSON (detail screen shares heap with ADS-B TLS). */
+constexpr uint32_t kMinContiguousHeapForRouteTls = 16384;
+
 /** Route detail API connect/read timeout (ms). Keep short for fast scroll cancel. */
 constexpr uint32_t kDetailApiTimeoutMs = 4000;
 /** Restart route worker if stuck on a stale callsign (ms). */

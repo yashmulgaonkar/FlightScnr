@@ -1,6 +1,7 @@
 #include "services/airline_lookup.h"
 
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 
 namespace services::airline {
@@ -34,6 +35,12 @@ constexpr OverrideEntry kOverrides[] = {
     {"DAL", "Delta Air Lines"},
     {"SWA", "Southwest Airlines"},
     {"BAW", "British Airways"},
+    {"VIR", "Virgin Atlantic"},
+    {"VLG", "Vueling"},
+    {"FLJ", "Flexjet"},
+    {"FDX", "FedEx"},
+    {"ETD", "Etihad Airways"},
+    {"LOG", "Loganair"},
     {"DLH", "Lufthansa"},
     {"KLM", "KLM"},
     {"AFR", "Air France"},
@@ -44,6 +51,50 @@ constexpr OverrideEntry kOverrides[] = {
     {"EZS", "easyJet"},
     {"VOZ", "Virgin Australia"},
 };
+
+struct IataIcaoEntry {
+  const char* iata;
+  const char* icao;
+};
+
+/** Common IATA flight-prefix → ICAO operator (for logo lookup). */
+constexpr IataIcaoEntry kIataToIcao[] = {
+    {"AA", "AAL"}, {"AS", "ASA"}, {"B6", "JBU"}, {"DL", "DAL"}, {"F9", "FFT"},
+    {"HA", "HAL"}, {"NK", "NKS"}, {"UA", "UAL"}, {"WN", "SWA"}, {"WS", "WJA"},
+    {"AC", "ACA"}, {"PD", "POE"}, {"BA", "BAW"}, {"AF", "AFR"}, {"LH", "DLH"},
+    {"KL", "KLM"}, {"LX", "SWR"}, {"OS", "AUA"}, {"SK", "SAS"}, {"AY", "FIN"},
+    {"IB", "IBE"}, {"AZ", "ITY"}, {"TP", "TAP"}, {"EI", "EIN"}, {"VY", "VLG"},
+    {"U2", "EZS"}, {"FR", "RYR"}, {"DY", "NAX"}, {"WF", "WIF"}, {"VS", "VIR"},
+    {"EK", "UAE"}, {"QR", "QTR"}, {"EY", "ETD"}, {"TK", "THY"}, {"SQ", "SIA"},
+    {"CX", "CPA"}, {"NH", "ANA"}, {"JL", "JAL"}, {"KE", "KAL"}, {"OZ", "AAR"},
+    {"MU", "CES"}, {"CZ", "CSN"}, {"CA", "CCA"}, {"AI", "AIC"}, {"QF", "QFA"},
+    {"NZ", "ANZ"}, {"VA", "VOZ"}, {"AM", "AMX"}, {"LA", "LAN"}, {"AV", "AVA"},
+    {"FX", "FDX"}, {"LM", "LOG"},
+};
+
+const char* iataFromIcao(const char* icao) {
+  if (icao == nullptr || strlen(icao) != 3) {
+    return nullptr;
+  }
+  for (const IataIcaoEntry& e : kIataToIcao) {
+    if (strcmp(e.icao, icao) == 0) {
+      return e.iata;
+    }
+  }
+  return nullptr;
+}
+
+const char* icaoFromIata(const char* iata) {
+  if (iata == nullptr || strlen(iata) != 2) {
+    return nullptr;
+  }
+  for (const IataIcaoEntry& e : kIataToIcao) {
+    if (strcmp(e.iata, iata) == 0) {
+      return e.icao;
+    }
+  }
+  return nullptr;
+}
 
 const char* overrideName(const char* code) {
   if (code == nullptr) {
@@ -179,8 +230,102 @@ void resolveFromCallsign(const char* callsign, bool has_flight_field, char* out,
   if (isIataRadioCallsign(normalized)) {
     memcpy(prefix, normalized, 2);
     prefix[2] = '\0';
-    lookupByCode(prefix, out, out_len);
+    if (lookupByCode(prefix, out, out_len)) {
+      return;
+    }
+    const char* icao = icaoFromIata(prefix);
+    if (icao != nullptr) {
+      lookupByCode(icao, out, out_len);
+    }
   }
+}
+
+bool resolveIcaoFromCallsign(const char* callsign, bool has_flight_field, char* out,
+                             size_t out_len) {
+  if (out_len > 0) {
+    out[0] = '\0';
+  }
+  if (!has_flight_field || callsign == nullptr || callsign[0] == '\0') {
+    return false;
+  }
+
+  char normalized[16];
+  normalizeCallsign(callsign, normalized, sizeof(normalized));
+  if (normalized[0] == '\0' || isNNumber(normalized)) {
+    return false;
+  }
+
+  if (isIcaoRadioCallsign(normalized)) {
+    if (out_len < 4) {
+      return false;
+    }
+    memcpy(out, normalized, 3);
+    out[3] = '\0';
+    return true;
+  }
+
+  if (isIataRadioCallsign(normalized)) {
+    char iata[3];
+    memcpy(iata, normalized, 2);
+    iata[2] = '\0';
+    const char* icao = icaoFromIata(iata);
+    if (icao != nullptr && out_len >= 4) {
+      strncpy(out, icao, out_len - 1);
+      out[out_len - 1] = '\0';
+      return true;
+    }
+  }
+  return false;
+}
+
+bool buildFlightIataFromCallsign(const char* callsign, char* out, size_t out_len) {
+  if (out == nullptr || out_len < 5 || callsign == nullptr) {
+    return false;
+  }
+  out[0] = '\0';
+  char normalized[16];
+  normalizeCallsign(callsign, normalized, sizeof(normalized));
+  if (strlen(normalized) < 4) {
+    return false;
+  }
+  char icao[4] = {normalized[0], normalized[1], normalized[2], '\0'};
+  const char* iata = iataFromIcao(icao);
+  if (iata == nullptr) {
+    return false;
+  }
+  const int n = snprintf(out, out_len, "%s%s", iata, normalized + 3);
+  return n > 0 && static_cast<size_t>(n) < out_len;
+}
+
+bool buildCallsignApiVariant(const char* callsign, char* out, size_t out_len) {
+  if (out == nullptr || out_len < 5 || callsign == nullptr) {
+    return false;
+  }
+  out[0] = '\0';
+  char normalized[16];
+  normalizeCallsign(callsign, normalized, sizeof(normalized));
+  if (!isIcaoRadioCallsign(normalized)) {
+    return false;
+  }
+  const char* rest = normalized + 3;
+  size_t digit_len = 0;
+  while (rest[digit_len] != '\0' && isdigit(static_cast<unsigned char>(rest[digit_len]))) {
+    ++digit_len;
+  }
+  if (digit_len == 0) {
+    return false;
+  }
+  if (rest[digit_len] == '\0') {
+    return false;
+  }
+  if (!isalpha(static_cast<unsigned char>(rest[digit_len]))) {
+    return false;
+  }
+  const int n = snprintf(out, out_len, "%.3s%.*s", normalized, static_cast<int>(digit_len), rest);
+  if (n <= 0 || static_cast<size_t>(n) >= out_len) {
+    return false;
+  }
+  return strcmp(out, normalized) != 0;
 }
 
 }  // namespace services::airline

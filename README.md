@@ -30,7 +30,7 @@ Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licen
 - **Distance units:** kilometers, statute miles, or nautical miles on ring labels, aircraft tags, and flight detail (speed and altitude)
 - **Radar theme color:** Red, Yellow, Orange, Green, or White for crosshairs, compass rose, scale labels, and sweep line
 - **Beyond-ring pips:** aircraft outside the active range still appear on the rim
-- **Flight detail:** tap a blip or short press the knob for callsign, airline, route, ICAO type, altitude, and speed. Turn the knob to cycle through visible aircraft.
+- **Flight detail:** tap a blip or short press the knob for callsign, airline logo, airline name, route, ICAO type, altitude, and speed. Turn the knob to cycle through visible aircraft.
 - **Settings:** swipe left from radar for page 1 (network / location), page 2 (brightness, units, compass rose), and page 3 (radar theme color)
 - **Clock:** swipe down from radar for large local time (NTP). Swipe left for UTC offset and 12h/24h format.
 - **Web settings:** on your local network at [http://flightscnr.local/](http://flightscnr.local/) (or device IP) for radar center, filters, route API keys, monthly limits, and route-cache download

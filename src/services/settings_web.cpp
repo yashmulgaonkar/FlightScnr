@@ -6,8 +6,6 @@
 #include <cmath>
 #include <cstdio>
 
-#include <esp_system.h>
-
 #ifdef WM_MDNS
 #include <ESPmDNS.h>
 #endif
@@ -54,12 +52,12 @@ border:none;border-radius:8px;background:#1a9c3c;color:#fff;cursor:pointer;}
 .gh a{color:#6cf;}
 </style></head><body>
 <h1>FlightScnr</h1>
-<p>Changes are saved to flash. The device reboots after you tap <strong>Save &amp; reboot</strong>.</p>
+<p>Changes are saved to flash. Radar refreshes when you tap <strong>Save</strong>.</p>
 <form method="POST" action="/save">
 )HTML";
 
 const char kPageTail[] = R"HTML(
-<button type="submit">Save &amp; reboot</button>
+<button type="submit">Save</button>
 </form>
 <p class="note">Wi‑Fi credentials are configured in the setup portal (hold knob 3&nbsp;s to reset).</p>
 </body></html>
@@ -80,15 +78,15 @@ void appendGithubLink(char* page, size_t len, size_t* used) {
   }
 }
 
-void sendRebootPage() {
+void sendSavedPage() {
   char page[640];
   snprintf(page, sizeof(page),
            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-           "<title>Rebooting</title></head>"
+           "<title>Saved</title></head>"
            "<body style=\"font-family:system-ui,sans-serif;text-align:center;padding:2rem;"
            "background:#000;color:#e8f0ff\">"
-           "<h1>Saved</h1><p>Rebooting&hellip;</p>"
+           "<h1>Saved</h1><p>Settings applied. <a href=\"/\" style=\"color:#6cf\">Back</a></p>"
            "<p style=\"margin-top:1.5rem;font-size:.9rem\">"
            "<a href=\"%s\" style=\"color:#6cf\" target=\"_blank\" rel=\"noopener\">"
            "github.com/yashmulgaonkar/FlightScnr</a></p>"
@@ -473,10 +471,9 @@ void handleSave() {
     return;
   }
 
-  sendRebootPage();
+  sendSavedPage();
   s_server->client().flush();
-  delay(400);
-  esp_restart();
+  settingsNotifySaved();
 }
 
 void handleRouteCacheDownload() {

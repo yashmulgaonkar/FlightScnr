@@ -14,4 +14,17 @@ bool lookupByCode(const char* code, char* out, size_t out_len);
 void resolveFromCallsign(const char* callsign, bool has_flight_field, char* out,
                          size_t out_len);
 
+/** Extract 3-letter ICAO operator code from callsign when possible. */
+bool resolveIcaoFromCallsign(const char* callsign, bool has_flight_field, char* out,
+                             size_t out_len);
+
+/** Build IATA flight code (e.g. BAW5WB -> BA5WB) for AirLabs flight_iata queries. */
+bool buildFlightIataFromCallsign(const char* callsign, char* out, size_t out_len);
+
+/**
+ * Strip operational suffix letters after the flight number (BAW71LK -> BAW71).
+ * Returns false when no shorter variant applies.
+ */
+bool buildCallsignApiVariant(const char* callsign, char* out, size_t out_len);
+
 }  // namespace services::airline

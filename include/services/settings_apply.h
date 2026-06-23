@@ -20,3 +20,7 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
                            const char* ui_beep_checkbox, const char* beep_tone_str,
                            const char* bright_pct_str, const char* sweep_line_checkbox,
                            const char* detail_timeout_str);
+
+using SettingsSavedCallback = void (*)();
+void settingsSetSavedCallback(SettingsSavedCallback cb);
+void settingsNotifySaved();

@@ -13,14 +13,18 @@
 #include "services/route_cache_store.h"
 #include "hardware/buzzer.h"
 #include "hardware/display.h"
+#include "hardware/plane_gfx.h"
+#include "hardware/display_brightness.h"
 #include "hardware/input.h"
 #include "hardware/panel.h"
 #include "services/adsb_client.h"
 #include "services/https_lock.h"
+#include "services/https_heap.h"
 #include "services/clock_time.h"
 #include "services/map_center.h"
 #include "services/route_lookup.h"
 #include "services/settings_web.h"
+#include "services/settings_apply.h"
 #include "services/wifi_setup.h"
 #include "ui/clock_screen.h"
 #include "ui/clock_settings_screen.h"
@@ -57,6 +61,8 @@ unsigned long g_boot_details_until_ms = 0;
 uint32_t g_last_clock_minute_stamp = UINT32_MAX;
 unsigned long g_last_heap_log_ms = 0;
 unsigned long g_loop_max_ms = 0;
+bool g_radar_full_draw_pending = false;
+bool g_flight_detail_draw_pending = false;
 
 const char* resetReasonName() {
   switch (esp_reset_reason()) {
@@ -157,27 +163,116 @@ void tickDiagLog() {
 
 bool bootDetailsActive() { return g_boot_details_until_ms != 0; }
 
+bool adsbFetchScreenActive() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+  if (g_screen == AppScreen::Radar && g_radar_visible) {
+    return true;
+  }
+  if (g_screen == AppScreen::FlightDetail) {
+    return true;
+  }
+  return bootDetailsActive();
+}
+
+bool adsbDnsReady(unsigned long now) {
+  static unsigned long s_next_probe_ms = 0;
+  static bool s_resolved = false;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    s_resolved = false;
+    s_next_probe_ms = 0;
+    return false;
+  }
+  if (s_resolved) {
+    return true;
+  }
+  if (s_next_probe_ms != 0 && now < s_next_probe_ms) {
+    return false;
+  }
+
+  IPAddress ip;
+  s_resolved = WiFi.hostByName("opendata.adsb.fi", ip);
+  s_next_probe_ms = now + (s_resolved ? 60000UL : 1500UL);
+  if (!s_resolved && config::kSerialTraceDebug) {
+    Serial.println("[fetch] defer: DNS not ready for opendata.adsb.fi");
+  }
+  return s_resolved;
+}
+
 void noteSecondaryActivity() {
   if (g_screen != AppScreen::Radar) {
     g_secondary_activity_ms = millis();
   }
 }
 
+void releaseHttpsPressureMemory() {
+  ui::flightDetailReleaseSprite();
+  services::route::cancelDetailEnrichment();
+}
+
+bool tlsBlocksPanel() {
+  return services::adsb::fetchInProgress() || services::https::busy();
+}
+
+bool deferAdsbForRouteWorker() {
+  return services::route::detailWorkerBusy();
+}
+
+void completeDeferredRadarDraw() {
+  if (!g_radar_full_draw_pending || g_screen != AppScreen::Radar || !g_radar_visible) {
+    return;
+  }
+  if (tlsBlocksPanel()) {
+    return;
+  }
+  PanelSession panel(tft);
+  ui::radarDisplayDraw();
+  g_radar_full_draw_pending = false;
+  if (config::kSerialTraceDebug) {
+    Serial.println("[radar] deferred full draw complete");
+  }
+}
+
 void showRadar() {
   if (WiFi.status() != WL_CONNECTED) {
     g_radar_visible = false;
+    g_radar_full_draw_pending = false;
     return;
   }
-  ui::radarDisplayDraw();
+  ui::flightDetailReleaseSprite();
   g_radar_visible = true;
   g_last_radar_frame_ms = millis();
-  g_last_adsb_fetch_ms = millis();
+  g_last_adsb_fetch_ms = 0;
+
+  if (tlsBlocksPanel()) {
+    g_radar_full_draw_pending = true;
+    if (config::kSerialTraceDebug) {
+      Serial.println("[radar] defer full draw (tls busy)");
+    }
+    return;
+  }
+
+  PanelSession panel(tft);
+  ui::radarDisplayDraw();
+  g_radar_full_draw_pending = false;
 }
 
 void showFlightDetail() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
+  if (tlsBlocksPanel()) {
+    g_flight_detail_draw_pending = true;
+    if (config::kSerialTraceDebug) {
+      Serial.println("[detail] defer draw (tls busy)");
+    }
+    g_radar_visible = false;
+    return;
+  }
+  g_flight_detail_draw_pending = false;
+  PanelSession panel(tft);
   ui::flightDetailDraw();
   g_radar_visible = false;
 }
@@ -220,35 +315,75 @@ void tickFlightDetailRouteEnrich() {
       callsign != nullptr && services::route::detailEnrichmentInFlight(callsign);
   if (in_flight != s_detail_enrich_in_flight) {
     s_detail_enrich_in_flight = in_flight;
-    ui::flightDetailDraw();
+    // Opening flight detail already drew the screen; completion redraws via consume().
   }
 
   ui::flightDetailTick(now);
 }
 
 void showSettings() {
+  ui::flightDetailReleaseSprite();
   ui::infoScreenDraw();
   g_radar_visible = false;
 }
 
 void showClock() {
+  ui::flightDetailReleaseSprite();
   ui::clockScreenDraw();
   g_radar_visible = false;
   g_last_clock_minute_stamp = services::clock::localMinuteStamp();
 }
 
 void showClockSettings() {
+  ui::flightDetailReleaseSprite();
   ui::clockSettingsScreenDraw();
   g_radar_visible = false;
 }
 
 void showDetails(bool boot_splash = false) {
+  ui::flightDetailReleaseSprite();
   ui::detailsScreenDraw(boot_splash);
   g_radar_visible = false;
 }
 
+void applySettingsLive() {
+  services::route::cancelDetailEnrichment();
+  ui::flightDetailReleaseSprite();
+  hardware::displayApplyBrightness();
+  g_last_adsb_fetch_ms = 0;
+
+  switch (g_screen) {
+    case AppScreen::Radar:
+      if (WiFi.status() == WL_CONNECTED) {
+        showRadar();
+      }
+      break;
+    case AppScreen::FlightDetail:
+      if (WiFi.status() == WL_CONNECTED) {
+        showFlightDetail();
+        requestFlightDetailRouteEnrich(true);
+      }
+      break;
+    case AppScreen::Settings:
+      showSettings();
+      break;
+    case AppScreen::Details:
+      showDetails();
+      break;
+    case AppScreen::Clock:
+      showClock();
+      break;
+    case AppScreen::ClockSettings:
+      showClockSettings();
+      break;
+  }
+  Serial.println("[settings] applied live");
+}
+
 void returnToRadar(bool from_idle_timeout = false) {
   if (g_screen == AppScreen::FlightDetail) {
+    releaseHttpsPressureMemory();
+  } else {
     services::route::cancelDetailEnrichment();
   }
   if (from_idle_timeout) {
@@ -541,6 +676,9 @@ void handleInput() {
 }
 
 void tickRadarAnimation() {
+  if (g_radar_full_draw_pending) {
+    return;
+  }
   if (g_screen != AppScreen::Radar || !g_radar_visible) {
     return;
   }
@@ -550,6 +688,7 @@ void tickRadarAnimation() {
     return;
   }
   g_last_radar_frame_ms = now;
+  PanelSession panel(tft);
   ui::radarDisplayRefreshSweep();
 }
 
@@ -560,6 +699,8 @@ bool canRecycleWifiForTls(unsigned long now) {
 }
 
 void recycleWifiForTls(unsigned long now, const char* reason) {
+  releaseHttpsPressureMemory();
+  g_last_adsb_fetch_ms = 0;
   g_last_adsb_ssl_recover_ms = now;
   g_last_tls_proactive_refresh_ms = now;
   g_last_adsb_fetch_ms = now;
@@ -598,7 +739,8 @@ void tickAdsbFetch() {
 
   const bool on_radar = g_screen == AppScreen::Radar && g_radar_visible;
   const bool on_detail = g_screen == AppScreen::FlightDetail;
-  if (!on_radar && !on_detail) {
+  const bool prefetch = bootDetailsActive();
+  if (!adsbFetchScreenActive()) {
     return;
   }
 
@@ -607,11 +749,23 @@ void tickAdsbFetch() {
     // do not use route fields; skipping enrich avoids LittleFS work on the loop).
     const bool enrich_routes = g_screen == AppScreen::FlightDetail;
     services::adsb::fetchProcessReady(enrich_routes);
-    if (g_screen == AppScreen::Radar && g_radar_visible) {
+    if (g_radar_full_draw_pending && g_screen == AppScreen::Radar && g_radar_visible) {
+      completeDeferredRadarDraw();
+    } else if (on_radar) {
+      PanelSession panel(tft);
       ui::radarDisplayRefreshAircraft();
-    } else if (g_screen == AppScreen::FlightDetail) {
-      ui::flightDetailRefresh();
+    } else if (on_detail) {
+      if (!tlsBlocksPanel()) {
+        PanelSession panel(tft);
+        ui::flightDetailRefresh();
+      }
     }
+  }
+
+  completeDeferredRadarDraw();
+
+  if (g_flight_detail_draw_pending && on_detail && !tlsBlocksPanel()) {
+    showFlightDetail();
   }
 
   tryTlsWifiRefresh(now);
@@ -632,7 +786,7 @@ void tickAdsbFetch() {
     }
     return;
   }
-  if (on_detail && services::route::detailWorkerBusy()) {
+  if (on_detail && deferAdsbForRouteWorker()) {
     if (config::kSerialTraceDebug) {
       static unsigned long s_last_detail_defer_log_ms = 0;
       if (now - s_last_detail_defer_log_ms >= 3000UL) {
@@ -642,9 +796,33 @@ void tickAdsbFetch() {
     }
     return;
   }
-
-  if (!on_radar && !on_detail) {
+  if (!adsbDnsReady(now)) {
     return;
+  }
+  if (!services::https::heapReadyForAdsb()) {
+    if (on_detail) {
+      ui::flightDetailReleaseSprite();
+    }
+    static unsigned long s_last_heap_recover_ms = 0;
+    if ((on_radar || prefetch) && now - s_last_heap_recover_ms >= 10000UL) {
+      s_last_heap_recover_ms = now;
+      releaseHttpsPressureMemory();
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[fetch] heap recover free=%u max_blk=%u\n", ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+      }
+    }
+    if (!services::https::heapReadyForAdsb()) {
+      if (config::kSerialTraceDebug) {
+        static unsigned long s_last_heap_defer_log_ms = 0;
+        if (now - s_last_heap_defer_log_ms >= 3000UL) {
+          Serial.printf("[fetch] defer: heap free=%u max_blk=%u\n", ESP.getFreeHeap(),
+                        ESP.getMaxAllocHeap());
+          s_last_heap_defer_log_ms = now;
+        }
+      }
+      return;
+    }
   }
 
   const float fetch_km = ui::radar::adsbQueryRadiusKm();
@@ -652,7 +830,8 @@ void tickAdsbFetch() {
                                    services::map_center::longitude(), fetch_km)) {
     g_last_adsb_fetch_ms = now;
     if (config::kSerialTraceDebug) {
-      Serial.printf("[fetch] queued (screen=%s)\n", on_detail ? "detail" : "radar");
+      const char* where = prefetch ? "prefetch" : (on_detail ? "detail" : "radar");
+      Serial.printf("[fetch] queued (screen=%s)\n", where);
     }
   }
 }
@@ -682,6 +861,8 @@ void setup() {
     services::clock::startNtp();
     services::route::init();
     services::adsb::fetchInit();
+    settingsSetSavedCallback(applySettingsLive);
+    g_last_adsb_fetch_ms = 0;
     g_last_tls_proactive_refresh_ms = millis();
     g_screen = AppScreen::Details;
     g_boot_details_until_ms = millis() + config::kBootDetailsDurationMs;

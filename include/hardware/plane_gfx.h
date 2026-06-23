@@ -78,6 +78,19 @@ class PlaneGfx {
                 int16_t* out_y) const;
 };
 
+/** RAII hardware panel SPI session for one composited frame. */
+class PanelSession {
+ public:
+  explicit PanelSession(PlaneGfx& gfx) : gfx_(&gfx) { gfx_->startWrite(); }
+  ~PanelSession() { gfx_->endWrite(); }
+
+  PanelSession(const PanelSession&) = delete;
+  PanelSession& operator=(const PanelSession&) = delete;
+
+ private:
+  PlaneGfx* gfx_;
+};
+
 /** Off-screen buffer for static radar grid (uses PSRAM when available). */
 class PlaneGfxSprite {
  public:

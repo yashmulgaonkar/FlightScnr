@@ -1241,14 +1241,19 @@ void radarDisplayRefreshAircraft() {
 
   hardware::gfxLogf("[radar] adsb dirty %dx%d @ (%d,%d)", dirty.w, dirty.h, dirty.x, dirty.y);
 
-  if (!s_bg_ready || !s_content_ready) {
+  if (!s_bg_ready) {
+    rebuildBackgroundSprite();
+  }
+  if (!s_bg_ready || !ensureContentSprite()) {
     s_content_panel_sync = ContentPanelSync::BlitStatic;
     hardware::gfxLog("[radar] adsb pending blitStatic");
     return;
   }
 
   patchContentLayer(dirty);
-  blitRegionToPanel(dirty, s_content.buffer(), s_content.width());
+  s_content.pushSprite(0, 0);
+  tft.setTextDatum(TextDatum::TopLeft);
+  s_sweep_track_valid = false;
   savePrevAircraftMarkers();
 }
 

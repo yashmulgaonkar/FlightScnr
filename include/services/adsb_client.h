@@ -17,6 +17,7 @@ struct Aircraft {
   char callsign[9];
   /** Airline + route ICAO codes (from adsb.fi feed and/or route API waterfall). */
   char airline[28];
+  char airline_icao[4];  /** 3-letter ICAO operator code for logo lookup. */
   char route_origin[5];  /** Origin ICAO (e.g. KSFO). */
   char route_dest[5];    /** Destination ICAO (e.g. KBOS). */
   char type[5];
@@ -77,6 +78,7 @@ void saveAltitudeFloorFromForm(const char* value);
 
 /** Merge route fields into the live aircraft list entry for callsign. */
 void applyRouteFieldsByCallsign(const char* callsign, const char* airline,
-                                const char* origin, const char* dest);
+                                const char* airline_icao, const char* origin,
+                                const char* dest);
 
 }  // namespace services::adsb

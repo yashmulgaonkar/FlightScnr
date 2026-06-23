@@ -17,6 +17,7 @@
 #include <ctime>
 
 #include "config.h"
+#include "services/https_heap.h"
 #include "services/airline_lookup.h"
 #include "services/airport_lookup.h"
 #include "services/api_keys.h"
@@ -28,6 +29,7 @@ namespace services::route {
 namespace {
 
 constexpr char kAirLabsBase[] = "https://airlabs.co/api/v9/flight";
+constexpr char kAirLabsRoutesBase[] = "https://airlabs.co/api/v9/routes";
 constexpr char kFlightAwareBase[] = "https://aeroapi.flightaware.com/aeroapi/flights/";
 constexpr char kFr24Base[] =
     "https://fr24api.flightradar24.com/api/flight-summary/light";
@@ -36,6 +38,7 @@ constexpr size_t kCacheSize = 64;
 
 struct RouteInfo {
   char airline[28];
+  char airline_icao[4];
   char origin[5];
   char dest[5];
 };
@@ -179,6 +182,7 @@ void routeClear(RouteInfo* r) {
     return;
   }
   r->airline[0] = '\0';
+  r->airline_icao[0] = '\0';
   r->origin[0] = '\0';
   r->dest[0] = '\0';
 }
@@ -211,6 +215,10 @@ void applyRouteToAircraft(services::adsb::Aircraft& ac, const RouteInfo& info) {
   if (info.airline[0] != '\0') {
     strncpy(ac.airline, info.airline, sizeof(ac.airline) - 1);
     ac.airline[sizeof(ac.airline) - 1] = '\0';
+  }
+  if (info.airline_icao[0] != '\0') {
+    strncpy(ac.airline_icao, info.airline_icao, sizeof(ac.airline_icao) - 1);
+    ac.airline_icao[sizeof(ac.airline_icao) - 1] = '\0';
   }
   if (info.origin[0] != '\0') {
     char resolved[5];
@@ -484,9 +492,52 @@ struct HttpHeader {
   const char* value;
 };
 
+void copyRouteFromFaAirport(const JsonObject& ap, char* out, size_t out_len) {
+  if (ap.isNull() || out_len == 0) {
+    return;
+  }
+  out[0] = '\0';
+  copyRouteIcao(ap["code_icao"].as<const char*>(), out, out_len);
+  if (out[0] == '\0') {
+    copyRouteIcao(ap["code_iata"].as<const char*>(), out, out_len);
+  }
+  if (out[0] == '\0') {
+    copyRouteIcao(ap["code"].as<const char*>(), out, out_len);
+  }
+}
+
+/** Wait briefly for ADS-B TLS to finish before route API calls. */
+bool waitForRouteTlsHeap(const char* worker_callsign, uint32_t timeout_ms) {
+  const unsigned long deadline = millis() + (timeout_ms < 1500U ? timeout_ms : 1500U);
+  while (millis() < deadline) {
+    if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
+      return false;
+    }
+    if (services::https::heapReadyForRouteApi() && !services::adsb::fetchInProgress() &&
+        !services::https::busy()) {
+      return true;
+    }
+    workerYield();
+    vTaskDelay(pdMS_TO_TICKS(40));
+  }
+  return services::https::heapReadyForRouteApi() && !services::adsb::fetchInProgress() &&
+         !services::https::busy();
+}
+
 bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign,
                  uint32_t timeout_ms, const HttpHeader* headers, size_t header_count) {
   if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
+    return false;
+  }
+  if (worker_callsign != nullptr) {
+    if (!waitForRouteTlsHeap(worker_callsign, timeout_ms)) {
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", worker_callsign,
+                      ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      }
+      return false;
+    }
+  } else if (!services::https::heapReadyForRouteApi()) {
     return false;
   }
   services::https::ScopedLock tls(timeout_ms);
@@ -546,10 +597,39 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
   if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
     return false;
   }
-  return !deserializeJson(doc, payload);
+  const DeserializationError err = deserializeJson(doc, payload);
+  if (err && config::kSerialTraceDebug && worker_callsign != nullptr) {
+    Serial.printf("[detail] json err %s %s (%u bytes)\n", worker_callsign, err.c_str(),
+                  static_cast<unsigned>(payload.length()));
+  }
+  return !err;
+}
+
+void copyAirlineIcao(const char* s, char* out, size_t out_len) {
+  if (out_len == 0) {
+    return;
+  }
+  out[0] = '\0';
+  if (s == nullptr || strlen(s) != 3) {
+    return;
+  }
+  for (int i = 0; i < 3; ++i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (!isalpha(c)) {
+      out[0] = '\0';
+      return;
+    }
+    out[i] = static_cast<char>(toupper(c));
+  }
+  out[3] = '\0';
 }
 
 void fillAirlineFromAirLabs(const JsonObject& data, RouteInfo* route) {
+  const char* airline_icao = data["airline_icao"].as<const char*>();
+  if (airline_icao != nullptr && strlen(airline_icao) == 3) {
+    copyAirlineIcao(airline_icao, route->airline_icao, sizeof(route->airline_icao));
+  }
+
   copyJsonAirlineName(data, "airline_name", route->airline, sizeof(route->airline));
   if (route->airline[0] != '\0') {
     return;
@@ -574,9 +654,8 @@ void fillAirlineFromAirLabs(const JsonObject& data, RouteInfo* route) {
     }
   }
 
-  const char* airline_icao = data["airline_icao"].as<const char*>();
-  if (airline_icao != nullptr && strlen(airline_icao) == 3) {
-    services::airline::lookupByCode(airline_icao, route->airline, sizeof(route->airline));
+  if (route->airline[0] == '\0' && route->airline_icao[0] != '\0') {
+    services::airline::lookupByCode(route->airline_icao, route->airline, sizeof(route->airline));
   }
 }
 
@@ -622,40 +701,10 @@ DetailStep nextApiStepAfter(DetailStep step) {
   }
 }
 
-bool lookupAirLabsWithKey(const char* callsign, RouteInfo* route, const char* api_key,
-                           size_t key_index) {
-  if (api_key == nullptr || api_key[0] == '\0' || route == nullptr) {
+bool parseAirLabsRecord(const JsonObject& data, RouteInfo* route) {
+  if (data.isNull() || route == nullptr) {
     return false;
   }
-  routeClear(route);
-
-  String url = kAirLabsBase;
-  url += "?flight_icao=";
-  url += callsign;
-  url += "&api_key=";
-  url += api_key;
-
-  JsonDocument doc;
-  if (!httpGetJson(url.c_str(), doc, callsign, config::kDetailApiTimeoutMs, nullptr, 0)) {
-    return false;
-  }
-
-  // AirLabs returns an error object like:
-  // { "error": { "code": "month_limit_exceeded", ... } }
-  // Mark only the failing key exhausted and keep trying the next one.
-  if (doc["error"].is<JsonObject>()) {
-    const char* err_code = doc["error"]["code"].as<const char*>();
-    if (err_code != nullptr && strcmp(err_code, "month_limit_exceeded") == 0) {
-      apikeys::exhaustAirLabsKeyAt(key_index);
-      return false;
-    }
-  }
-
-  JsonObject data = doc["response"].as<JsonObject>();
-  if (data.isNull()) {
-    return false;
-  }
-
   copyRouteIcao(data["dep_icao"].as<const char*>(), route->origin, sizeof(route->origin));
   if (route->origin[0] == '\0') {
     copyRouteIcao(data["dep_iata"].as<const char*>(), route->origin, sizeof(route->origin));
@@ -666,6 +715,110 @@ bool lookupAirLabsWithKey(const char* callsign, RouteInfo* route, const char* ap
   }
   fillAirlineFromAirLabs(data, route);
   return routeHasData(*route);
+}
+
+bool parseAirLabsResponse(JsonDocument& doc, RouteInfo* route) {
+  if (route == nullptr) {
+    return false;
+  }
+  routeClear(route);
+  if (doc["response"].is<JsonObject>()) {
+    return parseAirLabsRecord(doc["response"].as<JsonObject>(), route);
+  }
+  if (doc["response"].is<JsonArray>()) {
+    JsonArray arr = doc["response"].as<JsonArray>();
+    if (!arr.isNull() && arr.size() > 0) {
+      return parseAirLabsRecord(arr[0].as<JsonObject>(), route);
+    }
+  }
+  return false;
+}
+
+bool airLabsMonthLimitExceeded(JsonDocument& doc, size_t key_index) {
+  if (!doc["error"].is<JsonObject>()) {
+    return false;
+  }
+  const char* err_code = doc["error"]["code"].as<const char*>();
+  if (err_code != nullptr && strcmp(err_code, "month_limit_exceeded") == 0) {
+    apikeys::exhaustAirLabsKeyAt(key_index);
+    return true;
+  }
+  return false;
+}
+
+bool lookupAirLabsUrl(const char* base_url, const char* query, const char* callsign,
+                      RouteInfo* route, const char* api_key, size_t key_index) {
+  if (base_url == nullptr || query == nullptr || route == nullptr || api_key == nullptr) {
+    return false;
+  }
+  String url = base_url;
+  url += "?";
+  url += query;
+  url += "&api_key=";
+  url += api_key;
+
+  JsonDocument doc;
+  if (!httpGetJson(url.c_str(), doc, callsign, config::kDetailApiTimeoutMs, nullptr, 0)) {
+    return false;
+  }
+  if (airLabsMonthLimitExceeded(doc, key_index)) {
+    return false;
+  }
+  if (!parseAirLabsResponse(doc, route)) {
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[detail] AL empty %s (%s)\n", callsign, query);
+    }
+    return false;
+  }
+  return routeHasData(*route);
+}
+
+bool lookupAirLabsIdent(const char* ident, const char* worker_callsign, RouteInfo* route,
+                        const char* api_key, size_t key_index) {
+  if (ident == nullptr || ident[0] == '\0') {
+    return false;
+  }
+  char query[72];
+  snprintf(query, sizeof(query), "flight_icao=%s", ident);
+  if (lookupAirLabsUrl(kAirLabsBase, query, worker_callsign, route, api_key, key_index)) {
+    return true;
+  }
+  snprintf(query, sizeof(query), "flight_icao=%s&limit=1", ident);
+  if (lookupAirLabsUrl(kAirLabsRoutesBase, query, worker_callsign, route, api_key, key_index)) {
+    return true;
+  }
+  char flight_iata[16] = "";
+  if (services::airline::buildFlightIataFromCallsign(ident, flight_iata, sizeof(flight_iata))) {
+    snprintf(query, sizeof(query), "flight_iata=%s", flight_iata);
+    if (lookupAirLabsUrl(kAirLabsBase, query, worker_callsign, route, api_key, key_index)) {
+      return true;
+    }
+    snprintf(query, sizeof(query), "flight_iata=%s&limit=1", flight_iata);
+    if (lookupAirLabsUrl(kAirLabsRoutesBase, query, worker_callsign, route, api_key, key_index)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool lookupAirLabsWithKey(const char* callsign, RouteInfo* route, const char* api_key,
+                           size_t key_index) {
+  if (api_key == nullptr || api_key[0] == '\0' || route == nullptr) {
+    return false;
+  }
+  routeClear(route);
+
+  if (lookupAirLabsIdent(callsign, callsign, route, api_key, key_index)) {
+    return true;
+  }
+
+  char variant[9] = "";
+  if (services::airline::buildCallsignApiVariant(callsign, variant, sizeof(variant)) &&
+      lookupAirLabsIdent(variant, callsign, route, api_key, key_index)) {
+    return true;
+  }
+
+  return false;
 }
 
 bool lookupAirLabsFirstKey(const char* callsign, RouteInfo* route) {
@@ -688,17 +841,35 @@ bool lookupAirLabsFirstKey(const char* callsign, RouteInfo* route) {
   return false;
 }
 
+bool faAirportHasCode(const JsonObject& ap) {
+  if (ap.isNull()) {
+    return false;
+  }
+  const char* c = ap["code_icao"].as<const char*>();
+  if (c != nullptr && c[0] != '\0') {
+    return true;
+  }
+  c = ap["code_iata"].as<const char*>();
+  if (c != nullptr && c[0] != '\0') {
+    return true;
+  }
+  c = ap["code"].as<const char*>();
+  return c != nullptr && c[0] != '\0';
+}
+
 bool pickFlightAwareFlight(JsonArray flights, JsonObject* chosen) {
   for (JsonObject f : flights) {
     const char* status = f["status"].as<const char*>();
-    if (status != nullptr && strcmp(status, "En Route") == 0 && !f["origin"].isNull() &&
-        !f["destination"].isNull()) {
+    if (status != nullptr && strcmp(status, "En Route") == 0 &&
+        faAirportHasCode(f["origin"].as<JsonObject>()) &&
+        faAirportHasCode(f["destination"].as<JsonObject>())) {
       *chosen = f;
       return true;
     }
   }
   for (JsonObject f : flights) {
-    if (!f["origin"].isNull() && !f["destination"].isNull()) {
+    if (faAirportHasCode(f["origin"].as<JsonObject>()) &&
+        faAirportHasCode(f["destination"].as<JsonObject>())) {
       *chosen = f;
       return true;
     }
@@ -738,20 +909,8 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
 
   JsonObject origin = flight["origin"].as<JsonObject>();
   JsonObject dest = flight["destination"].as<JsonObject>();
-  if (!origin.isNull()) {
-    copyRouteIcao(origin["code_icao"].as<const char*>(), route->origin,
-                    sizeof(route->origin));
-    if (route->origin[0] == '\0') {
-      copyRouteIcao(origin["code_iata"].as<const char*>(), route->origin,
-                      sizeof(route->origin));
-    }
-  }
-  if (!dest.isNull()) {
-    copyRouteIcao(dest["code_icao"].as<const char*>(), route->dest, sizeof(route->dest));
-    if (route->dest[0] == '\0') {
-      copyRouteIcao(dest["code_iata"].as<const char*>(), route->dest, sizeof(route->dest));
-    }
-  }
+  copyRouteFromFaAirport(origin, route->origin, sizeof(route->origin));
+  copyRouteFromFaAirport(dest, route->dest, sizeof(route->dest));
 
   copyJsonAirlineName(flight, "operator", route->airline, sizeof(route->airline));
   if (route->airline[0] == '\0') {
@@ -765,9 +924,13 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
     if (route->airline[0] == '\0') {
       const char* op_icao = flight["operator_icao"].as<const char*>();
       if (op_icao != nullptr && strlen(op_icao) == 3) {
+        copyAirlineIcao(op_icao, route->airline_icao, sizeof(route->airline_icao));
         services::airline::lookupByCode(op_icao, route->airline, sizeof(route->airline));
       }
     }
+  } else {
+    const char* op_icao = flight["operator_icao"].as<const char*>();
+    copyAirlineIcao(op_icao, route->airline_icao, sizeof(route->airline_icao));
   }
   return routeHasData(*route);
 }
@@ -867,9 +1030,11 @@ bool lookupFr24WithKey(const char* callsign, RouteInfo* route, const char* api_t
   }
 
   if (painted != nullptr && strlen(painted) == 3) {
+    copyAirlineIcao(painted, route->airline_icao, sizeof(route->airline_icao));
     services::airline::lookupByCode(painted, route->airline, sizeof(route->airline));
   }
   if (route->airline[0] == '\0' && operating != nullptr && strlen(operating) == 3) {
+    copyAirlineIcao(operating, route->airline_icao, sizeof(route->airline_icao));
     services::airline::lookupByCode(operating, route->airline, sizeof(route->airline));
   }
   if (route->airline[0] == '\0' && painted != nullptr && painted[0] != '\0') {
@@ -904,7 +1069,9 @@ bool lookupPrefixFallback(const char* callsign, RouteInfo* route) {
   }
   routeClear(route);
   services::airline::resolveFromCallsign(callsign, true, route->airline, sizeof(route->airline));
-  return route->airline[0] != '\0';
+  services::airline::resolveIcaoFromCallsign(callsign, true, route->airline_icao,
+                                             sizeof(route->airline_icao));
+  return route->airline[0] != '\0' || route->airline_icao[0] != '\0';
 }
 
 void logRouteLine(const char* callsign, const RouteInfo& route, const char* tag) {
@@ -928,7 +1095,8 @@ void applyRouteToCallsign(const char* callsign, const RouteInfo& info) {
   if (callsign == nullptr || callsign[0] == '\0') {
     return;
   }
-  services::adsb::applyRouteFieldsByCallsign(callsign, info.airline, info.origin, info.dest);
+  services::adsb::applyRouteFieldsByCallsign(callsign, info.airline, info.airline_icao,
+                                            info.origin, info.dest);
 }
 
 bool isCurrentDetailSelection(const char* callsign) {
@@ -1024,10 +1192,12 @@ void detailWorkerCancelWork() {
   if (config::kSerialTraceDebug && s_detail_work_callsign[0] != '\0') {
     Serial.printf("[detail] worker cancel %s\n", s_detail_work_callsign);
   }
+  s_detail_requested = false;
   s_detail_step = DetailStep::kIdle;
   s_detail_busy = false;
   s_detail_worker_start_ms = 0;
   s_detail_work_callsign[0] = '\0';
+  s_detail_worker_callsign[0] = '\0';
   routeClear(&s_detail_result);
   s_detail_result_src = ApiSource::kNone;
 }
@@ -1335,6 +1505,7 @@ void cancelDetailEnrichmentImpl() {
   s_detail_has_pending = false;
   s_detail_pending_callsign[0] = '\0';
   clearDetailDebounce();
+  detailWorkerCancelWork();
 }
 
 bool detailEnrichmentReadyImpl() { return s_detail_ready; }

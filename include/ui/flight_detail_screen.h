@@ -29,4 +29,7 @@ bool flightDetailCycle(int delta);
 /** Callsign of the aircraft currently selected on this screen (nullptr if none). */
 const char* flightDetailSelectedCallsign();
 
+/** Free the off-screen canvas (~300KB PSRAM) when leaving flight detail. */
+void flightDetailReleaseSprite();
+
 }  // namespace ui

@@ -19,6 +19,7 @@
 #include "config.h"
 #include "geo/flat_earth.h"
 #include "services/airport_lookup.h"
+#include "services/https_heap.h"
 #include "services/https_lock.h"
 #include "services/route_lookup.h"
 
@@ -389,11 +390,13 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
     ac->vert_rate_fpm = kVertRateUnknown;
   }
   ac->airline[0] = '\0';
+  ac->airline_icao[0] = '\0';
   fillRouteIcaoFromAdsb(ac, plane);
 }
 
 void applyRouteFieldsByCallsignImpl(const char* callsign, const char* airline,
-                                    const char* origin, const char* dest) {
+                                    const char* airline_icao, const char* origin,
+                                    const char* dest) {
   if (callsign == nullptr || callsign[0] == '\0') {
     return;
   }
@@ -410,6 +413,10 @@ void applyRouteFieldsByCallsignImpl(const char* callsign, const char* airline,
     if (airline != nullptr && airline[0] != '\0') {
       strncpy(ac.airline, airline, sizeof(ac.airline) - 1);
       ac.airline[sizeof(ac.airline) - 1] = '\0';
+    }
+    if (airline_icao != nullptr && airline_icao[0] != '\0') {
+      strncpy(ac.airline_icao, airline_icao, sizeof(ac.airline_icao) - 1);
+      ac.airline_icao[sizeof(ac.airline_icao) - 1] = '\0';
     }
     if (origin != nullptr && origin[0] != '\0') {
       char resolved[5];
@@ -499,8 +506,9 @@ bool copyAircraftByCallsign(const char* callsign, Aircraft* dst) {
 }
 
 void applyRouteFieldsByCallsign(const char* callsign, const char* airline,
-                                const char* origin, const char* dest) {
-  applyRouteFieldsByCallsignImpl(callsign, airline, origin, dest);
+                                const char* airline_icao, const char* origin,
+                                const char* dest) {
+  applyRouteFieldsByCallsignImpl(callsign, airline, airline_icao, origin, dest);
 }
 
 void trafficFilterBootLoad() {
@@ -595,6 +603,13 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
   const unsigned long fetch_start_ms = millis();
   if (config::kSerialTraceDebug) {
     Serial.println("[fetch] begin HTTPS");
+  }
+  if (!services::https::heapReadyForAdsb()) {
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[fetch] skip heap free=%u max_blk=%u\n", ESP.getFreeHeap(),
+                    ESP.getMaxAllocHeap());
+    }
+    return false;
   }
   const float dist_nm = kmToNauticalMiles(fetch_radius_km);
 

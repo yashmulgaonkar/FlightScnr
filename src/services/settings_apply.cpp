@@ -73,3 +73,17 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
 
   return loc_ok;
 }
+
+namespace {
+
+SettingsSavedCallback s_saved_callback = nullptr;
+
+}  // namespace
+
+void settingsSetSavedCallback(SettingsSavedCallback cb) { s_saved_callback = cb; }
+
+void settingsNotifySaved() {
+  if (s_saved_callback != nullptr) {
+    s_saved_callback();
+  }
+}

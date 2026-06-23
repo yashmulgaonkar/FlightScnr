@@ -143,6 +143,57 @@ bool expandBlitAreaForPixelAlign2(int16_t* x, int16_t* y, int16_t* w, int16_t* h
   return *w >= 2 && *h >= 2;
 }
 
+void blitRegionWithTransparentKey(int16_t x, int16_t y, int16_t w, int16_t h,
+                                const uint16_t* src, int16_t src_stride,
+                                uint16_t transparent_key, PlaneGfx* gfx) {
+  if (gfx == nullptr || gfx->raw() == nullptr || src == nullptr || w <= 0 || h <= 0 ||
+      src_stride <= 0) {
+    return;
+  }
+
+  auto* panel = static_cast<Arduino_TFT*>(gfx->raw());
+  const int16_t screen_w = static_cast<int16_t>(gfx->raw()->width());
+  const int16_t screen_h = static_cast<int16_t>(gfx->raw()->height());
+
+  for (int16_t row = 0; row < h; ++row) {
+    const int16_t dst_y = static_cast<int16_t>(y + row);
+    if (dst_y < 0 || dst_y >= screen_h) {
+      continue;
+    }
+    const uint16_t* row_src =
+        src + static_cast<size_t>(row) * static_cast<size_t>(src_stride);
+    int16_t col = 0;
+    while (col < w) {
+      while (col < w && row_src[col] == transparent_key) {
+        ++col;
+      }
+      const int16_t run_start = col;
+      while (col < w && row_src[col] != transparent_key) {
+        ++col;
+      }
+      const int16_t run_len = static_cast<int16_t>(col - run_start);
+      if (run_len <= 0) {
+        continue;
+      }
+      int16_t dst_x = static_cast<int16_t>(x + run_start);
+      int16_t len = run_len;
+      if (dst_x < 0) {
+        len = static_cast<int16_t>(len + dst_x);
+        dst_x = 0;
+      }
+      if (dst_x >= screen_w || len <= 0) {
+        continue;
+      }
+      if (dst_x + len > screen_w) {
+        len = static_cast<int16_t>(screen_w - dst_x);
+      }
+      panel->writeAddrWindow(dst_x, dst_y, static_cast<uint16_t>(len), 1);
+      panel->writePixels(const_cast<uint16_t*>(row_src + run_start),
+                         static_cast<uint32_t>(len));
+    }
+  }
+}
+
 }  // namespace
 
 void planeGfxPanelLockInit() {
@@ -186,7 +237,12 @@ void PlaneGfx::fillScreen(uint16_t color) {
   if (gfx_ == nullptr) {
     return;
   }
-  const bool opened_here = hardware_panel_ && write_depth_ == 0;
+  // Hardware panel: one GFX fillRect session; avoid nested startWrite + raw writeRepeat.
+  if (hardware_panel_) {
+    gfx_->fillScreen(color);
+    return;
+  }
+  const bool opened_here = write_depth_ == 0;
   if (opened_here) {
     startWrite();
   }
@@ -200,7 +256,12 @@ void PlaneGfx::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t col
   if (gfx_ == nullptr) {
     return;
   }
-  const bool opened_here = hardware_panel_ && write_depth_ == 0;
+  // Arduino_GFX::fillRect already wraps startWrite/endWrite; nesting breaks QSPI CS.
+  if (hardware_panel_) {
+    gfx_->fillRect(x, y, w, h, color);
+    return;
+  }
+  const bool opened_here = write_depth_ == 0;
   if (opened_here) {
     startWrite();
   }
@@ -401,10 +462,6 @@ void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
   if (gfx_ == nullptr || text == nullptr) {
     return;
   }
-  const bool opened_here = hardware_panel_ && write_depth_ == 0;
-  if (opened_here) {
-    startWrite();
-  }
   int16_t draw_x = x;
   int16_t draw_y = y;
   mapDatum(text, x, y, &draw_x, &draw_y);
@@ -413,6 +470,15 @@ void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
     draw_y &= ~1;
   }
   gfx_->setCursor(draw_x, draw_y);
+  // drawChar() opens/closes its own SPI session per glyph; do not wrap print().
+  if (hardware_panel_) {
+    gfx_->print(text);
+    return;
+  }
+  const bool opened_here = write_depth_ == 0;
+  if (opened_here) {
+    startWrite();
+  }
   gfx_->print(text);
   if (opened_here) {
     endWrite();
@@ -501,9 +567,21 @@ void PlaneGfx::draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
 void PlaneGfx::draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap,
                                   uint16_t transparent_color, int16_t w,
                                   int16_t h) {
-  if (gfx_ != nullptr && bitmap != nullptr) {
-    gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(bitmap),
-                             transparent_color, w, h);
+  if (gfx_ == nullptr || bitmap == nullptr) {
+    return;
+  }
+  if (!hardware_panel_) {
+    gfx_->draw16bitRGBBitmap(x, y, const_cast<uint16_t*>(bitmap), transparent_color, w,
+                             h);
+    return;
+  }
+  const bool opened_here = write_depth_ == 0;
+  if (opened_here) {
+    startWrite();
+  }
+  blitRegionWithTransparentKey(x, y, w, h, bitmap, w, transparent_color, this);
+  if (opened_here) {
+    endWrite();
   }
 }
 
@@ -546,6 +624,24 @@ void PlaneGfx::blitRegionFromBuffer(int16_t x, int16_t y, int16_t w, int16_t h,
 
   if (x == 0 && y == 0 && w == screen_w && h == screen_h && src_stride == w) {
     panelFlushBitmap(x, y, w, h, src);
+    return;
+  }
+
+  if (!targetUsesPixelAlign2()) {
+    const bool opened_here = write_depth_ == 0;
+    if (opened_here) {
+      startWrite();
+    }
+    auto* panel = static_cast<Arduino_TFT*>(gfx_);
+    for (int16_t row = 0; row < h; ++row) {
+      const uint16_t* row_ptr =
+          src + static_cast<size_t>(row) * static_cast<size_t>(src_stride);
+      panel->writeAddrWindow(x, static_cast<int16_t>(y + row), static_cast<uint16_t>(w), 1);
+      panel->writePixels(const_cast<uint16_t*>(row_ptr), static_cast<uint32_t>(w));
+    }
+    if (opened_here) {
+      endWrite();
+    }
     return;
   }
 

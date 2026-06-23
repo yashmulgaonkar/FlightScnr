@@ -17,6 +17,8 @@
 #include "geo/flat_earth.h"
 #include "services/map_center.h"
 #include "services/route_lookup.h"
+#include "services/airline_logo.h"
+#include "services/airline_lookup.h"
 #include "ui/radar_scale.h"
 #include "ui/radar_theme.h"
 
@@ -29,11 +31,57 @@ namespace {
 constexpr int kBezelInsetPx = 10;
 constexpr int kTextPadPx = 6;
 constexpr int kTitleGap = 4;
+constexpr int kLogoGap = 3;
+constexpr int kLogoBelowGap = 20;
+constexpr int kLogoTopMarginPx = 2;
 constexpr int kLineGap = 3;
 constexpr int kSectionGap = 6;
 constexpr int kFooterGap = 6;
 constexpr int kTapPickRadiusPx = 36;
 constexpr size_t kRouteLabelLen = data::airports::kMaxNameLen + 6;  // "ICAO, " + name
+
+PlaneGfxSprite s_detail_sprite(&tft);
+bool s_detail_sprite_ready = false;
+
+bool ensureDetailSprite() {
+  if (s_detail_sprite_ready) {
+    return true;
+  }
+  if (!s_detail_sprite.createSprite(config::kDisplayWidth, config::kDisplayHeight)) {
+    Serial.println("[detail] sprite alloc failed");
+    return false;
+  }
+  s_detail_sprite_ready = true;
+  return true;
+}
+
+PlaneGfx& detailGfx() { return s_detail_sprite.gfx(); }
+
+void pushDetailToPanel() {
+  if (s_detail_sprite_ready) {
+    s_detail_sprite.pushSprite(0, 0);
+  }
+}
+
+void blitDetailRegion(int16_t x, int16_t y, int16_t w, int16_t h) {
+  if (!s_detail_sprite_ready || w <= 0 || h <= 0) {
+    return;
+  }
+  const int16_t stride = s_detail_sprite.width();
+  tft.blitRegionFromBuffer(
+      x, y, w, h,
+      s_detail_sprite.buffer() + static_cast<size_t>(y) * static_cast<size_t>(stride) +
+          static_cast<size_t>(x),
+      stride);
+}
+
+void releaseDetailSprite() {
+  if (s_detail_sprite_ready) {
+    s_detail_sprite.deleteSprite();
+    s_detail_sprite_ready = false;
+  }
+  services::airline::releaseLogoBuffer();
+}
 
 const int kCenterX = config::kDisplayWidth / 2;
 const int kCenterY = config::kDisplayHeight / 2;
@@ -209,13 +257,13 @@ int wrappedLineCount(const char* text, UiTextStyle style, int start_y, int line_
 
 void drawCenterWrapped(const char* text, int* y, UiTextStyle style, uint16_t fg, uint16_t bg,
                        int max_lines) {
-  displayFontApply(tft, style);
+  displayFontApply(detailGfx(), style);
   const int line_h = displayFontHeight(tft, style);
   const char* cursor = text;
   char line[64];
 
-  tft.setTextDatum(TextDatum::TopCenter);
-  tft.setTextColor(fg, bg);
+  detailGfx().setTextDatum(TextDatum::TopCenter);
+  detailGfx().setTextColor(fg, bg);
 
   for (int i = 0; i < max_lines; ++i) {
     const int max_w = circleHalfWidthAtRow(*y, line_h) * 2;
@@ -226,7 +274,7 @@ void drawCenterWrapped(const char* text, int* y, UiTextStyle style, uint16_t fg,
     if (!nextWrappedLine(&cursor, line, sizeof(line), style, max_w, last_line)) {
       break;
     }
-    tft.drawString(line, kCenterX, *y);
+    detailGfx().drawString(line, kCenterX, *y);
     *y += line_h + kLineGap;
     if (*cursor == '\0') {
       break;
@@ -236,7 +284,7 @@ void drawCenterWrapped(const char* text, int* y, UiTextStyle style, uint16_t fg,
 
 void drawCenterLine(const char* text, int* y, UiTextStyle style, uint16_t fg,
                     uint16_t bg) {
-  displayFontApply(tft, style);
+  displayFontApply(detailGfx(), style);
   const int h = displayFontHeight(tft, style);
   const int max_half_w = circleHalfWidthAtRow(*y, h);
   const int max_w = max_half_w * 2;
@@ -246,15 +294,18 @@ void drawCenterLine(const char* text, int* y, UiTextStyle style, uint16_t fg,
   line[sizeof(line) - 1] = '\0';
   fitLineToWidth(line, sizeof(line), style, max_w);
 
-  tft.setTextDatum(TextDatum::TopCenter);
-  tft.setTextColor(fg, bg);
-  tft.drawString(line, kCenterX, *y);
+  detailGfx().setTextDatum(TextDatum::TopCenter);
+  detailGfx().setTextColor(fg, bg);
+  detailGfx().drawString(line, kCenterX, *y);
   *y += h + kLineGap;
 }
 
 void redrawCenterLineAt(int y, const char* text, UiTextStyle style, uint16_t fg,
                         uint16_t bg) {
-  displayFontApply(tft, style);
+  if (!ensureDetailSprite()) {
+    return;
+  }
+  displayFontApply(detailGfx(), style);
   const int h = displayFontHeight(tft, style);
   const int max_half_w = circleHalfWidthAtRow(y, h);
   const int max_w = max_half_w * 2;
@@ -265,11 +316,15 @@ void redrawCenterLineAt(int y, const char* text, UiTextStyle style, uint16_t fg,
   fitLineToWidth(line, sizeof(line), style, max_w);
 
   if (max_w > 0) {
-    tft.fillRect(kCenterX - max_half_w, y, max_w, h, bg);
+    detailGfx().fillRect(kCenterX - max_half_w, y, max_w, h, bg);
   }
-  tft.setTextDatum(TextDatum::TopCenter);
-  tft.setTextColor(fg, bg);
-  tft.drawString(line, kCenterX, y);
+  detailGfx().setTextDatum(TextDatum::TopCenter);
+  detailGfx().setTextColor(fg, bg);
+  detailGfx().drawString(line, kCenterX, y);
+  if (max_w > 0) {
+    blitDetailRegion(static_cast<int16_t>(kCenterX - max_half_w), static_cast<int16_t>(y),
+                     static_cast<int16_t>(max_w), static_cast<int16_t>(h));
+  }
 }
 
 void rebuildOrderByDistance() {
@@ -450,7 +505,7 @@ int routeDisplayLines(const char* origin, const char* dest, int row_y, int row_h
 
 void drawRouteLabels(const char* origin, const char* dest, int* y, uint16_t fg, uint16_t bg) {
   const UiTextStyle style = displayFontBody();
-  displayFontApply(tft, style);
+  displayFontApply(detailGfx(), style);
   const int row_h = displayFontHeight(tft, style);
 
   if ((origin == nullptr || origin[0] == '\0') &&
@@ -600,10 +655,12 @@ struct FlightDetailStrings {
 
 struct FlightDetailLayout {
   int y_start = 0;
+  int y_logo = 0;
   int y_airline = 0;
   int y_route = 0;
   int y_alt = 0;
   int y_speed = 0;
+  int logo_h = 0;
 };
 
 struct FlightDetailSnapshot {
@@ -648,10 +705,38 @@ void populateFlightDetailStrings(const services::adsb::Aircraft& ac,
            static_cast<unsigned>(s_sel + 1), static_cast<unsigned>(s_order_count));
 }
 
-void computeFlightDetailLayout(const FlightDetailStrings& s,
+void resolveAirlineIcao(const services::adsb::Aircraft& ac, char* out, size_t out_len) {
+  if (out_len == 0) {
+    return;
+  }
+  out[0] = '\0';
+  if (ac.airline_icao[0] != '\0') {
+    strncpy(out, ac.airline_icao, out_len - 1);
+    out[out_len - 1] = '\0';
+    return;
+  }
+  services::airline::resolveIcaoFromCallsign(ac.callsign, ac.callsign[0] != '\0', out,
+                                             out_len);
+}
+
+int layoutCenterY(int block_h) {
+  int y = kCenterY - block_h / 2;
+  if (y < kBezelInsetPx) {
+    y = kBezelInsetPx;
+  }
+  const int bottom_limit = kCenterY + kCircleRadius - kBezelInsetPx;
+  if (y + block_h > bottom_limit) {
+    y = bottom_limit - block_h;
+    if (y < kBezelInsetPx) {
+      y = kBezelInsetPx;
+    }
+  }
+  return y;
+}
+
+void computeFlightDetailLayout(const FlightDetailStrings& s, int logo_h,
                                EnrichFieldPlaceholder route_placeholder,
                                bool alternate_no_apis_route, FlightDetailLayout* layout) {
-  const int title_h = displayFontHeight(tft, displayFontTitle());
   const int callsign_h = displayFontHeight(tft, displayFontBody());
   const int body_h = displayFontHeight(tft, displayFontBody());
   const int detail_h = displayFontHeight(tft, displayFontDetail());
@@ -660,29 +745,23 @@ void computeFlightDetailLayout(const FlightDetailStrings& s,
                        kLineGap + detail_h;
 
   const int route_block_est = body_h + kLineGap;
-  const int pre_type_h_est = title_h + kTitleGap + callsign_h + kLineGap + body_h +
-                             kSectionGap + route_block_est;
+  const int pre_type_h_est =
+      callsign_h + kLineGap + body_h + kSectionGap + route_block_est;
 
   int block_h = pre_type_h_est + footer_h + detail_h;
-  int y = kCenterY - block_h / 2;
-  if (y < kBezelInsetPx) {
-    y = kBezelInsetPx;
-  }
+  int y = layoutCenterY(block_h);
 
-  const int route_y = y + title_h + kTitleGap + callsign_h + kLineGap + body_h + kSectionGap;
+  const int route_y = y + callsign_h + kLineGap + body_h + kSectionGap;
   const int route_lines =
       (route_placeholder != EnrichFieldPlaceholder::None || alternate_no_apis_route)
           ? 1
           : routeDisplayLines(s.route_origin, s.route_dest, route_y, body_h);
   const int route_block_h = route_lines * (body_h + kLineGap);
 
-  const int pre_type_h_adj = title_h + kTitleGap + callsign_h + kLineGap + body_h +
-                             kSectionGap + route_block_h;
+  const int pre_type_h_adj =
+      callsign_h + kLineGap + body_h + kSectionGap + route_block_h;
   block_h = pre_type_h_adj + footer_h + detail_h;
-  y = kCenterY - block_h / 2;
-  if (y < kBezelInsetPx) {
-    y = kBezelInsetPx;
-  }
+  y = layoutCenterY(block_h);
 
   const int type_y = y + pre_type_h_adj;
   const int type_lines =
@@ -691,17 +770,24 @@ void computeFlightDetailLayout(const FlightDetailStrings& s,
       type_lines * detail_h + (type_lines > 1 ? (type_lines - 1) * kLineGap : 0);
 
   block_h = pre_type_h_adj + type_block_h + footer_h;
-  y = kCenterY - block_h / 2;
-  if (y < kBezelInsetPx) {
-    y = kBezelInsetPx;
-  }
+  y = layoutCenterY(block_h);
 
-  int y_alt = y + pre_type_h_adj + type_block_h + kLineGap;
-  layout->y_start = y;
-  layout->y_airline = y + title_h + kTitleGap + callsign_h + kLineGap;
+  layout->logo_h = logo_h;
+  if (logo_h > 0) {
+    layout->y_logo = y - logo_h - kLogoGap;
+    const int top = kCenterY - kCircleRadius + kLogoTopMarginPx;
+    if (layout->y_logo < top) {
+      layout->y_logo = top;
+    }
+    layout->y_start = y + kLogoBelowGap;
+  } else {
+    layout->y_logo = y;
+    layout->y_start = y;
+  }
+  layout->y_airline = layout->y_start + callsign_h + kLineGap;
   layout->y_route = layout->y_airline + body_h + kSectionGap;
-  layout->y_alt = y_alt;
-  layout->y_speed = y_alt + detail_h + kLineGap;
+  layout->y_alt = layout->y_start + pre_type_h_adj + type_block_h + kLineGap;
+  layout->y_speed = layout->y_alt + detail_h + kLineGap;
 }
 
 bool snapshotStaticMatches(const FlightDetailStrings& s, const FlightDetailLayout& layout,
@@ -709,10 +795,13 @@ bool snapshotStaticMatches(const FlightDetailStrings& s, const FlightDetailLayou
                            EnrichFieldPlaceholder route_placeholder,
                            bool alternate_no_apis_airline, bool alternate_no_apis_route,
                            uint8_t no_apis_alt_phase) {
-  if (!s_snapshot.valid || s_order_count != s_snapshot.order_count) {
+  (void)no_apis_alt_phase;
+  if (!s_snapshot.valid) {
     return false;
   }
-  if (layout.y_alt != s_snapshot.layout.y_alt ||
+  if (layout.logo_h != s_snapshot.layout.logo_h ||
+      layout.y_logo != s_snapshot.layout.y_logo ||
+      layout.y_alt != s_snapshot.layout.y_alt ||
       layout.y_speed != s_snapshot.layout.y_speed) {
     return false;
   }
@@ -721,19 +810,23 @@ bool snapshotStaticMatches(const FlightDetailStrings& s, const FlightDetailLayou
     return false;
   }
   if (alternate_no_apis_airline != s_snapshot.alternate_no_apis_airline ||
-      alternate_no_apis_route != s_snapshot.alternate_no_apis_route ||
-      no_apis_alt_phase != s_snapshot.no_apis_alt_phase) {
+      alternate_no_apis_route != s_snapshot.alternate_no_apis_route) {
+    return false;
+  }
+  if (strcmp(s.callsign, s_snapshot.text.callsign) != 0 ||
+      strcmp(s.type, s_snapshot.text.type) != 0) {
     return false;
   }
   if (alternate_no_apis_airline || alternate_no_apis_route) {
-    return strcmp(s.callsign, s_snapshot.text.callsign) == 0 &&
-           strcmp(s.type, s_snapshot.text.type) == 0;
+    return true;
   }
-  return strcmp(s.callsign, s_snapshot.text.callsign) == 0 &&
-         strcmp(s.airline, s_snapshot.text.airline) == 0 &&
+  if (airline_placeholder == EnrichFieldPlaceholder::Fetching ||
+      route_placeholder == EnrichFieldPlaceholder::Fetching) {
+    return true;
+  }
+  return strcmp(s.airline, s_snapshot.text.airline) == 0 &&
          strcmp(s.route_origin, s_snapshot.text.route_origin) == 0 &&
-         strcmp(s.route_dest, s_snapshot.text.route_dest) == 0 &&
-         strcmp(s.type, s_snapshot.text.type) == 0;
+         strcmp(s.route_dest, s_snapshot.text.route_dest) == 0;
 }
 
 void updateSnapshotSelectionIndex(const FlightDetailStrings& s) {
@@ -779,7 +872,6 @@ void tickNoApisAlternateLabels(unsigned long now_ms) {
   const uint16_t route_fg = tft.color565(100, 220, 255);
   const UiTextStyle body_style = displayFontBody();
 
-  tft.startWrite();
   if (s_snapshot.alternate_no_apis_airline) {
     const char* text = alternateNoApisAirlineText(now_ms);
     redrawCenterLineAt(s_snapshot.layout.y_airline, text, body_style,
@@ -795,7 +887,6 @@ void tickNoApisAlternateLabels(unsigned long now_ms) {
     s_snapshot.text.route_origin[sizeof(s_snapshot.text.route_origin) - 1] = '\0';
     s_snapshot.text.route_dest[0] = '\0';
   }
-  tft.endWrite();
   s_snapshot.no_apis_alt_phase = phase;
 }
 
@@ -881,6 +972,9 @@ const char* flightDetailSelectedCallsign() {
 
 void flightDetailDraw() {
   const unsigned long draw_start_ms = millis();
+  if (!ensureDetailSprite()) {
+    return;
+  }
   const uint16_t bg = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
   const uint16_t fg = tft.color565(255, 255, 255);
   const uint16_t label_fg = tft.color565(180, 200, 220);
@@ -891,16 +985,14 @@ void flightDetailDraw() {
 
   services::adsb::Aircraft ac = {};
   if (!copySelectedAircraft(&ac)) {
-    tft.startWrite();
-    tft.fillScreen(bg);
+    detailGfx().fillScreen(bg);
     s_snapshot.valid = false;
     int y = kCenterY - 20;
-    drawCenterLine("Flight", &y, displayFontTitle(), fg, bg);
     drawCenterLine("No aircraft", &y, displayFontBody(), label_fg, bg);
     drawCenterLine("Swipe right", &y, displayFontDetail(), hint_fg, bg);
     drawCenterLine("for radar", &y, displayFontDetail(), hint_fg, bg);
-    tft.setTextDatum(TextDatum::TopLeft);
-    tft.endWrite();
+    detailGfx().setTextDatum(TextDatum::TopLeft);
+    pushDetailToPanel();
     if (config::kSerialTraceDebug) {
       Serial.printf("[detail] draw empty (%lums)\n", millis() - draw_start_ms);
     }
@@ -918,25 +1010,23 @@ void flightDetailDraw() {
   const bool alternate_route = alternateNoApisRoute(ac);
   const unsigned long now_ms = millis();
   const uint8_t alt_phase = noApisAlternatePhase(now_ms);
-  computeFlightDetailLayout(s, route_placeholder, alternate_route, &layout);
+  char airline_icao[4] = {};
+  resolveAirlineIcao(ac, airline_icao, sizeof(airline_icao));
+  const int logo_h = services::airline::logoHeightForIcao(airline_icao);
+  computeFlightDetailLayout(s, logo_h, route_placeholder, alternate_route, &layout);
 
   if (config::kSerialTraceDebug) {
     Serial.printf("[detail] draw begin %s layout=%dms\n", s.callsign,
                   static_cast<int>(millis() - draw_start_ms));
   }
 
-  tft.startWrite();
-  tft.fillScreen(bg);
+  detailGfx().fillScreen(bg);
 
-  const int title_h = displayFontHeight(tft, displayFontTitle());
+  if (layout.logo_h > 0 && airline_icao[0] != '\0') {
+    services::airline::drawLogo(detailGfx(), airline_icao, kCenterX, layout.y_logo, bg);
+  }
 
   int y = layout.y_start;
-  displayFontApply(tft, displayFontTitle());
-  tft.setTextDatum(TextDatum::TopCenter);
-  tft.setTextColor(fg, bg);
-  tft.drawString("Flight", kCenterX, y);
-  y += title_h + kTitleGap;
-
   drawCenterLine(s.callsign, &y, displayFontBody(), fg, bg);
   if (airline_placeholder == EnrichFieldPlaceholder::Fetching) {
     drawEnrichPlaceholder(kFetchingDetails, &y, displayFontBody(), airline_placeholder, bg);
@@ -964,8 +1054,7 @@ void flightDetailDraw() {
   drawCenterLine("Turn: next", &y, displayFontDetail(), hint_fg, bg);
   drawCenterLine("Swipe right", &y, displayFontDetail(), hint_fg, bg);
 
-  tft.setTextDatum(TextDatum::TopLeft);
-  tft.endWrite();
+  detailGfx().setTextDatum(TextDatum::TopLeft);
   if (airline_placeholder == EnrichFieldPlaceholder::Fetching) {
     strncpy(s.airline, kFetchingDetails, sizeof(s.airline) - 1);
     s.airline[sizeof(s.airline) - 1] = '\0';
@@ -984,6 +1073,7 @@ void flightDetailDraw() {
   }
   saveSnapshot(s, layout, airline_placeholder, route_placeholder, alternate_airline,
                  alternate_route, alt_phase);
+  pushDetailToPanel();
   if (config::kSerialTraceDebug) {
     Serial.printf("[detail] draw done %s (%lums)\n", s.callsign,
                   millis() - draw_start_ms);
@@ -1009,7 +1099,10 @@ void flightDetailRefresh() {
   const bool alternate_airline = alternateNoApisAirline(ac);
   const bool alternate_route = alternateNoApisRoute(ac);
   const uint8_t alt_phase = noApisAlternatePhase(millis());
-  computeFlightDetailLayout(s, route_placeholder, alternate_route, &layout);
+  char airline_icao[4] = {};
+  resolveAirlineIcao(ac, airline_icao, sizeof(airline_icao));
+  const int logo_h = services::airline::logoHeightForIcao(airline_icao);
+  computeFlightDetailLayout(s, logo_h, route_placeholder, alternate_route, &layout);
 
   if (!snapshotStaticMatches(s, layout, airline_placeholder, route_placeholder,
                              alternate_airline, alternate_route, alt_phase)) {
@@ -1020,35 +1113,52 @@ void flightDetailRefresh() {
     return;
   }
 
+  const bool index_changed = strcmp(s.index_line, s_snapshot.text.index_line) != 0;
+  const bool alt_changed = strcmp(s.alt, s_snapshot.text.alt) != 0;
+  const bool speed_changed = strcmp(s.speed, s_snapshot.text.speed) != 0;
   updateSnapshotSelectionIndex(s);
+  s_snapshot.order_count = s_order_count;
 
-  if (strcmp(s.alt, s_snapshot.text.alt) == 0 &&
-      strcmp(s.speed, s_snapshot.text.speed) == 0) {
+  if (!index_changed && !alt_changed && !speed_changed) {
     return;
   }
 
-  if (config::kSerialTraceDebug) {
-    Serial.printf("[detail] refresh partial %s alt/speed\n", s.callsign);
+  if (!ensureDetailSprite()) {
+    flightDetailDraw();
+    return;
   }
 
   const uint16_t bg = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
   const uint16_t fg = tft.color565(255, 255, 255);
+  const uint16_t hint_fg = tft.color565(120, 140, 160);
   const UiTextStyle detail_style = displayFontDetail();
 
-  tft.startWrite();
-  if (strcmp(s.alt, s_snapshot.text.alt) != 0) {
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[detail] refresh partial %s%s%s%s\n", s.callsign,
+                  index_changed ? " index" : "",
+                  alt_changed ? " alt" : "",
+                  speed_changed ? " speed" : "");
+  }
+
+  if (index_changed) {
+    const int detail_h = displayFontHeight(tft, detail_style);
+    const int y_index = s_snapshot.layout.y_speed + detail_h + kFooterGap;
+    redrawCenterLineAt(y_index, s.index_line, detail_style, hint_fg, bg);
+  }
+  if (alt_changed) {
     redrawCenterLineAt(s_snapshot.layout.y_alt, s.alt, detail_style, fg, bg);
     strncpy(s_snapshot.text.alt, s.alt, sizeof(s_snapshot.text.alt) - 1);
     s_snapshot.text.alt[sizeof(s_snapshot.text.alt) - 1] = '\0';
   }
-  if (strcmp(s.speed, s_snapshot.text.speed) != 0) {
+  if (speed_changed) {
     redrawCenterLineAt(s_snapshot.layout.y_speed, s.speed, detail_style, fg, bg);
     strncpy(s_snapshot.text.speed, s.speed, sizeof(s_snapshot.text.speed) - 1);
     s_snapshot.text.speed[sizeof(s_snapshot.text.speed) - 1] = '\0';
   }
-  tft.endWrite();
 }
 
 void flightDetailTick(unsigned long now_ms) { tickNoApisAlternateLabels(now_ms); }
+
+void flightDetailReleaseSprite() { releaseDetailSprite(); }
 
 }  // namespace ui
