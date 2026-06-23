@@ -43,6 +43,10 @@ constexpr size_t kRouteLabelLen = data::airports::kMaxNameLen + 6;  // "ICAO, " 
 PlaneGfxSprite s_detail_sprite(&tft);
 bool s_detail_sprite_ready = false;
 
+char s_last_draw_callsign[16] = "";
+unsigned long s_last_draw_ms = 0;
+bool s_last_draw_had_fetching = false;
+
 bool ensureDetailSprite() {
   if (s_detail_sprite_ready) {
     return true;
@@ -81,6 +85,9 @@ void releaseDetailSprite() {
     s_detail_sprite_ready = false;
   }
   services::airline::releaseLogoBuffer();
+  s_last_draw_callsign[0] = '\0';
+  s_last_draw_ms = 0;
+  s_last_draw_had_fetching = false;
 }
 
 const int kCenterX = config::kDisplayWidth / 2;
@@ -1080,6 +1087,12 @@ void flightDetailDraw() {
   saveSnapshot(s, layout, airline_placeholder, route_placeholder, alternate_airline,
                  alternate_route, alt_phase);
   pushDetailToPanel();
+  strncpy(s_last_draw_callsign, s.callsign, sizeof(s_last_draw_callsign) - 1);
+  s_last_draw_callsign[sizeof(s_last_draw_callsign) - 1] = '\0';
+  s_last_draw_ms = millis();
+  s_last_draw_had_fetching =
+      airline_placeholder == EnrichFieldPlaceholder::Fetching ||
+      route_placeholder == EnrichFieldPlaceholder::Fetching;
   if (config::kSerialTraceDebug) {
     Serial.printf("[detail] draw done %s (%lums)\n", s.callsign,
                   millis() - draw_start_ms);
@@ -1115,7 +1128,8 @@ void flightDetailRefresh() {
 
   if (!snapshotStaticMatches(s, layout, airline_placeholder, route_placeholder,
                              alternate_airline, alternate_route, alt_phase)) {
-    if (flightDetailRecentlyRedrawn(s.callsign, 400UL)) {
+    if (flightDetailRecentlyRedrawn(s.callsign, 400UL) ||
+        flightDetailRecentlyShowedRoute(s.callsign, 400UL)) {
       const bool index_changed = strcmp(s.index_line, s_snapshot.text.index_line) != 0;
       const bool alt_changed = strcmp(s.alt, s_snapshot.text.alt) != 0;
       const bool speed_changed = strcmp(s.speed, s_snapshot.text.speed) != 0;
@@ -1211,6 +1225,8 @@ void flightDetailReleaseSprite() {
   releaseDetailSprite();
 }
 
+bool flightDetailSpriteReady() { return s_detail_sprite_ready; }
+
 void flightDetailMarkEnrichRedrawn(const char* callsign) {
   if (callsign == nullptr || callsign[0] == '\0') {
     s_recent_enrich_redraw_callsign[0] = '\0';
@@ -1233,6 +1249,19 @@ bool flightDetailRecentlyRedrawn(const char* callsign, unsigned long window_ms) 
     return true;
   }
   return strcmp(callsign, s_recent_enrich_redraw_callsign) == 0;
+}
+
+bool flightDetailRecentlyShowedRoute(const char* callsign, unsigned long window_ms) {
+  if (s_last_draw_ms == 0 || s_last_draw_had_fetching) {
+    return false;
+  }
+  if (millis() - s_last_draw_ms >= window_ms) {
+    return false;
+  }
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return true;
+  }
+  return strcmp(callsign, s_last_draw_callsign) == 0;
 }
 
 }  // namespace ui

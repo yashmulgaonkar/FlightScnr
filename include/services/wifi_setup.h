@@ -7,3 +7,6 @@ void wifiResetCredentialsAndReboot();
 bool wifiSetupConnect();
 /** Reconnect using saved credentials (silent; does not open captive portal). */
 bool wifiReconnect();
+
+/** Disconnect and reconnect STA without erasing saved credentials (TLS recovery). */
+bool wifiSoftRecycle();

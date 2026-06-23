@@ -108,6 +108,8 @@ constexpr uint32_t kTlsRecoverFailStreak = 3;
 constexpr uint32_t kTlsRecoverStaleMs = 15000UL;
 /** Minimum time between proactive or reactive WiFi recycles (ms). */
 constexpr unsigned long kTlsRecoverCooldownMs = 90000UL;
+/** Shorter cooldown after mbedTLS memory allocation failures (ms). */
+constexpr unsigned long kTlsMemoryRecoverCooldownMs = 15000UL;
 
 /** ADS-B poll interval while TLS failures are stacking (ms). */
 constexpr unsigned long kAdsbFetchBackoffMs = 15000UL;
@@ -119,8 +121,10 @@ constexpr uint32_t kMinContiguousHeapForAdsbTls = 16384;
 
 /** Defer route API HTTPS if internal free heap is below this. */
 constexpr uint32_t kMinFreeHeapForRouteHttps = 24000;
-/** Route API TLS + JSON (detail screen shares heap with ADS-B TLS). */
-constexpr uint32_t kMinContiguousHeapForRouteTls = 20480;
+/** Route API TLS + JSON — same class as ADS-B; max_blk often ~19KB on detail screen. */
+constexpr uint32_t kMinContiguousHeapForRouteTls = 16384;
+/** Target max_blk before opening another TLS session (after prior session ends). */
+constexpr uint32_t kMinContiguousHeapForTlsReconnect = 40000;
 
 /** Route detail API connect/read timeout (ms). Keep short for fast scroll cancel. */
 constexpr uint32_t kDetailApiTimeoutMs = 4000;

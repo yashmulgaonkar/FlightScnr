@@ -646,6 +646,9 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
   http.setReuse(false);
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
+    if (code < 0) {
+      services::route::noteTlsMemoryFailure();
+    }
     if (code == HTTPC_ERROR_CONNECTION_REFUSED) {
       Serial.println("[adsb] HTTP -1 (TLS connect failed, see start_ssl_client above)");
     } else {
@@ -653,6 +656,7 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
     }
     http.end();
     client.stop();
+    services::https::drainTlsHeapAfterSession();
     return false;
   }
 
@@ -665,6 +669,7 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
   http.end();
   client.stop();
 
+  services::https::drainTlsHeapAfterSession();
   workerYield();
   if (!parseAircraftPayload(payload, out, out_count)) {
     if (config::kSerialTraceDebug) {

@@ -216,6 +216,11 @@ bool tlsBlocksPanel() {
   return services::adsb::fetchInProgress() || services::https::busy();
 }
 
+/** Flight detail draw uses RAM/sprite only — not the HTTPS lock. */
+bool detailDrawBlocked() {
+  return services::route::detailBlocksUiDraw();
+}
+
 
 void completeDeferredRadarDraw() {
   if (!g_radar_full_draw_pending || g_screen != AppScreen::Radar || !g_radar_visible) {
@@ -260,10 +265,10 @@ void showFlightDetail() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
-  if (tlsBlocksPanel() || services::route::detailBlocksUiDraw()) {
+  if (detailDrawBlocked()) {
     g_flight_detail_draw_pending = true;
     if (config::kSerialTraceDebug) {
-      Serial.println("[detail] defer draw (tls busy)");
+      Serial.println("[detail] defer draw (worker busy)");
     }
     g_radar_visible = false;
     return;
@@ -271,6 +276,9 @@ void showFlightDetail() {
   g_flight_detail_draw_pending = false;
   PanelSession panel(tft);
   ui::flightDetailDraw();
+  if (!ui::flightDetailSpriteReady()) {
+    g_flight_detail_draw_pending = true;
+  }
   g_radar_visible = false;
 }
 
@@ -304,16 +312,25 @@ void tickFlightDetailRouteEnrich() {
     services::route::onFlightDetailSelected(ui_callsign, false);
   }
 
-  if (services::route::detailEnrichmentReady() && services::route::detailEnrichmentConsume()) {
-    s_detail_enrich_in_flight = false;
-    if (config::kSerialTraceDebug) {
-      const char* cs = ui::flightDetailSelectedCallsign();
-      Serial.printf("[detail] enrich ready -> redraw %s\n",
-                    cs != nullptr ? cs : "(none)");
+  if (services::route::detailEnrichmentReady()) {
+    bool needs_redraw = true;
+    if (services::route::detailEnrichmentConsume(&needs_redraw)) {
+      s_detail_enrich_in_flight = false;
+      if (needs_redraw) {
+        if (config::kSerialTraceDebug) {
+          const char* cs = ui::flightDetailSelectedCallsign();
+          Serial.printf("[detail] enrich ready -> redraw %s\n",
+                        cs != nullptr ? cs : "(none)");
+        }
+        showFlightDetail();
+        ui::flightDetailMarkEnrichRedrawn(ui::flightDetailSelectedCallsign());
+      } else if (config::kSerialTraceDebug) {
+        const char* cs = ui::flightDetailSelectedCallsign();
+        Serial.printf("[detail] enrich skip redraw %s (already on screen)\n",
+                      cs != nullptr ? cs : "(none)");
+      }
+      return;
     }
-    showFlightDetail();
-    ui::flightDetailMarkEnrichRedrawn(ui::flightDetailSelectedCallsign());
-    return;
   }
 
   const char* callsign = ui::flightDetailSelectedCallsign();
@@ -698,6 +715,12 @@ void tickRadarAnimation() {
   ui::radarDisplayRefreshSweep();
 }
 
+bool canRecycleWifiForTlsMemory(unsigned long now) {
+  return WiFi.status() == WL_CONNECTED && !services::adsb::fetchInProgress() &&
+         !services::https::busy() &&
+         now - g_last_adsb_ssl_recover_ms >= config::kTlsMemoryRecoverCooldownMs;
+}
+
 bool canRecycleWifiForTls(unsigned long now) {
   return WiFi.status() == WL_CONNECTED && !services::adsb::fetchInProgress() &&
          !services::https::busy() &&
@@ -706,16 +729,20 @@ bool canRecycleWifiForTls(unsigned long now) {
 
 void recycleWifiForTls(unsigned long now, const char* reason) {
   releaseHttpsPressureMemory();
+  services::route::resetTlsHardFail();
   g_last_adsb_fetch_ms = 0;
   g_last_adsb_ssl_recover_ms = now;
   g_last_tls_proactive_refresh_ms = now;
-  g_last_adsb_fetch_ms = now;
   services::adsb::fetchResetFailStreak();
   Serial.printf("[adsb] %s — recycling WiFi\n", reason);
-  wifiReconnect();
+  wifiSoftRecycle();
 }
 
 void tryTlsWifiRefresh(unsigned long now) {
+  if (services::route::consumeTlsRecoverRequest() && canRecycleWifiForTlsMemory(now)) {
+    recycleWifiForTls(now, "TLS memory pressure");
+    return;
+  }
   if (!canRecycleWifiForTls(now)) {
     return;
   }
@@ -768,7 +795,7 @@ void tickAdsbFetch() {
       PanelSession panel(tft);
       ui::radarDisplayRefreshAircraft();
     } else if (on_detail) {
-      if (!tlsBlocksPanel() && !services::route::detailBlocksUiDraw()) {
+      if (!detailDrawBlocked()) {
         PanelSession panel(tft);
         ui::flightDetailRefresh();
       }
@@ -777,8 +804,7 @@ void tickAdsbFetch() {
 
   completeDeferredRadarDraw();
 
-  if (g_flight_detail_draw_pending && on_detail && !tlsBlocksPanel() &&
-      !services::route::detailBlocksUiDraw()) {
+  if (g_flight_detail_draw_pending && on_detail && !detailDrawBlocked()) {
     showFlightDetail();
   }
 
@@ -818,7 +844,7 @@ void tickAdsbFetch() {
       ui::flightDetailReleaseSprite();
     }
     static unsigned long s_last_heap_recover_ms = 0;
-    if ((on_radar || prefetch) && now - s_last_heap_recover_ms >= 10000UL) {
+    if ((on_radar || prefetch || on_detail) && now - s_last_heap_recover_ms >= 10000UL) {
       s_last_heap_recover_ms = now;
       releaseHttpsPressureMemory();
       if (config::kSerialTraceDebug) {

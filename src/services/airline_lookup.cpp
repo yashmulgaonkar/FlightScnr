@@ -169,6 +169,8 @@ bool isIataRadioCallsign(const char* cs) {
   return true;
 }
 
+}  // namespace
+
 bool isNNumber(const char* cs) {
   if (cs == nullptr || cs[0] != 'N') {
     return false;
@@ -181,8 +183,6 @@ bool isNNumber(const char* cs) {
   }
   return cs[1] != '\0';
 }
-
-}  // namespace
 
 bool lookupByCode(const char* code, char* out, size_t out_len) {
   if (out_len > 0) {
@@ -315,13 +315,16 @@ bool buildCallsignApiVariant(const char* callsign, char* out, size_t out_len) {
   while (rest[digit_len] != '\0' && isdigit(static_cast<unsigned char>(rest[digit_len]))) {
     ++digit_len;
   }
-  if (digit_len == 0) {
+  if (digit_len < 2) {
     return false;
   }
   if (rest[digit_len] == '\0') {
     return false;
   }
   if (!isalpha(static_cast<unsigned char>(rest[digit_len]))) {
+    return false;
+  }
+  if (rest[digit_len + 1] != '\0') {
     return false;
   }
   const int n = snprintf(out, out_len, "%.3s%.*s", normalized, static_cast<int>(digit_len), rest);

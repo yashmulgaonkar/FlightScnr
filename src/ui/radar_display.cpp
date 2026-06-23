@@ -1240,6 +1240,9 @@ void radarDisplayRefreshAircraft() {
   }
 
   hardware::gfxLogf("[radar] adsb dirty %dx%d @ (%d,%d)", dirty.w, dirty.h, dirty.x, dirty.y);
+  if (config::kSerialTraceDebug) {
+    Serial.printf("[radar] adsb dirty %dx%d @ (%d,%d)\n", dirty.w, dirty.h, dirty.x, dirty.y);
+  }
 
   if (!s_bg_ready) {
     rebuildBackgroundSprite();
@@ -1251,7 +1254,7 @@ void radarDisplayRefreshAircraft() {
   }
 
   patchContentLayer(dirty);
-  s_content.pushSprite(0, 0);
+  blitRegionFromContent(dirty, s_content.buffer(), s_content.width());
   tft.setTextDatum(TextDatum::TopLeft);
   s_sweep_track_valid = false;
   savePrevAircraftMarkers();

@@ -18,6 +18,9 @@ void resolveFromCallsign(const char* callsign, bool has_flight_field, char* out,
 bool resolveIcaoFromCallsign(const char* callsign, bool has_flight_field, char* out,
                              size_t out_len);
 
+/** True for US N-registration style callsigns (N123AB). */
+bool isNNumber(const char* callsign);
+
 /** Build IATA flight code (e.g. BAW5WB -> BA5WB) for AirLabs flight_iata queries. */
 bool buildFlightIataFromCallsign(const char* callsign, char* out, size_t out_len);
 

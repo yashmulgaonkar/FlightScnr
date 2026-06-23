@@ -46,8 +46,9 @@ void cancelDetailEnrichment();
 /** True when a background detail enrichment finished. */
 bool detailEnrichmentReady();
 
-/** Apply enrichment result to the aircraft list; returns true if UI should refresh. */
-bool detailEnrichmentConsume();
+/** Apply enrichment result to the aircraft list; returns true if consumed.
+ *  When needs_redraw is non-null, set false to skip a redundant full redraw. */
+bool detailEnrichmentConsume(bool* needs_redraw = nullptr);
 
 /** True when route detail worker is running or queued. */
 bool detailWorkerBusy();
@@ -69,6 +70,15 @@ bool liveRouteApiAvailable();
 
 /** True when live route enrichment is pending or running for this callsign. */
 bool detailEnrichmentInFlight(const char* callsign);
+
+/** Route worker saw a transient TLS/memory failure — request faster WiFi recycle. */
+void noteTlsMemoryFailure();
+
+/** True once after noteTlsMemoryFailure (cleared on read). */
+bool consumeTlsRecoverRequest();
+
+/** Clear latched route TLS failure state (e.g. after WiFi recycle). */
+void resetTlsHardFail();
 
 const char* sourceTag(ApiSource s);
 

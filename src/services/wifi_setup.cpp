@@ -20,7 +20,7 @@
 
 namespace {
 
-constexpr char kWifiPrefsNamespace[] = "wifi";
+constexpr char kWifiPrefsNamespace[] = "fs_wifi";
 constexpr char kPrefsForcePortalKey[] = "portal";
 
 /** Injected into every WiFiManager page via setCustomHeadElement. */
@@ -136,7 +136,8 @@ void prepareWifiForPortal() {
   MDNS.end();
 #endif
   WiFi.setAutoReconnect(false);
-  WiFi.disconnect(true, true);
+  // Second arg must be false: on ESP32 Arduino it clears STA credentials in NVS, not AP only.
+  WiFi.disconnect(true, false);
   WiFi.mode(WIFI_OFF);
   delay(200);
 }
@@ -148,7 +149,7 @@ void eraseWifiCredentials() {
   WiFiManager wm;
   wm.resetSettings();
   wm.erase();
-  WiFi.disconnect(true, true);
+  WiFi.disconnect(true, false);
   WiFi.persistent(false);
 
 #ifdef ESP32
@@ -346,6 +347,16 @@ bool wifiReconnect() {
 
   // Background retry only — do not open the captive portal or overwrite the UI.
   return connectSavedNetwork(false);
+}
+
+bool wifiSoftRecycle() {
+  settingsWebStop();
+#ifdef WM_MDNS
+  MDNS.end();
+#endif
+  WiFi.disconnect(false, false);
+  delay(200);
+  return wifiReconnect();
 }
 
 bool wifiSetupConnect() {
