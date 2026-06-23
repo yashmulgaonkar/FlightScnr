@@ -17,7 +17,6 @@
 #include <ctime>
 
 #include "config.h"
-#include "geo/flat_earth.h"
 #include "services/airline_lookup.h"
 #include "services/airport_lookup.h"
 #include "services/api_keys.h"
@@ -190,97 +189,6 @@ bool routeHasData(const RouteInfo& r) {
 
 bool routeEndpointsComplete(const RouteInfo& r) {
   return r.origin[0] != '\0' && r.dest[0] != '\0';
-}
-
-int findCache(const char* callsign);
-
-struct DetailPosition {
-  double lat = 0.0;
-  double lon = 0.0;
-  int alt_ft = 0;
-  bool valid = false;
-};
-
-DetailPosition loadDetailPosition(const char* callsign) {
-  DetailPosition pos;
-  services::adsb::Aircraft ac = {};
-  if (!services::adsb::copyAircraftByCallsign(callsign, &ac)) {
-    return pos;
-  }
-  pos.lat = static_cast<double>(ac.lat);
-  pos.lon = static_cast<double>(ac.lon);
-  pos.valid = true;
-  int ft = 0;
-  if (sscanf(ac.alt, "%d", &ft) == 1) {
-    pos.alt_ft = ft;
-  }
-  return pos;
-}
-
-float airportDistKm(const char* code, const DetailPosition& pos) {
-  float lat = 0.0f;
-  float lon = 0.0f;
-  if (!services::airport::lookupCoords(code, &lat, &lon)) {
-    return -1.0f;
-  }
-  float dist_km = 0.0f;
-  geo::localOffsetKm(pos.lat, pos.lon, lat, lon, nullptr, nullptr, &dist_km);
-  return dist_km;
-}
-
-float jsonAirportDistKm(const JsonObject& airport, const DetailPosition& pos) {
-  if (airport.isNull()) {
-    return -1.0f;
-  }
-  if (!airport["latitude"].is<double>() && !airport["latitude"].is<float>() &&
-      !airport["latitude"].is<int>()) {
-    return -1.0f;
-  }
-  const float lat = airport["latitude"].as<float>();
-  const float lon = airport["longitude"].as<float>();
-  float dist_km = 0.0f;
-  geo::localOffsetKm(pos.lat, pos.lon, lat, lon, nullptr, nullptr, &dist_km);
-  return dist_km;
-}
-
-bool routePlausibleForPosition(const RouteInfo& route, const DetailPosition& pos) {
-  if (!pos.valid || !routeEndpointsComplete(route)) {
-    return true;
-  }
-
-  const float orig_km = airportDistKm(route.origin, pos);
-  const float dest_km = airportDistKm(route.dest, pos);
-  if (orig_km < 0.0f || dest_km < 0.0f) {
-    return true;
-  }
-
-  constexpr float kNearKm = 75.0f;
-  constexpr float kLongLegKm = 250.0f;
-  constexpr int kCruiseFt = 8000;
-
-  const bool near_orig = orig_km < kNearKm;
-  const bool near_dest = dest_km < kNearKm;
-
-  if (near_dest) {
-    return true;
-  }
-  if (near_orig && dest_km > kLongLegKm && pos.alt_ft > kCruiseFt) {
-    return false;
-  }
-  if (!near_orig && !near_dest && orig_km + 50.0f < dest_km) {
-    return false;
-  }
-  return true;
-}
-
-void rejectCacheRam(const char* callsign) {
-  const int idx = findCache(callsign);
-  if (idx < 0) {
-    return;
-  }
-  routeClear(&s_cache[idx].route);
-  s_cache[idx].api_done = false;
-  s_cache[idx].source = ApiSource::kNone;
 }
 
 bool slotNeedsApiRouteUpgrade(const CacheSlot& slot) {
@@ -780,65 +688,29 @@ bool lookupAirLabsFirstKey(const char* callsign, RouteInfo* route) {
   return false;
 }
 
-bool pickFlightAwareFlight(JsonArray flights, JsonObject* chosen, const DetailPosition& pos) {
-  float best_score = -1.0f;
-  JsonObject best_flight;
-
+bool pickFlightAwareFlight(JsonArray flights, JsonObject* chosen) {
   for (JsonObject f : flights) {
-    if (f["origin"].isNull() || f["destination"].isNull()) {
-      continue;
-    }
-
-    RouteInfo candidate;
-    routeClear(&candidate);
-    JsonObject origin = f["origin"].as<JsonObject>();
-    JsonObject dest = f["destination"].as<JsonObject>();
-    copyRouteIcao(origin["code_icao"].as<const char*>(), candidate.origin,
-                    sizeof(candidate.origin));
-    if (candidate.origin[0] == '\0') {
-      copyRouteIcao(origin["code_iata"].as<const char*>(), candidate.origin,
-                      sizeof(candidate.origin));
-    }
-    copyRouteIcao(dest["code_icao"].as<const char*>(), candidate.dest, sizeof(candidate.dest));
-    if (candidate.dest[0] == '\0') {
-      copyRouteIcao(dest["code_iata"].as<const char*>(), candidate.dest, sizeof(candidate.dest));
-    }
-    if (!routeEndpointsComplete(candidate)) {
-      continue;
-    }
-    if (!routePlausibleForPosition(candidate, pos)) {
-      continue;
-    }
-
-    float score = 0.0f;
     const char* status = f["status"].as<const char*>();
-    if (status != nullptr && strcmp(status, "En Route") == 0) {
-      score += 50.0f;
-    }
-    const float dest_km = jsonAirportDistKm(dest, pos);
-    const float orig_km = jsonAirportDistKm(origin, pos);
-    if (dest_km >= 0.0f) {
-      score += fmaxf(0.0f, 120.0f - dest_km);
-    }
-    if (orig_km >= 0.0f) {
-      score -= fmaxf(0.0f, 80.0f - orig_km) * 0.5f;
-    }
-
-    if (score > best_score) {
-      best_score = score;
-      best_flight = f;
+    if (status != nullptr && strcmp(status, "En Route") == 0 && !f["origin"].isNull() &&
+        !f["destination"].isNull()) {
+      *chosen = f;
+      return true;
     }
   }
-
-  if (best_score < 0.0f) {
-    return false;
+  for (JsonObject f : flights) {
+    if (!f["origin"].isNull() && !f["destination"].isNull()) {
+      *chosen = f;
+      return true;
+    }
   }
-  *chosen = best_flight;
-  return true;
+  if (!flights.isNull() && flights.size() > 0) {
+    *chosen = flights[0].as<JsonObject>();
+    return true;
+  }
+  return false;
 }
 
-bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char* api_key,
-                              const DetailPosition& pos) {
+bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char* api_key) {
   if (api_key == nullptr || api_key[0] == '\0' || route == nullptr) {
     return false;
   }
@@ -860,7 +732,7 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
   }
 
   JsonObject flight;
-  if (!pickFlightAwareFlight(flights, &flight, pos)) {
+  if (!pickFlightAwareFlight(flights, &flight)) {
     return false;
   }
 
@@ -900,8 +772,7 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
   return routeHasData(*route);
 }
 
-bool lookupFlightAwareFirstKey(const char* callsign, RouteInfo* route,
-                               const DetailPosition& pos) {
+bool lookupFlightAwareFirstKey(const char* callsign, RouteInfo* route) {
   if (!apikeys::useFlightAware() || !apikeys::hasFlightAware() || route == nullptr) {
     return false;
   }
@@ -913,8 +784,7 @@ bool lookupFlightAwareFirstKey(const char* callsign, RouteInfo* route,
     if (!apikeys::canUseFlightAwareAt(i)) {
       continue;
     }
-    const bool ok =
-        lookupFlightAwareWithKey(callsign, route, apikeys::flightAwareKeyAt(i), pos);
+    const bool ok = lookupFlightAwareWithKey(callsign, route, apikeys::flightAwareKeyAt(i));
     apikeys::recordFlightAwareCallAt(i);
     return ok;
   }
@@ -1066,12 +936,6 @@ bool isCurrentDetailSelection(const char* callsign) {
          strcmp(callsign, s_detail_selection_callsign) == 0;
 }
 
-void signalDetailReadyIfSelected(const char* callsign) {
-  if (isCurrentDetailSelection(callsign)) {
-    s_detail_ready = true;
-  }
-}
-
 void clearDetailDebounce() {
   s_detail_debounce_pending = false;
   s_detail_debounce_deadline_ms = 0;
@@ -1097,11 +961,6 @@ bool tryDetailCacheOnly(const char* callsign) {
   routeClear(&cached);
   ApiSource cached_src = ApiSource::kNone;
   const bool cache_complete = cacheResolveRam(callsign, &cached, &cached_src);
-  const DetailPosition pos = loadDetailPosition(callsign);
-  if (routeHasData(cached) && !routePlausibleForPosition(cached, pos)) {
-    rejectCacheRam(callsign);
-    return false;
-  }
   if (routeHasData(cached)) {
     applyRouteToCallsign(callsign, cached);
   }
@@ -1236,17 +1095,7 @@ void detailWorkerRunStep() {
       RouteInfo cached;
       routeClear(&cached);
       ApiSource cached_src = ApiSource::kNone;
-      const DetailPosition pos = loadDetailPosition(callsign);
-      bool cache_complete = cacheResolveRam(callsign, &cached, &cached_src);
-      if (routeHasData(cached) && !routePlausibleForPosition(cached, pos)) {
-        if (config::kSerialTraceDebug) {
-          Serial.printf("[route] %s cache position reject %s→%s\n", callsign, cached.origin,
-                        cached.dest);
-        }
-        rejectCacheRam(callsign);
-        routeClear(&cached);
-        cache_complete = false;
-      }
+      const bool cache_complete = cacheResolveRam(callsign, &cached, &cached_src);
       if (routeHasData(cached)) {
         s_detail_result = cached;
         s_detail_result_src = cached_src;
@@ -1269,25 +1118,18 @@ void detailWorkerRunStep() {
       RouteInfo live;
       routeClear(&live);
       bool ok = false;
-      const DetailPosition pos = loadDetailPosition(callsign);
       if (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs() &&
           lookupAirLabsFirstKey(callsign, &live)) {
-        if (routePlausibleForPosition(live, pos)) {
-          s_detail_result = live;
-          s_detail_result_src = ApiSource::kAirLabs;
-          storeCache(callsign, live, ApiSource::kAirLabs, true);
-          applyRouteToCallsign(callsign, live);
-          if (isCurrentDetailSelection(callsign)) {
-            logRouteLine(callsign, live, "AL");
-          }
-          ok = true;
-          s_detail_step = DetailStep::kDone;
-        } else if (config::kSerialTraceDebug) {
-          Serial.printf("[route] %s AL position reject %s→%s\n", callsign, live.origin,
-                        live.dest);
+        s_detail_result = live;
+        s_detail_result_src = ApiSource::kAirLabs;
+        storeCache(callsign, live, ApiSource::kAirLabs, true);
+        applyRouteToCallsign(callsign, live);
+        if (isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, live, "AL");
         }
-      }
-      if (!ok) {
+        ok = true;
+        s_detail_step = DetailStep::kDone;
+      } else {
         s_detail_step = nextApiStepAfter(DetailStep::kAirLabs);
       }
       logDetailStepEnd(DetailStep::kAirLabs, callsign, ok);
@@ -1298,9 +1140,8 @@ void detailWorkerRunStep() {
       RouteInfo live;
       routeClear(&live);
       bool ok = false;
-      const DetailPosition pos = loadDetailPosition(callsign);
       if (apikeys::useFlightAware() && apikeys::hasFlightAware() &&
-          apikeys::canUseFlightAware() && lookupFlightAwareFirstKey(callsign, &live, pos)) {
+          apikeys::canUseFlightAware() && lookupFlightAwareFirstKey(callsign, &live)) {
         s_detail_result = live;
         s_detail_result_src = ApiSource::kFlightAware;
         storeCache(callsign, live, ApiSource::kFlightAware, true);

@@ -35,7 +35,7 @@ Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licen
 - **Clock:** swipe down from radar for large local time (NTP). Swipe left for UTC offset and 12h/24h format.
 - **Web settings:** on your local network at [http://flightscnr.local/](http://flightscnr.local/) (or device IP) for radar center, filters, route API keys, monthly limits, and route-cache download
 - **Setup portal:** captive portal on first boot or after knob reset. Wi‑Fi network and password only at [http://4.3.2.1](http://4.3.2.1). Other settings use the live web portal after connecting.
-- **Airline & route:** optional API sources to fetch flight details. When FlightAware is enabled it is tried first (**FlightAware → AirLabs → FR24**); otherwise **AirLabs → FR24**. One live provider call per cache miss (first detail open for a callsign), then RAM/flash cache. Routes are checked against the aircraft’s position to reject stale legs.
+- **Airline & route:** optional API sources to fetch flight details. When FlightAware is enabled it is tried first (**FlightAware → AirLabs → FR24**); otherwise **AirLabs → FR24**. One live provider call per cache miss (first detail open for a callsign), then RAM/flash cache.
 - **Background ADS-B:** non-blocking fetch on a FreeRTOS task (~**2 s** via [adsb.fi](https://adsb.fi))
 - **Auto reconnect:** STA retries after a short grace period if network drops
 

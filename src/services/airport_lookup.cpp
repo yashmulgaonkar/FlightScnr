@@ -165,30 +165,6 @@ bool lookupNameByIcao(const char* icao, char* out, size_t out_len) {
   return out[0] != '\0';
 }
 
-bool lookupCoordsByIcao(const char* icao, float* lat_deg, float* lon_deg) {
-  if (icao == nullptr || icao[3] == '\0') {
-    return false;
-  }
-
-  size_t index = 0;
-  if (!findIcaoIndex(icao, &index)) {
-    return false;
-  }
-
-  data::airports::Entry entry;
-  readEntryAt(index, &entry);
-  if (entry.lat_centi == 0 && entry.lon_centi == 0) {
-    return false;
-  }
-  if (lat_deg != nullptr) {
-    *lat_deg = static_cast<float>(entry.lat_centi) / 100.0f;
-  }
-  if (lon_deg != nullptr) {
-    *lon_deg = static_cast<float>(entry.lon_centi) / 100.0f;
-  }
-  return true;
-}
-
 }  // namespace
 
 bool lookupName(const char* code, char* out, size_t out_len) {
@@ -215,14 +191,6 @@ bool normalizeRouteCode(const char* code, char* icao_out, size_t icao_len) {
   strncpy(icao_out, resolved, icao_len - 1);
   icao_out[icao_len - 1] = '\0';
   return icao_out[0] != '\0';
-}
-
-bool lookupCoords(const char* code, float* lat_deg, float* lon_deg) {
-  char icao[5];
-  if (!resolveToIcao(code, icao)) {
-    return false;
-  }
-  return lookupCoordsByIcao(icao, lat_deg, lon_deg);
 }
 
 }  // namespace services::airport
