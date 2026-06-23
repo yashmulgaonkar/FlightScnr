@@ -7,7 +7,8 @@
  * Returns false if coordinates invalid.
  */
 bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
-                           const char* lon_str, const char* miles_checkbox,
+                           const char* lon_str, const char* dist_unit_str,
+                           const char* legacy_miles_checkbox,
                            const char* cardinals_checkbox,
                            const char* min_height_str, const char* range_index_str,
                            const char* airlabs_key, const char* flightaware_key,

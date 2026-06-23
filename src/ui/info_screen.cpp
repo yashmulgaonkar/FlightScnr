@@ -151,8 +151,7 @@ void buildDisplayStrings(char* bright_line, size_t bright_len, char* units_line,
                          char* beep_tone_line, size_t beep_tone_len) {
   snprintf(bright_line, bright_len, "Brightness: %u%%",
            static_cast<unsigned>(hardware::displayBrightnessPercent()));
-  snprintf(units_line, units_len, "Units: %s",
-           ui::radar::distanceInMiles() ? "miles" : "km");
+  snprintf(units_line, units_len, "Units: %s", ui::radar::distanceUnitLabel());
   snprintf(compass_line, compass_len, "Compass Rose: %s",
            ui::radar::showCompassRose() ? "on" : "off");
   snprintf(sweep_line, sweep_len, "Radar Sweep: %s",
@@ -415,7 +414,7 @@ void infoScreenHandleKnob(int8_t delta) {
       hardware::displayBrightnessStep(delta);
       break;
     case DisplayAdjustRow::Units:
-      ui::radar::toggleDistanceUnits();
+      ui::radar::cycleDistanceUnits();
       break;
     case DisplayAdjustRow::Compass:
       ui::radar::toggleCompassRose();

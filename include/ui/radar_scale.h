@@ -13,6 +13,12 @@ struct ScaleBand {
 
 constexpr float kLabelToCoverageKm = 4.0f / 3.0f;
 constexpr float kStatuteMileKm = 1.609344f;
+constexpr float kNauticalMileKm = 1.852f;
+constexpr float kKnotsToKmh = kNauticalMileKm;
+constexpr float kKnotsToMph = 1.15077945f;
+constexpr float kFeetToMeters = 0.3048f;
+
+enum class DistanceUnit : uint8_t { Km = 0, StatuteMile = 1, NauticalMile = 2 };
 
 constexpr ScaleBand kScaleBands[] = {
     {2.0f * kStatuteMileKm, 2.0f * kStatuteMileKm * kLabelToCoverageKm},
@@ -33,15 +39,18 @@ uint8_t scaleActiveIndex();
 /** ADS-B query radius (km) scaled to screen edge for rim targets. */
 float adsbQueryRadiusKm();
 
-bool distanceInMiles();
-void toggleDistanceUnits();
-void saveDistanceUnitsFromForm(const char* checkbox_value);
+DistanceUnit distanceUnit();
+const char* distanceUnitLabel();
+void cycleDistanceUnits();
+void saveDistanceUnitsFromForm(const char* unit_value, const char* legacy_miles_checkbox);
 
 bool showCompassRose();
 void toggleCompassRose();
 void saveCompassRoseFromForm(const char* checkbox_value);
 
-void formatScaleTag(char* buf, size_t len, float label_km, bool use_miles);
+void formatScaleTag(char* buf, size_t len, float label_km, DistanceUnit unit);
 void formatActiveScaleTag(char* buf, size_t len);
+void formatAltitudeDisplay(const char* alt_ft_tag, char* out, size_t out_len);
+void formatSpeedLabel(char* out, size_t out_len, float gs_knots);
 
 }  // namespace ui::radar

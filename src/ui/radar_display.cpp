@@ -110,8 +110,10 @@ void initLabelMetrics() {
       const float ring_km = radar::kScaleBands[i].label_km *
                             static_cast<float>(ring) /
                             static_cast<float>(radar::kRingCount);
-      for (bool miles : {false, true}) {
-        radar::formatScaleTag(label, sizeof(label), ring_km, miles);
+      for (int unit = 0; unit <= static_cast<int>(radar::DistanceUnit::NauticalMile);
+           ++unit) {
+        radar::formatScaleTag(label, sizeof(label), ring_km,
+                              static_cast<radar::DistanceUnit>(unit));
         const int w = tft.textWidth(label);
         if (w > s_scale_label_max_w) {
           s_scale_label_max_w = w;
@@ -228,7 +230,9 @@ int measureTagBlockWidth(const services::adsb::Aircraft& plane) {
     max_w = std::max(max_w, s_draw->textWidth(type_label));
   }
   if (plane.alt[0] != '\0') {
-    max_w = std::max(max_w, s_draw->textWidth(plane.alt));
+    char alt_display[20];
+    radar::formatAltitudeDisplay(plane.alt, alt_display, sizeof(alt_display));
+    max_w = std::max(max_w, s_draw->textWidth(alt_display));
   }
   return max_w;
 }
@@ -271,8 +275,10 @@ void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
   ly += line_h;
 
   if (plane.alt[0] != '\0') {
+    char alt_display[20];
+    radar::formatAltitudeDisplay(plane.alt, alt_display, sizeof(alt_display));
     s_draw->setTextColor(altitudeTagColor(plane), radar::kColorBackground);
-    s_draw->drawString(plane.alt, anchor_x, ly);
+    s_draw->drawString(alt_display, anchor_x, ly);
   }
 }
 
@@ -535,7 +541,7 @@ void scaleLabelAnchorOnRing(int cx, int cy, int ring_radius, int gap_px, int* x,
 
 void drawRingScaleLabels(int cx, int cy, int outer_radius) {
   const float label_km = radar::scaleActive().label_km;
-  const bool use_miles = radar::distanceInMiles();
+  const radar::DistanceUnit unit = radar::distanceUnit();
 
   for (int ring = radar::kRingCount; ring >= 1; --ring) {
     const int ring_radius = (outer_radius * ring) / radar::kRingCount;
@@ -543,10 +549,10 @@ void drawRingScaleLabels(int cx, int cy, int outer_radius) {
         label_km * static_cast<float>(ring) / static_cast<float>(radar::kRingCount);
 
     char scale_label[12];
-    radar::formatScaleTag(scale_label, sizeof(scale_label), ring_km, use_miles);
+    radar::formatScaleTag(scale_label, sizeof(scale_label), ring_km, unit);
 
     int gap_px = radar::kScaleGapFromOuterRing;
-    if (ring == radar::kRingCount && !use_miles) {
+    if (ring == radar::kRingCount && unit == radar::DistanceUnit::Km) {
       gap_px = radar::kScaleGapOuterRingKm;
     }
 

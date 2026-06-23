@@ -27,7 +27,7 @@ Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licen
 
 - **Sweeping radar:** concentric range rings, compass rose, radar sweep line, top-down **aircraft pips** (heading-aligned), and callsign / type / altitude tags
 - **Display range:** 2 / 4 / 6 / 8 mi on the outermost ring. Inner rings show 1/3 and 2/3 of that scale. Knob changes preset.
-- **Distance units:** statute miles or kilometers on ring labels and detail readouts
+- **Distance units:** kilometers, statute miles, or nautical miles on ring labels, aircraft tags, and flight detail (speed and altitude)
 - **Radar theme color:** Red, Yellow, Orange, Green, or White for crosshairs, compass rose, scale labels, and sweep line
 - **Beyond-ring pips:** aircraft outside the active range still appear on the rim
 - **Flight detail:** tap a blip or short press the knob for callsign, airline, route, ICAO type, altitude, and speed. Turn the knob to cycle through visible aircraft.
@@ -70,7 +70,7 @@ Range, distance units, brightness, radar theme color, clock timezone/format, and
 
 ### Change settings later (without clearing Wi‑Fi settings)
 
-On the local network, open [http://flightscnr.local/](http://flightscnr.local/) or `http://<device-ip>/`. Edit radar center, miles/km, min altitude, range preset, and route API keys/limits, then **Save & reboot**.
+On the local network, open [http://flightscnr.local/](http://flightscnr.local/) or `http://<device-ip>/`. Edit radar center, distance units (km / mi / nm), min altitude, range preset, and route API keys/limits, then **Save & reboot**.
 
 The on-device settings page 1 shows **flightscnr.local** and the device IP address when Wi‑Fi is connected.
 
@@ -91,7 +91,7 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 ### Settings (1/3, 2/3, and 3/3)
 
 - **Page 1:** IP, Wi‑Fi SSID, lat/lon, min altitude, web hostname
-- **Page 2:** brightness, miles/km, compass rose on/off (knob press cycles highlighted row; turn adjusts value)
+- **Page 2:** brightness, distance units (km / miles / nm), compass rose on/off (knob press cycles highlighted row; turn adjusts value)
 - **Page 3:** radar theme color - Red, Yellow, Orange, Green, or White (turn knob to cycle). Applies to range rings, crosshairs, compass rose, scale labels, and sweep line.
 - Footer: gesture guide
 

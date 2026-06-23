@@ -158,13 +158,20 @@ void handleSettingsPage() {
     used += static_cast<size_t>(center_n);
   }
 
-  const int miles_n = snprintf(
+  const ui::radar::DistanceUnit unit = ui::radar::distanceUnit();
+  const int units_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"use_miles\" name=\"use_miles\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"use_miles\">Display distances in miles</label></div>",
-      ui::radar::distanceInMiles() ? " checked" : "");
-  if (miles_n > 0) {
-    used += static_cast<size_t>(miles_n);
+      "<label for=\"dist_unit\">Distance units</label>"
+      "<select id=\"dist_unit\" name=\"dist_unit\">"
+      "<option value=\"km\"%s>kilometers</option>"
+      "<option value=\"mi\"%s>statute miles</option>"
+      "<option value=\"nm\"%s>nautical miles</option>"
+      "</select>",
+      unit == ui::radar::DistanceUnit::Km ? " selected" : "",
+      unit == ui::radar::DistanceUnit::StatuteMile ? " selected" : "",
+      unit == ui::radar::DistanceUnit::NauticalMile ? " selected" : "");
+  if (units_n > 0) {
+    used += static_cast<size_t>(units_n);
   }
 
   const int card_n = snprintf(
@@ -446,7 +453,8 @@ void handleSave() {
 
   const bool loc_ok = settingsApplyFromForm(
       s_server->arg("radar_center").c_str(), nullptr, nullptr,
-      s_server->arg("use_miles").c_str(), s_server->arg("show_cardinals").c_str(),
+      s_server->arg("dist_unit").c_str(), s_server->arg("use_miles").c_str(),
+      s_server->arg("show_cardinals").c_str(),
       s_server->arg("min_height").c_str(),
       s_server->arg("range_idx").c_str(), s_server->arg("airlabs_key").c_str(),
       s_server->arg("flightaware_key").c_str(), s_server->arg("fr24_key").c_str(),

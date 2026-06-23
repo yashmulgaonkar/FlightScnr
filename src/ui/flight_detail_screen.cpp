@@ -484,8 +484,10 @@ void drawRouteLabels(const char* origin, const char* dest, int* y, uint16_t fg, 
 }
 
 void formatAltLine(const services::adsb::Aircraft& ac, char* out, size_t out_len) {
-  if (ac.alt[0] != '\0') {
-    snprintf(out, out_len, "Alt: %s", ac.alt);
+  char alt_display[20];
+  radar::formatAltitudeDisplay(ac.alt, alt_display, sizeof(alt_display));
+  if (alt_display[0] != '\0') {
+    snprintf(out, out_len, "Alt: %s", alt_display);
   } else {
     strncpy(out, "Alt: —", out_len - 1);
     out[out_len - 1] = '\0';
@@ -493,12 +495,7 @@ void formatAltLine(const services::adsb::Aircraft& ac, char* out, size_t out_len
 }
 
 void formatSpeedLine(const services::adsb::Aircraft& ac, char* out, size_t out_len) {
-  if (ac.gs_knots > 0.5f) {
-    snprintf(out, out_len, "Speed: %d kt", static_cast<int>(lroundf(ac.gs_knots)));
-  } else {
-    strncpy(out, "Speed: —", out_len - 1);
-    out[out_len - 1] = '\0';
-  }
+  radar::formatSpeedLabel(out, out_len, ac.gs_knots);
 }
 
 void formatTypeLine(const services::adsb::Aircraft& ac, char* out, size_t out_len) {
@@ -522,8 +519,8 @@ struct FlightDetailStrings {
   char route_origin[kRouteLabelLen + 1];
   char route_dest[kRouteLabelLen + 1];
   char type[data::icao_types::kMaxNameLen + 1];
-  char alt[20];
-  char speed[20];
+  char alt[28];
+  char speed[24];
   char index_line[16];
 };
 
