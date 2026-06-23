@@ -12,6 +12,7 @@
 #include "hardware/display_brightness.h"
 #include "hardware/display_font.h"
 #include "services/adsb_client.h"
+#include "services/api_keys.h"
 #include "services/map_center.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
@@ -25,6 +26,7 @@ constexpr int kTextPadPx = 6;
 constexpr int kTitleGap = 6;
 constexpr int kLineGap = 4;
 constexpr int kFooterGap = 8;
+constexpr int kSectionGap = 6;
 /** Space between main content and help hints. */
 constexpr int kHintsTopGap = 22;
 
@@ -116,6 +118,32 @@ int measureBlockHeight(const InfoLine* lines, size_t count) {
   return total;
 }
 
+void formatRouteApiLine(const char* name, bool enabled, bool has_key, bool can_use,
+                        char* out, size_t out_len) {
+  if (!enabled) {
+    snprintf(out, out_len, "%s: off", name);
+  } else if (!has_key) {
+    snprintf(out, out_len, "%s: no key", name);
+  } else if (!can_use) {
+    snprintf(out, out_len, "%s: limit", name);
+  } else {
+    snprintf(out, out_len, "%s: active", name);
+  }
+}
+
+void buildApiStatusStrings(char* airlabs_line, size_t airlabs_len, char* fa_line,
+                           size_t fa_len, char* fr24_line, size_t fr24_len) {
+  services::apikeys::load();
+  formatRouteApiLine("AirLabs", services::apikeys::useAirLabs(),
+                     services::apikeys::hasAirLabs(), services::apikeys::canUseAirLabs(),
+                     airlabs_line, airlabs_len);
+  formatRouteApiLine("FlightAware", services::apikeys::useFlightAware(),
+                     services::apikeys::hasFlightAware(),
+                     services::apikeys::canUseFlightAware(), fa_line, fa_len);
+  formatRouteApiLine("FR24", services::apikeys::useFr24(), services::apikeys::hasFr24(),
+                     services::apikeys::canUseFr24(), fr24_line, fr24_len);
+}
+
 void buildMainStrings(char* ip_line, size_t ip_len, char* wifi_line, size_t wifi_len,
                       char* lat_line, size_t lat_len, char* lon_line, size_t lon_len,
                       char* alt_line, size_t alt_len, char* web_line, size_t web_len) {
@@ -171,10 +199,15 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
   char lon_line[24];
   char alt_line[24];
   char web_line[36];
+  char airlabs_line[24];
+  char fa_line[28];
+  char fr24_line[20];
 
   buildMainStrings(ip_line, sizeof(ip_line), wifi_line, sizeof(wifi_line), lat_line,
                    sizeof(lat_line), lon_line, sizeof(lon_line), alt_line,
                    sizeof(alt_line), web_line, sizeof(web_line));
+  buildApiStatusStrings(airlabs_line, sizeof(airlabs_line), fa_line, sizeof(fa_line),
+                        fr24_line, sizeof(fr24_line));
 
   const int title_h = displayFontHeight(tft, displayFontTitle());
   const InfoLine main_lines[] = {
@@ -185,13 +218,21 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
       {alt_line, displayFontDetail(), label_fg},
       {web_line, displayFontDetail(), hint_fg},
   };
+  const InfoLine api_lines[] = {
+      {"Route APIs", displayFontDetail(), hint_fg},
+      {airlabs_line, displayFontDetail(), label_fg},
+      {fa_line, displayFontDetail(), label_fg},
+      {fr24_line, displayFontDetail(), label_fg},
+  };
   const InfoLine hint_lines[] = {
       {"Swipe left — Display", displayFontDetail(), hint_fg},
       {"Swipe right — Radar", displayFontDetail(), hint_fg},
   };
   const int main_h = measureBlockHeight(main_lines, sizeof(main_lines) / sizeof(main_lines[0]));
+  const int api_h = measureBlockHeight(api_lines, sizeof(api_lines) / sizeof(api_lines[0]));
   const int hints_h = measureBlockHeight(hint_lines, sizeof(hint_lines) / sizeof(hint_lines[0]));
-  const int block_h = title_h + kTitleGap + main_h + kHintsTopGap + hints_h + kFooterGap;
+  const int block_h = title_h + kTitleGap + main_h + kSectionGap + api_h + kHintsTopGap +
+                      hints_h + kFooterGap;
 
   int y = kCenterY - block_h / 2;
   if (y < kBezelInsetPx) {
@@ -207,6 +248,27 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
   for (const InfoLine& line : main_lines) {
     drawCenterLine(line.text, &y, line.style, line.color, bg);
   }
+
+  y += kSectionGap;
+
+  auto api_color = [&](bool enabled, bool has_key, bool can_use) -> uint16_t {
+    return (enabled && has_key && can_use) ? fg : label_fg;
+  };
+
+  drawCenterLine("Route APIs", &y, displayFontDetail(), hint_fg, bg);
+  drawCenterLine(airlabs_line, &y, displayFontDetail(),
+                 api_color(services::apikeys::useAirLabs(), services::apikeys::hasAirLabs(),
+                           services::apikeys::canUseAirLabs()),
+                 bg);
+  drawCenterLine(fa_line, &y, displayFontDetail(),
+                 api_color(services::apikeys::useFlightAware(),
+                           services::apikeys::hasFlightAware(),
+                           services::apikeys::canUseFlightAware()),
+                 bg);
+  drawCenterLine(fr24_line, &y, displayFontDetail(),
+                 api_color(services::apikeys::useFr24(), services::apikeys::hasFr24(),
+                           services::apikeys::canUseFr24()),
+                 bg);
 
   y += kHintsTopGap;
 
