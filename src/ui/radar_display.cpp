@@ -641,6 +641,15 @@ IntRect s_prev_sweep_dirty;
 
 bool rectEmpty(const IntRect& r) { return r.w <= 0 || r.h <= 0; }
 
+bool rectsOverlap(const IntRect& a, const IntRect& b) {
+  if (rectEmpty(a) || rectEmpty(b)) {
+    return false;
+  }
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+void drawAircraftInRect(const IntRect& dirty);
+
 IntRect rectFromPoints(int x0, int y0, int x1, int y1, int margin) {
   IntRect r;
   r.x = std::min(x0, x1) - margin;
@@ -728,7 +737,7 @@ void patchContentLayer(const IntRect& dirty) {
   copyBgRegionToContent(dirty);
   {
     const DrawScope scope(s_content.gfx());
-    drawAircraft();
+    drawAircraftInRect(dirty);
   }
 }
 
@@ -893,6 +902,86 @@ IntRect markerBounds(const CachedAircraftMarker& marker) {
                                      dot_r * 2 + 1));
   }
   return aircraftMarkerBounds(marker.x, marker.y, marker.plane);
+}
+
+void drawAircraftInRect(const IntRect& dirty) {
+  if (rectEmpty(dirty)) {
+    return;
+  }
+  const IntRect clip = clampRectToScreen(dirty);
+
+  initLabelMetrics();
+
+  const size_t n = services::adsb::aircraftCount();
+  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
+
+  AircraftDrawItem items[services::adsb::kMaxAircraft];
+  BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
+  size_t draw_count = 0;
+  size_t dot_count = 0;
+
+  for (size_t i = 0; i < n; ++i) {
+    float dx_km = 0.0f;
+    float dy_km = 0.0f;
+    float dist_km = 0.0f;
+    localOffsetFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
+
+    if (isInsideOuterRingKm(dist_km)) {
+      int x = 0;
+      int y = 0;
+      latLonToScreen(planes[i].lat, planes[i].lon, &x, &y);
+      CachedAircraftMarker marker;
+      marker.plane = planes[i];
+      marker.x = x;
+      marker.y = y;
+      marker.beyond_dot = false;
+      if (!rectsOverlap(clip, markerBounds(marker))) {
+        continue;
+      }
+      items[draw_count].index = i;
+      items[draw_count].x = x;
+      items[draw_count].y = y;
+      items[draw_count].dist_sq = distSqFromCenter(x, y);
+      ++draw_count;
+      continue;
+    }
+
+    int dot_x = 0;
+    int dot_y = 0;
+    if (!beyondRingEdgeDotFromLatLon(planes[i].lat, planes[i].lon, &dot_x, &dot_y)) {
+      continue;
+    }
+    CachedAircraftMarker marker;
+    marker.plane = planes[i];
+    marker.x = dot_x;
+    marker.y = dot_y;
+    marker.beyond_dot = true;
+    if (!rectsOverlap(clip, markerBounds(marker))) {
+      continue;
+    }
+    dots[dot_count].index = i;
+    dots[dot_count].x = dot_x;
+    dots[dot_count].y = dot_y;
+    dots[dot_count].dist_sq = distSqFromCenter(dot_x, dot_y);
+    ++dot_count;
+  }
+
+  sortBeyondDotsFarFirst(dots, dot_count);
+  for (size_t d = 0; d < dot_count; ++d) {
+    const size_t i = dots[d].index;
+    drawBeyondRingMarker(dots[d].x, dots[d].y, planes[i].track_deg);
+  }
+
+  sortDrawItemsFarFirst(items, draw_count);
+  for (size_t d = 0; d < draw_count; ++d) {
+    const size_t i = items[d].index;
+    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, planes[i].track_deg,
+                          radar::kColorAircraft);
+  }
+  for (size_t d = 0; d < draw_count; ++d) {
+    const size_t i = items[d].index;
+    drawAircraftTag(items[d].x, items[d].y, planes[i]);
+  }
 }
 
 bool aircraftIdentityMatch(const services::adsb::Aircraft& a,

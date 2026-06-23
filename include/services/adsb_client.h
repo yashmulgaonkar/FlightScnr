@@ -36,6 +36,9 @@ size_t copyAircraftSnapshot(Aircraft* dst, size_t max_count);
 /** Copy one list slot under mutex; returns false if index out of range. */
 bool copyAircraftAt(size_t index, Aircraft* dst);
 
+/** Copy live aircraft by callsign under mutex. */
+bool copyAircraftByCallsign(const char* callsign, Aircraft* dst);
+
 /** Start background fetch worker (call once after WiFi is available). */
 void fetchInit();
 

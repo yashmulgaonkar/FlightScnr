@@ -588,8 +588,10 @@ void tickAdsbFetch() {
   }
 
   if (services::adsb::fetchReady()) {
-    // Route APIs run only via onFlightDetailSelected(), not on ADS-B poll.
-    services::adsb::fetchProcessReady(false);
+    // Route cache on ADS-B poll only while flight detail is open (radar tags
+    // do not use route fields; skipping enrich avoids LittleFS work on the loop).
+    const bool enrich_routes = g_screen == AppScreen::FlightDetail;
+    services::adsb::fetchProcessReady(enrich_routes);
     if (g_screen == AppScreen::Radar && g_radar_visible) {
       ui::radarDisplayRefreshAircraft();
     } else if (g_screen == AppScreen::FlightDetail) {

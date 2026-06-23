@@ -477,6 +477,27 @@ bool copyAircraftAt(size_t index, Aircraft* dst) {
   return ok;
 }
 
+bool copyAircraftByCallsign(const char* callsign, Aircraft* dst) {
+  if (dst == nullptr || callsign == nullptr || callsign[0] == '\0') {
+    return false;
+  }
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreTake(s_aircraft_mutex, portMAX_DELAY);
+  }
+  bool ok = false;
+  for (size_t i = 0; i < s_aircraft_count; ++i) {
+    if (strcmp(s_aircraft[i].callsign, callsign) == 0) {
+      *dst = s_aircraft[i];
+      ok = true;
+      break;
+    }
+  }
+  if (s_aircraft_mutex != nullptr) {
+    xSemaphoreGive(s_aircraft_mutex);
+  }
+  return ok;
+}
+
 void applyRouteFieldsByCallsign(const char* callsign, const char* airline,
                                 const char* origin, const char* dest) {
   applyRouteFieldsByCallsignImpl(callsign, airline, origin, dest);

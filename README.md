@@ -35,7 +35,7 @@ Firmware is released under **[CC BY-NC-SA 4.0](https://creativecommons.org/licen
 - **Clock:** swipe down from radar for large local time (NTP). Swipe left for UTC offset and 12h/24h format.
 - **Web settings:** on your local network at [http://flightscnr.local/](http://flightscnr.local/) (or device IP) for radar center, filters, route API keys, monthly limits, and route-cache download
 - **Setup portal:** captive portal on first boot or after knob reset. Wi‑Fi network and password only at [http://4.3.2.1](http://4.3.2.1). Other settings use the live web portal after connecting.
-- **Airline & route:** optional API sources to fetch flight details. Vendors are used in the order of: **AirLabs > FlightAware > FR24** (same idea as [plane-tracker-rgb-pi](https://github.com/c0wsaysmoo/plane-tracker-rgb-pi)). One live lookup per callsign, then flash/RAM cache.
+- **Airline & route:** optional API sources to fetch flight details. When FlightAware is enabled it is tried first (**FlightAware → AirLabs → FR24**); otherwise **AirLabs → FR24**. One live provider call per cache miss (first detail open for a callsign), then RAM/flash cache. Routes are checked against the aircraft’s position to reject stale legs.
 - **Background ADS-B:** non-blocking fetch on a FreeRTOS task (~**2 s** via [adsb.fi](https://adsb.fi))
 - **Auto reconnect:** STA retries after a short grace period if network drops
 
@@ -170,7 +170,9 @@ Sign up for desired tiers with each vendor:
 
 Enable providers and paste keys on the **web settings** page. You can enter **multiple keys per provider**, comma-separated (`key1, key2, key3`). When one key reaches its monthly cap, the next key is used before the API calls move on to the next provider.
 
-Route lookups are cached in RAM and on the **~3.4 MB LittleFS** partition as `/route_cache.csv` (saved every ~10 min). **Live route APIs run at most once per callsign** on first sight of an unfamiliar ICAO callsign. Cached and previously looked-up callsigns are not sent to the providers again. Download the CSV from [http://flightscnr.local/](http://flightscnr.local/) under **Route cache**.
+**Lookup order:** FlightAware (if enabled), then AirLabs, then FR24. Only the first provider that returns a valid route is billed for that callsign; later providers are skipped. If FlightAware is disabled, AirLabs is tried first.
+
+Route lookups are cached in RAM and on the **~3.4 MB LittleFS** partition as `/route_cache.csv` (saved every ~10 min). **Live route APIs run at most once per callsign** when you first open flight detail for an unfamiliar ICAO callsign (or after a bad cache entry is rejected). Cached and previously looked-up callsigns are not sent to the providers again. Download the CSV from [http://flightscnr.local/](http://flightscnr.local/) under **Route cache**.
 
 **Monthly API limits** apply **per key** and are editable on the web settings page. Counters reset each calendar month when NTP time is valid. Cached callsigns do not count toward limits.
 

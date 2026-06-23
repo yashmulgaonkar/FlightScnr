@@ -270,7 +270,8 @@ void handleSettingsPage() {
   const int api_hdr = snprintf(
       page + used, kSettingsPageCap - used,
       "<h2 style=\"font-size:1rem;margin:1.25rem 0 .35rem\">Route APIs</h2>"
-      "<p>Enabled APIs run in order: AirLabs, then FlightAware, then FR24. Paste multiple keys "
+      "<p>Enabled APIs run in order: FlightAware, then AirLabs, then FR24 (only the first hit "
+      "is used per callsign). Paste multiple keys "
       "comma-separated (key1, key2, key3). When one key hits its monthly cap, the next key is "
       "used before moving to the next provider. Leave blank to keep saved value. Caps reset on "
       "the 1st when NTP time is synced.</p>");

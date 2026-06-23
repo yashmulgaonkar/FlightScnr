@@ -10,4 +10,7 @@ bool lookupName(const char* code, char* out, size_t out_len);
 /** Normalize to 4-letter ICAO when possible (ICAO passthrough or IATA remap). */
 bool normalizeRouteCode(const char* code, char* icao_out, size_t icao_len);
 
+/** WGS84 degrees for ICAO or IATA code; false if unknown. */
+bool lookupCoords(const char* code, float* lat_deg, float* lon_deg);
+
 }  // namespace services::airport

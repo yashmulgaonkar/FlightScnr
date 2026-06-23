@@ -291,22 +291,6 @@ bool orderEntryInBounds(size_t order_idx) {
   return order_idx < s_order_count && s_order[order_idx] < s_plane_count;
 }
 
-bool orderStaleWithAircraftList() {
-  const size_t n = services::adsb::copyAircraftSnapshot(s_planes, services::adsb::kMaxAircraft);
-  if (n != s_plane_count) {
-    return true;
-  }
-  if (s_order_count != n) {
-    return true;
-  }
-  for (size_t i = 0; i < s_order_count; ++i) {
-    if (s_order[i] >= n) {
-      return true;
-    }
-  }
-  return false;
-}
-
 void resyncOrderPreservingSelection() {
   char keep_callsign[sizeof(services::adsb::Aircraft::callsign)] = {};
   if (orderEntryInBounds(s_sel)) {
@@ -335,12 +319,16 @@ void resyncOrderPreservingSelection() {
         return;
       }
     }
+    if (config::kSerialTraceDebug) {
+      Serial.printf("[detail] resync lost %s (off list)\n", keep_callsign);
+    }
+    s_sel = 0;
   }
 
   if (s_sel >= s_order_count && s_order_count > 0) {
     s_sel = 0;
   }
-  if (config::kSerialTraceDebug) {
+  if (keep_callsign[0] == '\0' && config::kSerialTraceDebug) {
     Serial.printf("[detail] resync planes=%u sel=%u\n",
                   static_cast<unsigned>(s_order_count),
                   static_cast<unsigned>(s_sel + 1));
@@ -634,8 +622,7 @@ void computeFlightDetailLayout(const FlightDetailStrings& s, FlightDetailLayout*
 
 bool snapshotStaticMatches(const FlightDetailStrings& s,
                            const FlightDetailLayout& layout) {
-  if (!s_snapshot.valid || s_sel != s_snapshot.sel ||
-      s_order_count != s_snapshot.order_count) {
+  if (!s_snapshot.valid || s_order_count != s_snapshot.order_count) {
     return false;
   }
   if (layout.y_alt != s_snapshot.layout.y_alt ||
@@ -647,6 +634,15 @@ bool snapshotStaticMatches(const FlightDetailStrings& s,
          strcmp(s.route_origin, s_snapshot.text.route_origin) == 0 &&
          strcmp(s.route_dest, s_snapshot.text.route_dest) == 0 &&
          strcmp(s.type, s_snapshot.text.type) == 0;
+}
+
+void updateSnapshotSelectionIndex(const FlightDetailStrings& s) {
+  if (!s_snapshot.valid) {
+    return;
+  }
+  s_snapshot.sel = s_sel;
+  strncpy(s_snapshot.text.index_line, s.index_line, sizeof(s_snapshot.text.index_line) - 1);
+  s_snapshot.text.index_line[sizeof(s_snapshot.text.index_line) - 1] = '\0';
 }
 
 void saveSnapshot(const FlightDetailStrings& s, const FlightDetailLayout& layout) {
@@ -702,13 +698,8 @@ void flightDetailSelectAtScreen(int16_t x, int16_t y) {
 }
 
 bool flightDetailCycle(int delta) {
-  if (orderStaleWithAircraftList()) {
-    if (config::kSerialTraceDebug) {
-      Serial.println("[detail] order stale before cycle");
-    }
-    resyncOrderPreservingSelection();
-    s_snapshot.valid = false;
-  }
+  resyncOrderPreservingSelection();
+  s_snapshot.valid = false;
   if (s_order_count == 0) {
     return false;
   }
@@ -750,13 +741,7 @@ void flightDetailDraw() {
   const uint16_t route_fg = tft.color565(100, 220, 255);
   const uint16_t hint_fg = tft.color565(120, 140, 160);
 
-  if (s_order_count == 0 || orderStaleWithAircraftList()) {
-    if (config::kSerialTraceDebug) {
-      Serial.println("[detail] order stale before draw");
-    }
-    resyncOrderPreservingSelection();
-    s_snapshot.valid = false;
-  }
+  resyncOrderPreservingSelection();
 
   services::adsb::Aircraft ac = {};
   if (!copySelectedAircraft(&ac)) {
@@ -823,13 +808,7 @@ void flightDetailDraw() {
 }
 
 void flightDetailRefresh() {
-  if (s_order_count == 0 || orderStaleWithAircraftList()) {
-    if (config::kSerialTraceDebug) {
-      Serial.println("[detail] order stale before refresh -> full draw");
-    }
-    resyncOrderPreservingSelection();
-    s_snapshot.valid = false;
-  }
+  resyncOrderPreservingSelection();
 
   services::adsb::Aircraft ac = {};
   if (!copySelectedAircraft(&ac)) {
@@ -851,6 +830,8 @@ void flightDetailRefresh() {
     flightDetailDraw();
     return;
   }
+
+  updateSnapshotSelectionIndex(s);
 
   if (strcmp(s.alt, s_snapshot.text.alt) == 0 &&
       strcmp(s.speed, s_snapshot.text.speed) == 0) {
