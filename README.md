@@ -1,20 +1,15 @@
-# FlightScnr for LilyGO T-Encoder Pro
+# FlightScnr: Mini ADS-B Radar Style Flight Scanner
+The best part? There is absolutely no coding or soldering required!
 
-> **Newer LilyGO boards — known issue:** Recent T-Encoder Pro units ship with **different display and touch hardware** than the original revision (see [Hardware](#hardware)). Some users on the newer boards have reported **display glitches** on the radar screen. Firmware auto-detects both variants; fixes are in progress.
->
-> I work on FlightScnr in my **free time**, so changes and releases can take a while. I’ve **ordered a new-revision unit** to test against myself and will **confirm operation once it’s delivered** (expected in the next few days).
+<p align="center">
+<img width="1353" height="863" alt="image" src="https://github.com/user-attachments/assets/5275eb54-d5cf-4815-b19a-85e70ee04339" />
+</p>
 
----
+[![Youtube Video](https://github.com/user-attachments/assets/0ef2ec23-e1fe-4496-82ae-cd5a6211d24c)](https://youtube.com/shorts/vinE6DK6SSY?si=bhuOrcAyPHRql8ar)
 <p align="center">
   <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
   </a>
-</p>
-
----
-
-<p align="center">
-<img src="assets/FlightScnr.JPG" width="500" />
 </p>
 
 Open-source firmware that shows **live ADS-B traffic** on a sweeping radar around your preset position. Built for the **[LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl)**, inspired by desktop flight-tracking radar gadgets such as **[ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)** and **[deskradar](https://github.com/arvis91/deskradar)**.
@@ -87,6 +82,7 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 
 - Callsign, airline, route (`ORIG > DEST`), ICAO aircraft type (e.g. `B738`), altitude, ground speed
 - Footer: aircraft index, gesture guide
+<img width="1283" height="582" alt="image" src="https://github.com/user-attachments/assets/73eca09d-6f75-4bc9-83c2-7e8bcf1104f3" />
 
 ### Settings (1/3, 2/3, and 3/3)
 
@@ -94,11 +90,15 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 - **Page 2:** brightness, distance units (km / miles / nm), compass rose on/off (knob press cycles highlighted row; turn adjusts value)
 - **Page 3:** radar theme color - Red, Yellow, Orange, Green, or White (turn knob to cycle). Applies to range rings, crosshairs, compass rose, scale labels, and sweep line.
 - Footer: gesture guide
+<img width="1103" height="759" alt="image" src="https://github.com/user-attachments/assets/d8b57bbf-a991-4100-881a-8cd8d8bacabf" />
+
 
 ### Clock
 
 - Shows time in 12h/24h format , date, UTC offset label.
 - Footer: gesture guide
+<img width="951" height="481" alt="image" src="https://github.com/user-attachments/assets/26a35f9c-ac2d-4aea-9466-72e303b03494" />
+
 
 ### Clock settings
 
@@ -203,11 +203,8 @@ The optional 3D-printed enclosure is **not** part of this firmware repository. I
 
 Always read the full license on MakerWorld before downloading, printing, or sharing the enclosure design.
 
----
 <p align="center">
   <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
   </a>
 </p>
-
----
