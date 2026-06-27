@@ -96,6 +96,7 @@ To reset **Wi‑Fi** and reopen the captive portal, hold the knob **3 s** (clear
 ### Clock
 
 - Shows time in 12h/24h format , date, UTC offset label.
+- Shows current temperature and weather. tiu will need an API key from [Tomorrow.io](https://app.tomorrow.io/signup?planid=60d46beae90c3b3549a59ff3)
 - Footer: gesture guide
 <img width="951" height="481" alt="image" src="https://github.com/user-attachments/assets/26a35f9c-ac2d-4aea-9466-72e303b03494" />
 
