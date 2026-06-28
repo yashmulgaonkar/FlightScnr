@@ -21,6 +21,7 @@
 #include "services/https_lock.h"
 #include "services/https_heap.h"
 #include "services/clock_time.h"
+#include "services/tz_lookup.h"
 #include "services/map_center.h"
 #include "services/route_lookup.h"
 #include "services/settings_web.h"
@@ -192,6 +193,7 @@ void logDiagLine(const char* tag, unsigned long diag_ivl_ms = config::kDiagLogIn
       "[diag] %s uptime=%uh%02um free=%u min=%u ivl_min=%u max_blk=%u psram=%u wifi=%s rssi=%d "
       "screen=%s radar_vis=%d ac=%u ac_in=%u adsb_ok=%s adsb_busy=%u adsb_fail=%u "
       "adsb_proc_max=%lums wx_ok=%s wx_valid=%d wx_busy=%d wx_ready=%d wx_backoff=%lus "
+      "tz_auto=%d tz_resolved=%d tz_busy=%d "
       "https=%d idle=%d hold=%d idle_clk=%d full_draw=%d route_wkr=%d route_pause=%d "
       "sweep_gap=%lums sweep_fps=%u slow_loops=%u stk_loop=%u stk_adsb=%u loop_max=%lums lfs=%s\n",
       tag, hours, mins, ESP.getFreeHeap(), ESP.getMinFreeHeap(), g_diag_interval_min_heap,
@@ -202,7 +204,10 @@ void logDiagLine(const char* tag, unsigned long diag_ivl_ms = config::kDiagLogIn
       services::adsb::fetchInProgress() ? 1U : 0U, services::adsb::fetchFailStreak(),
       g_diag_adsb_process_max_ms, wx_ok, services::weather::hasData() ? 1 : 0,
       services::weather::fetchInProgress() ? 1 : 0, services::weather::fetchReady() ? 1 : 0,
-      services::weather::retryBackoffMs() / 1000UL, services::https::busy() ? 1 : 0,
+      services::weather::retryBackoffMs() / 1000UL, services::clock::useAutoTimezone() ? 1 : 0,
+      services::tzlookup::hasResolvedTimezone() ? 1 : 0,
+      services::tzlookup::lookupInProgress() ? 1 : 0,
+      services::https::busy() ? 1 : 0,
       g_auto_idle_clock ? 1 : 0, g_hold_empty_radar ? 1 : 0,
       ui::displayPrefsAutoIdleClockEnabled() ? 1 : 0, g_radar_full_draw_pending ? 1 : 0,
       services::route::detailWorkerBusy() ? 1 : 0, services::route::detailAdsbFetchPaused() ? 1 : 0,
@@ -1224,9 +1229,12 @@ void setup() {
   services::adsb::trafficFilterBootLoad();
   services::clock::bootLoad();
   services::weather::bootLoad();
+  services::tzlookup::bootLoad();
 
   if (wifiSetupConnect()) {
     services::clock::startNtp();
+    services::tzlookup::init();
+    services::tzlookup::requestForMapCenter();
     services::route::init();
     services::adsb::fetchInit();
     services::weather::bootSanityCheck();
@@ -1249,6 +1257,7 @@ void loop() {
   tickAutoIdleClock();
   tickClockDisplay();
   tickWeather();
+  services::tzlookup::tick();
   handleInput();
   settingsWebPoll();
   services::route::tickCacheFlush(millis());
@@ -1334,9 +1343,10 @@ void loop() {
     g_diag_slow_loops++;
     Serial.printf(
         "[perf] slow_loop ms=%lu screen=%s radar_vis=%d https=%d adsb_busy=%d wx_busy=%d "
-        "full_draw=%d heap=%u max_blk=%u\n",
+        "tz_busy=%d full_draw=%d heap=%u max_blk=%u\n",
         loop_ms, screenName(g_screen), g_radar_visible ? 1 : 0, services::https::busy() ? 1 : 0,
         services::adsb::fetchInProgress() ? 1 : 0, services::weather::fetchInProgress() ? 1 : 0,
+        services::tzlookup::lookupInProgress() ? 1 : 0,
         g_radar_full_draw_pending ? 1 : 0, free_heap, ESP.getMaxAllocHeap());
   }
 

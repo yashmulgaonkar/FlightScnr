@@ -6,6 +6,7 @@
 #include "services/api_keys.h"
 #include "services/map_center.h"
 #include "services/weather.h"
+#include "services/tz_lookup.h"
 #include "hardware/buzzer.h"
 #include "hardware/display_brightness.h"
 #include "ui/display_prefs.h"
@@ -53,6 +54,7 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
   }
   if (loc_ok) {
     services::weather::notifyLocationChanged();
+    services::tzlookup::notifyLocationChanged();
   }
   ui::radar::saveDistanceUnitsFromForm(dist_unit_str, legacy_miles_checkbox);
   if (cardinals_checkbox != nullptr) {

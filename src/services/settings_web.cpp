@@ -15,9 +15,11 @@
 #include "hardware/display_brightness.h"
 #include "services/adsb_client.h"
 #include "services/api_keys.h"
+#include "services/clock_time.h"
 #include "services/map_center.h"
 #include "services/route_cache_store.h"
 #include "services/settings_apply.h"
+#include "services/tz_lookup.h"
 #include "services/weather.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
@@ -252,6 +254,18 @@ void handleSettingsPage() {
       clock_sec == 15 ? " selected" : "");
   if (clock_n > 0) {
     used += static_cast<size_t>(clock_n);
+  }
+
+  const int auto_tz_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<div class=\"chk\"><input id=\"auto_timezone\" name=\"auto_timezone\" type=\"checkbox\" "
+      "value=\"T\"%s><label for=\"auto_timezone\">Auto timezone from radar center "
+      "(DST-aware)</label></div>"
+      "<p class=\"note\">Uses your radar lat/lon to resolve the local timezone over Wi‑Fi. "
+      "Turn the clock-settings knob to override manually on the device.</p>",
+      services::clock::useAutoTimezone() ? " checked" : "");
+  if (auto_tz_n > 0) {
+    used += static_cast<size_t>(auto_tz_n);
   }
 
   const int idle_n = snprintf(
@@ -555,6 +569,8 @@ void handleSave() {
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
+  const bool auto_tz_before = services::clock::useAutoTimezone();
+  services::clock::saveAutoTimezoneFromForm(s_server->arg("auto_timezone").c_str());
   ui::radar::accentSaveFromForm(s_server->arg("radar_accent").c_str());
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
@@ -566,6 +582,12 @@ void handleSave() {
 
   if (weather_key_saved || use_weather_before != services::apikeys::useWeather()) {
     services::weather::notifyEnabledChanged();
+  }
+
+  if (auto_tz_before != services::clock::useAutoTimezone()) {
+    if (services::clock::useAutoTimezone()) {
+      services::tzlookup::notifyLocationChanged();
+    }
   }
 
   sendSavedPage();

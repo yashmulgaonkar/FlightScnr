@@ -77,6 +77,11 @@ constexpr unsigned long kAdsbFetchPollIntervalDetailMs = 10000UL;
 constexpr char kNtpServer1[] = "pool.ntp.org";
 constexpr char kNtpServer2[] = "time.nist.gov";
 
+/** timeapi.io host for lat/lon -> IANA timezone lookup (HTTPS, no API key). */
+constexpr char kTimeApiHost[] = "timeapi.io";
+constexpr uint32_t kTzLookupTimeoutMs = 8000;
+constexpr unsigned long kTzLookupRetryBackoffMs = 60000UL;
+
 /** Route API limit defaults (monthly; reset on calendar month when time is synced). */
 /** AirLabs free tier: up to 1,000 queries/month. */
 constexpr uint32_t kDefaultAirLabsMaxCalls = 1000;
@@ -113,7 +118,7 @@ constexpr bool kAdsbVerboseAircraftLog = false;
 constexpr unsigned long kDiagLogIntervalMs = 60000UL;  // 1 min
 
 /** Expanded overnight performance logging: richer [diag], [perf], [nav], sweep gaps. */
-constexpr bool kOvernightPerfLog = false;
+constexpr bool kOvernightPerfLog = true;
 
 /** Log [perf] slow_loop when loop() exceeds this (ms). 0 = off. */
 constexpr unsigned long kDiagSlowLoopMs = 75UL;

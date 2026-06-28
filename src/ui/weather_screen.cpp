@@ -45,19 +45,17 @@ void weekdayLabel(int64_t date_epoch, int index, char* out, size_t len) {
     snprintf(out, len, "Day %d", index + 1);
     return;
   }
-  const int32_t tz = services::clock::timezoneOffsetSec();
-  const time_t local = static_cast<time_t>(date_epoch + tz);
+  const time_t utc = static_cast<time_t>(date_epoch);
   struct tm t {};
-  gmtime_r(&local, &t);
+  localtime_r(&utc, &t);
 
   // Label the column "Today" only when its date matches the current local date,
   // so the labels stay correct after a midnight rollover even if the cache is
   // briefly stale.
   const time_t now = time(nullptr);
   if (now >= 1600000000) {
-    const time_t now_local = now + tz;
     struct tm nt {};
-    gmtime_r(&now_local, &nt);
+    localtime_r(&now, &nt);
     if (t.tm_year == nt.tm_year && t.tm_yday == nt.tm_yday) {
       strncpy(out, "Today", len - 1);
       out[len - 1] = '\0';
