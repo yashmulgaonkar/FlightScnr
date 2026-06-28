@@ -31,7 +31,7 @@ WebServer* s_server = nullptr;
 bool s_active = false;
 
 /** Static storage — must not live on loopTask stack (~8 KB). */
-constexpr size_t kSettingsPageCap = 9216;
+constexpr size_t kSettingsPageCap = 16384;
 char s_settings_page[kSettingsPageCap];
 
 const char kPageHead[] = R"HTML(<!DOCTYPE html>
@@ -40,59 +40,125 @@ const char kPageHead[] = R"HTML(<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>FlightScnr Settings</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:28rem;margin:1.5rem auto;padding:0 1rem;
-background:#000;color:#e8f0ff;}
-h1{font-size:1.25rem;margin:0 0 .5rem;}
-p{color:#9ab;line-height:1.4;font-size:.9rem;}
-label{display:block;margin:.75rem 0 .25rem;font-size:.85rem;}
-input,select{width:100%;box-sizing:border-box;padding:.5rem;border-radius:6px;
-border:1px solid #345;background:#555;color:#fff;font-size:1rem;}
-.chk{margin:.75rem 0;display:flex;align-items:center;gap:.5rem;}
-.chk input{width:auto;}
-button{margin-top:1.25rem;width:100%;padding:.75rem;font-size:1rem;font-weight:600;
-border:none;border-radius:8px;background:#1a9c3c;color:#fff;cursor:pointer;}
-.note{margin-top:1rem;font-size:.8rem;color:#7a9;}
-.gh{margin:.35rem 0 1rem;font-size:.85rem;text-align:center;}
-.gh a{color:#6cf;}
+:root{--bg:#0a0a0a;--card:#141414;--card2:#1c1c1c;--line:#333;--text:#ececec;
+--muted:#9a9a9a;--accent:#1a9c3c;--accent2:#22c24c;--field:#1e1e1e;--fline:#3a3a3a;--link:#cfcfcf;}
+*{box-sizing:border-box;}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:var(--bg);
+color:var(--text);line-height:1.45;padding-bottom:5.5rem;}
+.wrap{max-width:34rem;margin:0 auto;padding:1.25rem 1rem;}
+.app-head{display:flex;align-items:center;gap:.65rem;margin-bottom:.25rem;}
+.logo{width:2.1rem;height:2.1rem;border-radius:50%;flex:none;border:1px solid #0a5;
+background:radial-gradient(circle at 50% 50%,#0c2,#063 70%,#021 100%);}
+h1{font-size:1.3rem;margin:0;}
+.subtitle{color:var(--muted);font-size:.85rem;margin:.15rem 0 1.1rem;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;margin:0 0 .9rem;overflow:hidden;}
+.card>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:.6rem;
+padding:.85rem 1rem;font-weight:600;font-size:.98rem;user-select:none;}
+.card>summary::-webkit-details-marker{display:none;}
+.card>summary .ico{width:1.6rem;height:1.6rem;border-radius:7px;flex:none;display:grid;
+place-items:center;font-size:.95rem;background:var(--card2);border:1px solid var(--line);}
+.card>summary .chev{margin-left:auto;color:var(--muted);transition:transform .18s;font-size:.8rem;}
+.card[open]>summary .chev{transform:rotate(90deg);}
+.card>summary .sum{color:var(--muted);font-weight:400;font-size:.78rem;margin-left:.1rem;}
+.card .body{padding:.25rem 1rem 1rem;border-top:1px solid var(--line);}
+label{display:block;margin:.85rem 0 .3rem;font-size:.84rem;color:#d2d2d2;}
+input,select{width:100%;padding:.6rem .65rem;border-radius:9px;border:1px solid var(--fline);
+background:var(--field);color:#fff;font-size:1rem;outline:none;}
+input:focus,select:focus{border-color:var(--accent2);box-shadow:0 0 0 2px rgba(34,194,76,.2);}
+input::placeholder{color:#777;}
+.hint,.note{color:var(--muted);font-size:.78rem;margin:.4rem 0 0;}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;}
+@media(max-width:24rem){.row2{grid-template-columns:1fr;}}
+.chk{display:flex;align-items:center;gap:.6rem;padding:.7rem 0;border-bottom:1px solid rgba(120,120,120,.22);}
+.chk:last-of-type{border-bottom:none;}
+.chk label{margin:0;font-size:.9rem;color:var(--text);flex:1;}
+.switch{position:relative;width:2.6rem;height:1.5rem;flex:none;}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;}
+.switch .track{position:absolute;inset:0;border-radius:999px;background:#333;
+border:1px solid var(--fline);transition:.18s;pointer-events:none;}
+.switch .track::after{content:"";position:absolute;top:50%;left:.18rem;transform:translateY(-50%);
+width:1.05rem;height:1.05rem;border-radius:50%;background:#9a9a9a;transition:.18s;}
+.switch input:checked + .track{background:var(--accent);border-color:var(--accent2);}
+.switch input:checked + .track::after{left:1.32rem;background:#fff;}
+.api{border:1px solid var(--line);border-radius:11px;padding:.2rem .8rem .8rem;margin:.8rem 0;background:var(--card2);}
+.api .api-head{display:flex;align-items:center;gap:.6rem;padding:.65rem 0 0;}
+.api .api-head .name{font-weight:600;font-size:.92rem;}
+.api .api-head .badge{margin-left:auto;font-size:.7rem;padding:.12rem .5rem;border-radius:999px;
+background:#262626;border:1px solid #444;color:#bbb;}
+.usage{font-size:.76rem;color:var(--muted);margin:.5rem 0 0;background:#161616;
+border:1px solid var(--line);border-radius:8px;padding:.45rem .6rem;}
+.usage b{color:#ddd;}
+a{color:var(--link);}
+.dl{display:inline-flex;align-items:center;gap:.4rem;text-decoration:none;background:var(--card2);
+border:1px solid var(--line);border-radius:9px;padding:.55rem .8rem;font-size:.88rem;margin-top:.5rem;}
+.savebar{position:fixed;left:0;right:0;bottom:0;z-index:20;padding:1rem;
+background:linear-gradient(180deg,rgba(10,10,10,0),rgba(10,10,10,.92) 30%,#0a0a0a);}
+.savebar .inner{max-width:34rem;margin:0 auto;}
+button.save{width:100%;padding:.85rem;font-size:1.02rem;font-weight:700;border:none;
+border-radius:11px;background:var(--accent);color:#fff;cursor:pointer;box-shadow:0 6px 20px rgba(26,156,60,.35);}
+button.save:hover{background:var(--accent2);}
+.wifi-note{font-size:.78rem;color:#8a8a8a;text-align:center;margin-top:.6rem;}
+.foot{text-align:center;font-size:.8rem;color:var(--muted);margin:1.2rem 0 .2rem;}
+.foot a{color:var(--link);}
 </style></head><body>
-<h1>FlightScnr</h1>
-<p>Changes are saved to flash. Radar refreshes when you tap <strong>Save</strong>.</p>
 <form method="POST" action="/save">
-)HTML";
-
-const char kPageTail[] = R"HTML(
-<button type="submit">Save</button>
-</form>
-<p class="note">Wi‑Fi credentials are configured in the setup portal (hold knob 3&nbsp;s to reset).</p>
-</body></html>
+<div class="wrap">
+<div class="app-head"><div class="logo"></div><h1>FlightScnr</h1></div>
+<p class="subtitle">Changes save to flash. Radar refreshes when you tap <strong>Save</strong>.</p>
 )HTML";
 
 void formatUsdMicro(uint32_t micro, char* out, size_t len, int decimals) {
   snprintf(out, len, "%.*f", decimals, static_cast<double>(micro) / 1000000.0);
 }
 
-void appendGithubLink(char* page, size_t len, size_t* used) {
+void appendRaw(char* page, size_t len, size_t* used, const char* html) {
+  const int n = snprintf(page + *used, len - *used, "%s", html);
+  if (n > 0) {
+    *used += static_cast<size_t>(n);
+  }
+}
+
+// Emits a labelled on/off toggle row (label left, switch right). id is reused as name.
+void appendToggle(char* page, size_t len, size_t* used, const char* id, const char* label_html,
+                  bool checked) {
   const int n = snprintf(
       page + *used, len - *used,
-      "<p class=\"gh\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
-      "github.com/yashmulgaonkar/FlightScnr</a></p>",
-      config::kGithubRepoUrl);
+      "<div class=\"chk\"><label for=\"%s\">%s</label>"
+      "<span class=\"switch\"><input id=\"%s\" name=\"%s\" type=\"checkbox\" value=\"T\"%s>"
+      "<span class=\"track\"></span></span></div>",
+      id, label_html, id, id, checked ? " checked" : "");
+  if (n > 0) {
+    *used += static_cast<size_t>(n);
+  }
+}
+
+// Emits an inline toggle switch (no row chrome) for use inside an API header.
+void appendInlineToggle(char* page, size_t len, size_t* used, const char* id, bool checked) {
+  const int n = snprintf(
+      page + *used, len - *used,
+      "<span class=\"switch\"><input id=\"%s\" name=\"%s\" type=\"checkbox\" value=\"T\"%s>"
+      "<span class=\"track\"></span></span>",
+      id, id, checked ? " checked" : "");
   if (n > 0) {
     *used += static_cast<size_t>(n);
   }
 }
 
 void sendSavedPage() {
-  char page[640];
+  char page[896];
   snprintf(page, sizeof(page),
            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
            "<title>Saved</title></head>"
            "<body style=\"font-family:system-ui,sans-serif;text-align:center;padding:2rem;"
-           "background:#000;color:#e8f0ff\">"
-           "<h1>Saved</h1><p>Settings applied. <a href=\"/\" style=\"color:#6cf\">Back</a></p>"
+           "background:#000;color:#ececec\">"
+           "<h1>Saved</h1><p>Settings applied.</p>"
+           "<a href=\"/\" style=\"display:inline-block;margin-top:1rem;padding:.75rem 2.5rem;"
+           "font-size:1rem;font-weight:700;text-decoration:none;border:none;border-radius:11px;"
+           "background:#1a9c3c;color:#fff;box-shadow:0 6px 20px rgba(26,156,60,.35)\">"
+           "Back to settings</a>"
            "<p style=\"margin-top:1.5rem;font-size:.9rem\">"
-           "<a href=\"%s\" style=\"color:#6cf\" target=\"_blank\" rel=\"noopener\">"
+           "<a href=\"%s\" style=\"color:#cfcfcf\" target=\"_blank\" rel=\"noopener\">"
            "github.com/yashmulgaonkar/FlightScnr</a></p>"
            "</body></html>",
            config::kGithubRepoUrl);
@@ -106,16 +172,16 @@ void sendLocationErrorPage() {
            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
            "<title>Radar center not saved</title></head>"
            "<body style=\"font-family:system-ui,sans-serif;max-width:28rem;margin:1.5rem auto;"
-           "padding:0 1rem;background:#000;color:#e8f0ff\">"
+           "padding:0 1rem;background:#000;color:#ececec\">"
            "<h1 style=\"font-size:1.25rem;color:#f66\">Radar center not saved</h1>"
            "<p>Other settings were saved, but the <strong>Radar Center</strong> value could "
            "not be parsed. Use decimal degrees with a comma between latitude and longitude, "
            "for example:</p>"
            "<p style=\"font-family:monospace;background:#222;padding:.75rem;border-radius:6px\">"
            "51.507400, -0.127800</p>"
-           "<p style=\"color:#9ab;font-size:.9rem\">Spaces around the comma are fine. "
+           "<p style=\"color:#9a9a9a;font-size:.9rem\">Spaces around the comma are fine. "
            "Latitude must be between &minus;90 and 90; longitude between &minus;180 and 180.</p>"
-           "<p><a href=\"/\" style=\"color:#6cf\">Back to settings</a></p>"
+           "<p><a href=\"/\" style=\"color:#cfcfcf\">Back to settings</a></p>"
            "</body></html>");
   s_server->send(400, "text/html; charset=utf-8", page);
 }
@@ -152,12 +218,18 @@ void handleSettingsPage() {
     used = static_cast<size_t>(head_n);
   }
 
+  // ---------- Radar card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\" open><summary><span class=\"ico\">&#9678;</span>Radar"
+            "<span class=\"sum\">center, range, units</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">");
+
   char center_value[48];
   snprintf(center_value, sizeof(center_value), "%.6f, %.6f",
            services::map_center::latitude(), services::map_center::longitude());
   const int center_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<label for=\"radar_center\">Radar Center</label>"
+      "<label for=\"radar_center\">Radar center (lat, lon)</label>"
       "<input id=\"radar_center\" name=\"radar_center\" type=\"text\" required "
       "autocomplete=\"off\" placeholder=\"37.636422, -122.365968\" value=\"%s\">",
       center_value);
@@ -166,110 +238,56 @@ void handleSettingsPage() {
   }
 
   const ui::radar::DistanceUnit unit = ui::radar::distanceUnit();
-  const int units_n = snprintf(
+  const int range_units_n = snprintf(
       page + used, kSettingsPageCap - used,
+      "<div class=\"row2\"><div>"
+      "<label for=\"range_mi\">Range</label>"
+      "<input id=\"range_mi\" name=\"range_mi\" type=\"text\" required autocomplete=\"off\" "
+      "placeholder=\"e.g. 30mi, 48km, 26nm\" value=\"%umi\">"
+      "</div><div>"
       "<label for=\"dist_unit\">Distance units</label>"
       "<select id=\"dist_unit\" name=\"dist_unit\">"
       "<option value=\"km\"%s>kilometers</option>"
       "<option value=\"mi\"%s>statute miles</option>"
       "<option value=\"nm\"%s>nautical miles</option>"
-      "</select>",
+      "</select></div></div>",
+      static_cast<unsigned>(ui::radar::scaleActiveMiles()),
       unit == ui::radar::DistanceUnit::Km ? " selected" : "",
       unit == ui::radar::DistanceUnit::StatuteMile ? " selected" : "",
       unit == ui::radar::DistanceUnit::NauticalMile ? " selected" : "");
-  if (units_n > 0) {
-    used += static_cast<size_t>(units_n);
+  if (range_units_n > 0) {
+    used += static_cast<size_t>(range_units_n);
   }
+  appendRangeMileHint(page, kSettingsPageCap, &used);
 
-  const int card_n = snprintf(
+  const int min_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"show_cardinals\" name=\"show_cardinals\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"show_cardinals\">Show Compass Rose</label></div>",
-      ui::radar::showCompassRose() ? " checked" : "");
-  if (card_n > 0) {
-    used += static_cast<size_t>(card_n);
+      "<label for=\"min_height\">Min altitude floor (ft, 0 = off)</label>"
+      "<input id=\"min_height\" name=\"min_height\" type=\"number\" min=\"0\" step=\"100\" "
+      "value=\"%d\">",
+      services::adsb::altitudeFloorFt());
+  if (min_n > 0) {
+    used += static_cast<size_t>(min_n);
   }
 
-  const int sweep_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"show_sweep\" name=\"show_sweep\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"show_sweep\">Show radar sweep line</label></div>",
-      ui::displayPrefsSweepLineEnabled() ? " checked" : "");
-  if (sweep_n > 0) {
-    used += static_cast<size_t>(sweep_n);
-  }
-
-  const int accent_lbl = snprintf(page + used, kSettingsPageCap - used,
-                                  "<label for=\"radar_accent\">Radar color theme</label>"
-                                  "<select id=\"radar_accent\" name=\"radar_accent\">");
-  if (accent_lbl > 0) {
-    used += static_cast<size_t>(accent_lbl);
-  }
+  appendRaw(page, kSettingsPageCap, &used,
+            "<label for=\"radar_accent\">Color theme</label>"
+            "<select id=\"radar_accent\" name=\"radar_accent\">");
   appendAccentOptions(page, kSettingsPageCap, &used);
-  const int accent_end = snprintf(page + used, kSettingsPageCap - used, "</select>");
-  if (accent_end > 0) {
-    used += static_cast<size_t>(accent_end);
-  }
+  appendRaw(page, kSettingsPageCap, &used, "</select>");
 
-  const unsigned long detail_ms = ui::displayPrefsFlightDetailTimeoutMs();
-  const unsigned long detail_sec = detail_ms / 1000UL;
-  const int detail_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"detail_timeout\">Flight detail screen</label>"
-      "<select id=\"detail_timeout\" name=\"detail_timeout\">"
-      "<option value=\"0\"%s>Manual (swipe away)</option>"
-      "<option value=\"10\"%s>10 seconds</option>"
-      "<option value=\"20\"%s>20 seconds</option>"
-      "<option value=\"30\"%s>30 seconds</option>"
-      "</select>",
-      detail_sec == 0 ? " selected" : "",
-      detail_sec == 10 ? " selected" : "",
-      detail_sec == 20 ? " selected" : "",
-      detail_sec == 30 ? " selected" : "");
-  if (detail_n > 0) {
-    used += static_cast<size_t>(detail_n);
-  }
+  appendToggle(page, kSettingsPageCap, &used, "show_cardinals", "Show compass rose",
+               ui::radar::showCompassRose());
+  appendToggle(page, kSettingsPageCap, &used, "show_sweep", "Show radar sweep line",
+               ui::displayPrefsSweepLineEnabled());
 
-  const unsigned long clock_ms = ui::displayPrefsClockWeatherTimeoutMs();
-  const unsigned long clock_sec = clock_ms / 1000UL;
-  const int clock_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"clock_timeout\">Clock / forecast screen</label>"
-      "<select id=\"clock_timeout\" name=\"clock_timeout\">"
-      "<option value=\"0\"%s>Manual (swipe away)</option>"
-      "<option value=\"5\"%s>5 seconds</option>"
-      "<option value=\"10\"%s>10 seconds</option>"
-      "<option value=\"15\"%s>15 seconds</option>"
-      "</select>",
-      clock_sec == 0 ? " selected" : "",
-      clock_sec == 5 ? " selected" : "",
-      clock_sec == 10 ? " selected" : "",
-      clock_sec == 15 ? " selected" : "");
-  if (clock_n > 0) {
-    used += static_cast<size_t>(clock_n);
-  }
+  appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
-  const int auto_tz_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"auto_timezone\" name=\"auto_timezone\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"auto_timezone\">Auto timezone from radar center "
-      "(DST-aware)</label></div>"
-      "<p class=\"note\">Uses your radar lat/lon to resolve the local timezone over Wi‑Fi. "
-      "Turn the clock-settings knob to override manually on the device.</p>",
-      services::clock::useAutoTimezone() ? " checked" : "");
-  if (auto_tz_n > 0) {
-    used += static_cast<size_t>(auto_tz_n);
-  }
-
-  const int idle_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"idle_clock\" name=\"idle_clock\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"idle_clock\">Return to clock when no aircraft "
-      "visible</label></div>",
-      ui::displayPrefsAutoIdleClockEnabled() ? " checked" : "");
-  if (idle_n > 0) {
-    used += static_cast<size_t>(idle_n);
-  }
+  // ---------- Display & screens card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#9788;</span>"
+            "Display &amp; screens<span class=\"sum\">brightness, timeouts, clock</span>"
+            "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">");
 
   const uint8_t bright = hardware::displayBrightnessPercent();
   const int bright_n = snprintf(
@@ -289,10 +307,55 @@ void handleSettingsPage() {
     used += static_cast<size_t>(bright_n);
   }
 
+  const unsigned long detail_sec = ui::displayPrefsFlightDetailTimeoutMs() / 1000UL;
+  const unsigned long clock_sec = ui::displayPrefsClockWeatherTimeoutMs() / 1000UL;
+  const int timeouts_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<div class=\"row2\"><div>"
+      "<label for=\"detail_timeout\">Flight detail screen</label>"
+      "<select id=\"detail_timeout\" name=\"detail_timeout\">"
+      "<option value=\"0\"%s>Manual (swipe)</option>"
+      "<option value=\"10\"%s>10 seconds</option>"
+      "<option value=\"20\"%s>20 seconds</option>"
+      "<option value=\"30\"%s>30 seconds</option>"
+      "</select></div><div>"
+      "<label for=\"clock_timeout\">Clock / forecast</label>"
+      "<select id=\"clock_timeout\" name=\"clock_timeout\">"
+      "<option value=\"0\"%s>Manual (swipe)</option>"
+      "<option value=\"5\"%s>5 seconds</option>"
+      "<option value=\"10\"%s>10 seconds</option>"
+      "<option value=\"15\"%s>15 seconds</option>"
+      "</select></div></div>",
+      detail_sec == 0 ? " selected" : "", detail_sec == 10 ? " selected" : "",
+      detail_sec == 20 ? " selected" : "", detail_sec == 30 ? " selected" : "",
+      clock_sec == 0 ? " selected" : "", clock_sec == 5 ? " selected" : "",
+      clock_sec == 10 ? " selected" : "", clock_sec == 15 ? " selected" : "");
+  if (timeouts_n > 0) {
+    used += static_cast<size_t>(timeouts_n);
+  }
+
+  appendToggle(page, kSettingsPageCap, &used, "idle_clock",
+               "Return to clock when no aircraft visible",
+               ui::displayPrefsAutoIdleClockEnabled());
+  appendToggle(page, kSettingsPageCap, &used, "auto_timezone",
+               "Auto timezone from radar center (DST-aware)",
+               services::clock::useAutoTimezone());
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"note\">Auto timezone resolves the local zone from your radar lat/lon over "
+            "Wi&#8209;Fi. Turn the clock-settings knob on the device to override manually.</p>");
+
+  appendRaw(page, kSettingsPageCap, &used, "</div></details>");
+
+  // ---------- Sound card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#9835;</span>Sound"
+            "<span class=\"sum\">UI beep</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">");
+  appendToggle(page, kSettingsPageCap, &used, "ui_beep", "UI beep on touch and knob",
+               hardware::buzzerEnabled());
+  const char beep_tone = hardware::buzzerToneLetter();
   const int beep_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"ui_beep\" name=\"ui_beep\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"ui_beep\">UI beep on touch and knob</label></div>"
       "<label for=\"beep_tone\">Beep tone</label>"
       "<select id=\"beep_tone\" name=\"beep_tone\">"
       "<option value=\"A\"%s>A</option>"
@@ -301,116 +364,37 @@ void handleSettingsPage() {
       "<option value=\"D\"%s>D</option>"
       "<option value=\"E\"%s>E</option>"
       "</select>",
-      hardware::buzzerEnabled() ? " checked" : "",
-      hardware::buzzerToneLetter() == 'A' ? " selected" : "",
-      hardware::buzzerToneLetter() == 'B' ? " selected" : "",
-      hardware::buzzerToneLetter() == 'C' ? " selected" : "",
-      hardware::buzzerToneLetter() == 'D' ? " selected" : "",
-      hardware::buzzerToneLetter() == 'E' ? " selected" : "");
+      beep_tone == 'A' ? " selected" : "", beep_tone == 'B' ? " selected" : "",
+      beep_tone == 'C' ? " selected" : "", beep_tone == 'D' ? " selected" : "",
+      beep_tone == 'E' ? " selected" : "");
   if (beep_n > 0) {
     used += static_cast<size_t>(beep_n);
   }
+  appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
-  const int min_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"min_height\">Min altitude (ft, 0 = off)</label>"
-      "<input id=\"min_height\" name=\"min_height\" type=\"number\" min=\"0\" step=\"100\" "
-      "value=\"%d\">",
-      services::adsb::altitudeFloorFt());
-  if (min_n > 0) {
-    used += static_cast<size_t>(min_n);
-  }
+  // ---------- Route APIs card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#9992;</span>Route APIs"
+            "<span class=\"sum\">airline &amp; route lookup</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">"
+            "<p class=\"note\">Enabled providers run in order &mdash; <b>FlightAware &rarr; AirLabs "
+            "&rarr; FR24</b> &mdash; first hit per callsign wins. Paste multiple keys "
+            "comma-separated (key1, key2, key3); when one hits its monthly cap the next is used "
+            "before moving to the next provider. Leave blank to keep the saved value. Caps reset "
+            "on the 1st once NTP syncs.</p>");
 
-  const int range_lbl = snprintf(page + used, kSettingsPageCap - used,
-                                 "<label for=\"range_mi\">Radar range</label>"
-                                 "<input id=\"range_mi\" name=\"range_mi\" type=\"text\" "
-                                 "required autocomplete=\"off\" "
-                                 "placeholder=\"e.g. 30mi, 48km, 26nm\" value=\"%umi\">",
-                                 static_cast<unsigned>(ui::radar::scaleActiveMiles()));
-  if (range_lbl > 0) {
-    used += static_cast<size_t>(range_lbl);
-  }
-  appendRangeMileHint(page, kSettingsPageCap, &used);
-
-  const int api_hdr = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<h2 style=\"font-size:1rem;margin:1.25rem 0 .35rem\">Route APIs</h2>"
-      "<p>Enabled APIs run in order: FlightAware, then AirLabs, then FR24 (only the first hit "
-      "is used per callsign). Paste multiple keys "
-      "comma-separated (key1, key2, key3). When one key hits its monthly cap, the next key is "
-      "used before moving to the next provider. Leave blank to keep saved value. Caps reset on "
-      "the 1st when NTP time is synced.</p>");
-  if (api_hdr > 0) {
-    used += static_cast<size_t>(api_hdr);
-  }
-
-  const int al_chk = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"use_airlabs\" name=\"use_airlabs\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"use_airlabs\">Use AirLabs</label></div>",
-      services::apikeys::useAirLabs() ? " checked" : "");
-  if (al_chk > 0) {
-    used += static_cast<size_t>(al_chk);
-  }
-
-  services::apikeys::maskedAirLabs(masked, sizeof(masked));
-  const int al_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"airlabs_key\">AirLabs API keys (%s)</label>"
-      "<input id=\"airlabs_key\" name=\"airlabs_key\" type=\"password\" "
-      "autocomplete=\"off\" placeholder=\"key1, key2, key3\">",
-      masked);
-  if (al_n > 0) {
-    used += static_cast<size_t>(al_n);
-  }
-
-  char al_used_note[64];
-  if (services::apikeys::airLabsMaxCalls() == 0) {
-    snprintf(al_used_note, sizeof(al_used_note),
-             "Used this month: %u (unlimited cap)",
-             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()));
-  } else {
-    snprintf(al_used_note, sizeof(al_used_note), "Used this month: %u / %u",
-             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()),
-             static_cast<unsigned>(services::apikeys::airLabsMaxCalls()));
-  }
-  const int al_lim = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"airlabs_max_calls\">AirLabs max calls / month per key (0 = unlimited; "
-      "free tier: 1,000 queries/month)</label>"
-      "<input id=\"airlabs_max_calls\" name=\"airlabs_max_calls\" type=\"number\" min=\"0\" "
-      "step=\"1\" value=\"%u\">"
-      "<p class=\"note\">%s</p>",
-      static_cast<unsigned>(services::apikeys::airLabsMaxCalls()), al_used_note);
-  if (al_lim > 0) {
-    used += static_cast<size_t>(al_lim);
-  }
-
-  const int fa_chk = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"use_flightaware\" name=\"use_flightaware\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"use_flightaware\">Use FlightAware</label></div>",
-      services::apikeys::useFlightAware() ? " checked" : "");
-  if (fa_chk > 0) {
-    used += static_cast<size_t>(fa_chk);
-  }
+  // FlightAware (1st priority)
+  appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
+  appendInlineToggle(page, kSettingsPageCap, &used, "use_flightaware",
+                     services::apikeys::useFlightAware());
+  appendRaw(page, kSettingsPageCap, &used,
+            "<span class=\"name\">FlightAware</span><span class=\"badge\">1st</span></div>");
 
   services::apikeys::maskedFlightAware(masked, sizeof(masked));
-  const int fa_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"flightaware_key\">FlightAware AeroAPI keys (%s)</label>"
-      "<input id=\"flightaware_key\" name=\"flightaware_key\" type=\"password\" "
-      "autocomplete=\"off\" placeholder=\"key1, key2, key3\">",
-      masked);
-  if (fa_n > 0) {
-    used += static_cast<size_t>(fa_n);
-  }
-
   char fa_budget[16];
   char fa_cost[16];
   char fa_spent[16];
-  formatUsdMicro(services::apikeys::flightAwareBudgetUsdMicro(), fa_budget, sizeof(fa_budget),
-                 2);
+  formatUsdMicro(services::apikeys::flightAwareBudgetUsdMicro(), fa_budget, sizeof(fa_budget), 2);
   formatUsdMicro(services::apikeys::flightAwareCostUsdMicro(), fa_cost, sizeof(fa_cost), 4);
   formatUsdMicro(services::apikeys::flightAwareSpentUsdMicro(), fa_spent, sizeof(fa_spent), 4);
   char fa_used_note[72];
@@ -421,41 +405,66 @@ void handleSettingsPage() {
     snprintf(fa_used_note, sizeof(fa_used_note), "Spent this month: $%s of $%s", fa_spent,
              fa_budget);
   }
-  const int fa_lim = snprintf(
+  const int fa_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<label for=\"flightaware_max_usd\">FlightAware max budget per key ($, 0 = unlimited)</label>"
+      "<label for=\"flightaware_key\">AeroAPI keys (%s)</label>"
+      "<input id=\"flightaware_key\" name=\"flightaware_key\" type=\"password\" "
+      "autocomplete=\"off\" placeholder=\"key1, key2, key3\">"
+      "<div class=\"row2\"><div>"
+      "<label for=\"flightaware_max_usd\">Max budget / key ($, 0 = unlimited)</label>"
       "<input id=\"flightaware_max_usd\" name=\"flightaware_max_usd\" type=\"number\" min=\"0\" "
       "step=\"0.01\" value=\"%s\">"
-      "<label for=\"flightaware_cost_usd\">FlightAware cost per call ($) "
-      "(AeroAPI GET /flights/{ident}, default $0.005/result set)</label>"
+      "</div><div>"
+      "<label for=\"flightaware_cost_usd\">Cost per call ($)</label>"
       "<input id=\"flightaware_cost_usd\" name=\"flightaware_cost_usd\" type=\"number\" min=\"0\" "
       "step=\"0.0001\" value=\"%s\">"
-      "<p class=\"note\">%s</p>",
-      fa_budget, fa_cost, fa_used_note);
-  if (fa_lim > 0) {
-    used += static_cast<size_t>(fa_lim);
+      "</div></div>"
+      "<p class=\"hint\">AeroAPI GET /flights/{ident}; default $0.005 per result set.</p>"
+      "<p class=\"usage\">%s</p></div>",
+      masked, fa_budget, fa_cost, fa_used_note);
+  if (fa_n > 0) {
+    used += static_cast<size_t>(fa_n);
   }
 
-  const int fr_chk = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"use_fr24\" name=\"use_fr24\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"use_fr24\">Use FlightRadar24</label></div>",
-      services::apikeys::useFr24() ? " checked" : "");
-  if (fr_chk > 0) {
-    used += static_cast<size_t>(fr_chk);
+  // AirLabs (2nd priority)
+  appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
+  appendInlineToggle(page, kSettingsPageCap, &used, "use_airlabs",
+                     services::apikeys::useAirLabs());
+  appendRaw(page, kSettingsPageCap, &used,
+            "<span class=\"name\">AirLabs</span><span class=\"badge\">2nd</span></div>");
+
+  services::apikeys::maskedAirLabs(masked, sizeof(masked));
+  char al_used_note[64];
+  if (services::apikeys::airLabsMaxCalls() == 0) {
+    snprintf(al_used_note, sizeof(al_used_note), "Used this month: %u (unlimited cap)",
+             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()));
+  } else {
+    snprintf(al_used_note, sizeof(al_used_note), "Used this month: %u / %u",
+             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()),
+             static_cast<unsigned>(services::apikeys::airLabsMaxCalls()));
   }
+  const int al_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<label for=\"airlabs_key\">API keys (%s)</label>"
+      "<input id=\"airlabs_key\" name=\"airlabs_key\" type=\"password\" "
+      "autocomplete=\"off\" placeholder=\"key1, key2, key3\">"
+      "<label for=\"airlabs_max_calls\">Max calls / month per key (0 = unlimited; "
+      "free tier 1,000/mo)</label>"
+      "<input id=\"airlabs_max_calls\" name=\"airlabs_max_calls\" type=\"number\" min=\"0\" "
+      "step=\"1\" value=\"%u\">"
+      "<p class=\"usage\">%s</p></div>",
+      masked, static_cast<unsigned>(services::apikeys::airLabsMaxCalls()), al_used_note);
+  if (al_n > 0) {
+    used += static_cast<size_t>(al_n);
+  }
+
+  // FlightRadar24 (3rd priority)
+  appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
+  appendInlineToggle(page, kSettingsPageCap, &used, "use_fr24", services::apikeys::useFr24());
+  appendRaw(page, kSettingsPageCap, &used,
+            "<span class=\"name\">FlightRadar24</span><span class=\"badge\">3rd</span></div>");
 
   services::apikeys::maskedFr24(masked, sizeof(masked));
-  const int fr_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"fr24_key\">FlightRadar24 API tokens (%s)</label>"
-      "<input id=\"fr24_key\" name=\"fr24_key\" type=\"password\" "
-      "autocomplete=\"off\" placeholder=\"token1, token2, token3\">",
-      masked);
-  if (fr_n > 0) {
-    used += static_cast<size_t>(fr_n);
-  }
-
   char fr_budget[16];
   char fr_cost[16];
   char fr_spent[16];
@@ -470,34 +479,39 @@ void handleSettingsPage() {
     snprintf(fr_used_note, sizeof(fr_used_note), "Spent this month: $%s of $%s", fr_spent,
              fr_budget);
   }
-  const int fr_lim = snprintf(
+  const int fr_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<label for=\"fr24_max_usd\">FlightRadar24 max budget per key ($, 0 = unlimited)</label>"
+      "<label for=\"fr24_key\">API tokens (%s)</label>"
+      "<input id=\"fr24_key\" name=\"fr24_key\" type=\"password\" "
+      "autocomplete=\"off\" placeholder=\"token1, token2, token3\">"
+      "<div class=\"row2\"><div>"
+      "<label for=\"fr24_max_usd\">Max budget / key ($, 0 = unlimited)</label>"
       "<input id=\"fr24_max_usd\" name=\"fr24_max_usd\" type=\"number\" min=\"0\" "
       "step=\"0.01\" value=\"%s\">"
-      "<label for=\"fr24_cost_usd\">FlightRadar24 cost per call ($)</label>"
+      "</div><div>"
+      "<label for=\"fr24_cost_usd\">Cost per call ($)</label>"
       "<input id=\"fr24_cost_usd\" name=\"fr24_cost_usd\" type=\"number\" min=\"0\" "
       "step=\"0.0001\" value=\"%s\">"
-      "<p class=\"note\">%s</p>",
-      fr_budget, fr_cost, fr_used_note);
-  if (fr_lim > 0) {
-    used += static_cast<size_t>(fr_lim);
+      "</div></div>"
+      "<p class=\"usage\">%s</p></div>",
+      masked, fr_budget, fr_cost, fr_used_note);
+  if (fr_n > 0) {
+    used += static_cast<size_t>(fr_n);
   }
 
+  appendRaw(page, kSettingsPageCap, &used, "</div></details>");
+
+  // ---------- Weather card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#9729;</span>Weather"
+            "<span class=\"sum\">Tomorrow.io</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">");
+  appendToggle(page, kSettingsPageCap, &used, "use_weather", "Use Tomorrow.io",
+               services::apikeys::useWeather());
   services::apikeys::maskedWeather(masked, sizeof(masked));
-  const int wx_chk = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<div class=\"chk\"><input id=\"use_weather\" name=\"use_weather\" type=\"checkbox\" "
-      "value=\"T\"%s><label for=\"use_weather\">Use Tomorrow.io</label></div>",
-      services::apikeys::useWeather() ? " checked" : "");
-  if (wx_chk > 0) {
-    used += static_cast<size_t>(wx_chk);
-  }
-
   const int wx_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<h2 style=\"font-size:1rem;margin:1.25rem 0 .35rem\">Weather (Tomorrow.io)</h2>"
-      "<label for=\"weather_key\">Tomorrow.io API key (%s)</label>"
+      "<label for=\"weather_key\">API key (%s)</label>"
       "<input id=\"weather_key\" name=\"weather_key\" type=\"password\" "
       "autocomplete=\"off\" placeholder=\"paste key\">"
       "<label for=\"weather_units\">Units</label>"
@@ -505,29 +519,39 @@ void handleSettingsPage() {
       "<option value=\"metric\"%s>Metric (&deg;C)</option>"
       "<option value=\"imperial\"%s>Imperial (&deg;F)</option>"
       "</select>"
-      "<p class=\"note\">Current weather shows on the clock screen; swipe right for "
-      "the 3-day forecast.</p>",
+      "<p class=\"note\">Current conditions show on the clock screen; swipe right for the 3-day "
+      "forecast.</p></div></details>",
       masked, services::weather::useImperial() ? "" : " selected",
       services::weather::useImperial() ? " selected" : "");
   if (wx_n > 0) {
     used += static_cast<size_t>(wx_n);
   }
 
-  const int cache_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<h2 style=\"font-size:1rem;margin:1.25rem 0 .35rem\">Route cache</h2>"
-      "<p>Airline/route lookups saved on flash (written about every 10&nbsp;min).</p>"
-      "<p class=\"gh\"><a href=\"/route_cache.csv\" download=\"route_cache.csv\">"
-      "Download route_cache.csv</a></p>");
-  if (cache_n > 0) {
-    used += static_cast<size_t>(cache_n);
-  }
+  // ---------- Route cache card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#8681;</span>Route cache"
+            "<span class=\"sum\">export</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">"
+            "<p class=\"note\">Airline/route lookups are cached on flash (written about every "
+            "10&nbsp;min) so repeat callsigns don't re-bill an API.</p>"
+            "<a class=\"dl\" href=\"/route_cache.csv\" download=\"route_cache.csv\">"
+            "&#8681;&nbsp; Download route_cache.csv</a></div></details>");
 
-  const int tail_n = snprintf(page + used, kSettingsPageCap - used, "%s", kPageTail);
+  // ---------- Footer + sticky save bar ----------
+  const int tail_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<p class=\"wifi-note\">Wi&#8209;Fi credentials are set in the setup portal "
+      "(hold the knob 3&nbsp;s to reset).</p>"
+      "<p class=\"foot\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
+      "github.com/yashmulgaonkar/FlightScnr</a></p>"
+      "</div>"
+      "<div class=\"savebar\"><div class=\"inner\">"
+      "<button class=\"save\" type=\"submit\">Save</button></div></div>"
+      "</form></body></html>",
+      config::kGithubRepoUrl);
   if (tail_n > 0) {
     used += static_cast<size_t>(tail_n);
   }
-  appendGithubLink(page, kSettingsPageCap, &used);
 
   s_server->send(200, "text/html; charset=utf-8", page);
 }
