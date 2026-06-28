@@ -118,7 +118,7 @@ constexpr bool kAdsbVerboseAircraftLog = false;
 constexpr unsigned long kDiagLogIntervalMs = 60000UL;  // 1 min
 
 /** Expanded overnight performance logging: richer [diag], [perf], [nav], sweep gaps. */
-constexpr bool kOvernightPerfLog = true;
+constexpr bool kOvernightPerfLog = false;
 
 /** Log [perf] slow_loop when loop() exceeds this (ms). 0 = off. */
 constexpr unsigned long kDiagSlowLoopMs = 75UL;
