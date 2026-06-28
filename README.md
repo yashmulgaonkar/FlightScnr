@@ -1,11 +1,16 @@
 # FlightScnr: Mini ADS-B Radar Style Flight Scanner
 
 The best part? There is absolutely no coding or soldering required!
+<p align="center">
+<img width="1353" height="863" alt="image" src="https://github.com/user-attachments/assets/5275eb54-d5cf-4815-b19a-85e70ee04339" />
+</p>
 
-
-
-[Youtube Video](https://youtube.com/shorts/vinE6DK6SSY?si=bhuOrcAyPHRql8ar)
-
+[![Youtube Video](https://github.com/user-attachments/assets/0ef2ec23-e1fe-4496-82ae-cd5a6211d24c)](https://youtube.com/shorts/vinE6DK6SSY?si=bhuOrcAyPHRql8ar)
+<p align="center">
+  <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
+  </a>
+</p>
 
 
 Open-source firmware that shows **live ADS-B traffic** on a sweeping radar around your preset position. Built for the **[LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl)**, inspired by **[ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)** and **[deskradar](https://github.com/arvis91/deskradar)**.
@@ -52,15 +57,15 @@ To change settings later: same URL, **Save**. To reset Wi‑Fi only: hold knob 3
 ## Screenshots
 
 **Flight detail** - route, airline logo, altitude, speed
-
+<img width="1283" height="582" alt="Flight detail" src="https://github.com/user-attachments/assets/73eca09d-6f75-4bc9-83c2-7e8bcf1104f3" />
 
 
 **Settings** - network, display, color & audio (3 pages via swipe left)
-
+<img width="1103" height="759" alt="Settings" src="https://github.com/user-attachments/assets/d8b57bbf-a991-4100-881a-8cd8d8bacabf" />
 
 
 **Clock** - time, weather, sunrise/sunset (→ forecast on swipe right)
-
+<img width="951" height="481" alt="Clock" src="https://github.com/user-attachments/assets/26a35f9c-ac2d-4aea-9466-72e303b03494" />
 
 
 ## Hardware
@@ -131,3 +136,9 @@ The optional 3D-printed enclosure is **not** part of this firmware repository. I
 
 Always read the full license on MakerWorld before downloading, printing, or sharing the enclosure design.
 
+
+<p align="center">
+  <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
+  </a>
+</p>
