@@ -1,16 +1,12 @@
 # FlightScnr: Mini ADS-B Radar Style Flight Scanner
+
 The best part? There is absolutely no coding or soldering required!
 
-<p align="center">
-<img width="1353" height="863" alt="image" src="https://github.com/user-attachments/assets/5275eb54-d5cf-4815-b19a-85e70ee04339" />
-</p>
 
-[![Youtube Video](https://github.com/user-attachments/assets/0ef2ec23-e1fe-4496-82ae-cd5a6211d24c)](https://youtube.com/shorts/vinE6DK6SSY?si=bhuOrcAyPHRql8ar)
-<p align="center">
-  <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
-  </a>
-</p>
+
+[Youtube Video](https://youtube.com/shorts/vinE6DK6SSY?si=bhuOrcAyPHRql8ar)
+
+
 
 Open-source firmware that shows **live ADS-B traffic** on a sweeping radar around your preset position. Built for the **[LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl)**, inspired by **[ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)** and **[deskradar](https://github.com/arvis91/deskradar)**.
 
@@ -57,23 +53,25 @@ To change settings later: same URL, **Save**. To reset Wi‑Fi only: hold knob 3
 
 **Flight detail** - route, airline logo, altitude, speed
 
-<img width="1283" height="582" alt="Flight detail" src="https://github.com/user-attachments/assets/73eca09d-6f75-4bc9-83c2-7e8bcf1104f3" />
+
 
 **Settings** - network, display, color & audio (3 pages via swipe left)
 
-<img width="1103" height="759" alt="Settings" src="https://github.com/user-attachments/assets/d8b57bbf-a991-4100-881a-8cd8d8bacabf" />
+
 
 **Clock** - time, weather, sunrise/sunset (→ forecast on swipe right)
 
-<img width="951" height="481" alt="Clock" src="https://github.com/user-attachments/assets/26a35f9c-ac2d-4aea-9466-72e303b03494" />
+
 
 ## Hardware
 
-| Item | Details |
-| --- | --- |
-| **Board** | [LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl) - ESP32-S3, 16 MB flash, 8 MB PSRAM |
-| **Display** | 1.2″ 390×390 AMOLED; auto-detects DXQ120 or TFD12 panel at boot |
+
+| Item          | Details                                                                                                                             |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Board**     | [LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl) - ESP32-S3, 16 MB flash, 8 MB PSRAM                                            |
+| **Display**   | 1.2″ 390×390 AMOLED; auto-detects DXQ120 or TFD12 panel at boot                                                                     |
 | **Enclosure** | [MakerWorld](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055) (not in repo) |
+
 
 ## Build & flash
 
@@ -104,24 +102,32 @@ Enable providers and keys on the web portal. Multiple comma-separated keys per p
 
 One live API call per uncached callsign on first flight-detail open; results cached in RAM + flash (`/route_cache.csv`, up to 1500 rows, downloadable from the portal). Cached callsigns don’t count toward limits.
 
-| Service | Sign up |
-| --- | --- |
-| AirLabs | [airlabs.co/signup](https://airlabs.co/signup) |
-| FlightAware | [aeroapi signup](https://www.flightaware.com/aeroapi/signup/personal) |
-| FR24 | [fr24api docs](https://fr24api.flightradar24.com/docs/getting-started) |
+
+| Service     | Sign up                                                                |
+| ----------- | ---------------------------------------------------------------------- |
+| AirLabs     | [airlabs.co/signup](https://airlabs.co/signup)                         |
+| FlightAware | [aeroapi signup](https://www.flightaware.com/aeroapi/signup/personal)  |
+| FR24        | [fr24api docs](https://fr24api.flightradar24.com/docs/getting-started) |
+
 
 ## License
 
 ### Firmware
 
-**[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** - attribute, non-commercial, share-alike. Vendored libs (`lib/Arduino_GFX`, `lib/SensorLib`, etc.) keep their own licenses.
+Original application code, tools, and documentation in this repository are licensed under **[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/)** ([LICENSE](LICENSE)).
+
+- **Attribution:** credit the author and link to the license when you share or adapt this work.
+- **NonCommercial:** you may not use this material for commercial purposes without separate permission.
+- **ShareAlike:** adaptations must be released under the same license.
+
+Vendored libraries (`lib/Arduino_GFX`, `lib/SensorLib`, and PlatformIO registry dependencies) remain under **their own licenses** (GPL, MIT, etc.). Combining them into a binary does not re-license those components. Comply with each upstream license when you distribute builds.
 
 ### Enclosure license
 
-The 3D-printed enclosure is **not** in this repo. Governed by the **MakerWorld Standard Digital File License** - read the full terms on the model page before downloading or printing.
+The optional 3D-printed enclosure is **not** part of this firmware repository. Its digital files and physical prints are governed by the license shown on the linked **MakerWorld** model page. That content is published under a **Standard Digital File License**, which includes terms such as:
 
-<p align="center">
-  <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
-  </a>
-</p>
+> This user content is licensed under a Standard Digital File License.  
+> You shall not share, sub-license, sell, rent, host, transfer, or distribute in any way the digital or 3D printed versions of this object, nor any other derivative work of this object in its digital or physical format (including - but not limited to - remixes of this object, and hosting on other digital platforms). The objects may not be used without permission in any way whatsoever in which you charge money, or collect fees.
+
+Always read the full license on MakerWorld before downloading, printing, or sharing the enclosure design.
+
