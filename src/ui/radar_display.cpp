@@ -113,10 +113,11 @@ void initLabelMetrics() {
   s_scale_label_h = tft.fontHeight();
   s_scale_label_max_w = 0;
   char label[12];
-  for (size_t i = 0; i < radar::kScaleBandCount; ++i) {
+  for (size_t i = 0; i < radar::kRangeMileOptionCount; ++i) {
+    const float label_km =
+        static_cast<float>(radar::kRangeMileOptions[i]) * radar::kStatuteMileKm;
     for (int ring = 1; ring <= radar::kRingCount; ++ring) {
-      const float ring_km = radar::kScaleBands[i].label_km *
-                            static_cast<float>(ring) /
+      const float ring_km = label_km * static_cast<float>(ring) /
                             static_cast<float>(radar::kRingCount);
       for (int unit = 0; unit <= static_cast<int>(radar::DistanceUnit::NauticalMile);
            ++unit) {

@@ -132,19 +132,12 @@ void appendAccentOptions(char* buf, size_t len, size_t* used) {
   }
 }
 
-void appendRangeOptions(char* buf, size_t len, size_t* used) {
-  for (uint8_t i = 0; i < ui::radar::kScaleBandCount; ++i) {
-    const ui::radar::ScaleBand& p = ui::radar::kScaleBands[i];
-    const int mi = static_cast<int>(lroundf(p.label_km / 1.609344f));
-    const int n = snprintf(
-        buf + *used, len - *used,
-        "<option value=\"%u\"%s>%d km / %d mi</option>",
-        static_cast<unsigned>(i),
-        (i == ui::radar::scaleActiveIndex()) ? " selected" : "",
-        static_cast<int>(lroundf(p.label_km)), mi);
-    if (n > 0) {
-      *used += static_cast<size_t>(n);
-    }
+void appendRangeMileHint(char* buf, size_t len, size_t* used) {
+  const int n = snprintf(buf + *used, len - *used,
+                         "<p class=\"hint\">Number with optional unit (mi, km, nm; default mi). "
+                         "Snaps to nearest preset: 2, 3, 6, 8, 10, 20, or 30 mi.</p>");
+  if (n > 0) {
+    *used += static_cast<size_t>(n);
   }
 }
 
@@ -329,17 +322,15 @@ void handleSettingsPage() {
   }
 
   const int range_lbl = snprintf(page + used, kSettingsPageCap - used,
-                                 "<label for=\"range_idx\">Range preset</label>"
-                                 "<select id=\"range_idx\" name=\"range_idx\">");
+                                 "<label for=\"range_mi\">Radar range</label>"
+                                 "<input id=\"range_mi\" name=\"range_mi\" type=\"text\" "
+                                 "required autocomplete=\"off\" "
+                                 "placeholder=\"e.g. 30mi, 48km, 26nm\" value=\"%umi\">",
+                                 static_cast<unsigned>(ui::radar::scaleActiveMiles()));
   if (range_lbl > 0) {
     used += static_cast<size_t>(range_lbl);
   }
-  appendRangeOptions(page, kSettingsPageCap, &used);
-
-  const int range_end = snprintf(page + used, kSettingsPageCap - used, "</select>");
-  if (range_end > 0) {
-    used += static_cast<size_t>(range_end);
-  }
+  appendRangeMileHint(page, kSettingsPageCap, &used);
 
   const int api_hdr = snprintf(
       page + used, kSettingsPageCap - used,
@@ -552,7 +543,7 @@ void handleSave() {
       s_server->arg("dist_unit").c_str(), s_server->arg("use_miles").c_str(),
       s_server->arg("show_cardinals").c_str(),
       s_server->arg("min_height").c_str(),
-      s_server->arg("range_idx").c_str(), s_server->arg("airlabs_key").c_str(),
+      s_server->arg("range_mi").c_str(), s_server->arg("airlabs_key").c_str(),
       s_server->arg("flightaware_key").c_str(), s_server->arg("fr24_key").c_str(),
       s_server->arg("use_airlabs").c_str(), s_server->arg("use_flightaware").c_str(),
       s_server->arg("use_fr24").c_str(), s_server->arg("airlabs_max_calls").c_str(),

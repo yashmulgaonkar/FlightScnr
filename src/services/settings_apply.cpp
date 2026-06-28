@@ -14,21 +14,7 @@
 
 namespace {
 
-bool parseRangeIndex(const char* text, uint8_t* out) {
-  if (text == nullptr || text[0] == '\0') {
-    return false;
-  }
-  char* end = nullptr;
-  const long v = strtol(text, &end, 10);
-  if (end == text || (end != nullptr && *end != '\0')) {
-    return false;
-  }
-  if (v < 0 || v >= static_cast<long>(ui::radar::kScaleBandCount)) {
-    return false;
-  }
-  *out = static_cast<uint8_t>(v);
-  return true;
-}
+SettingsSavedCallback s_saved_callback = nullptr;
 
 }  // namespace
 
@@ -36,7 +22,7 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
                            const char* lon_str, const char* dist_unit_str,
                            const char* legacy_miles_checkbox,
                            const char* cardinals_checkbox,
-                           const char* min_height_str, const char* range_index_str,
+                           const char* min_height_str, const char* range_mi_str,
                            const char* airlabs_key, const char* flightaware_key,
                            const char* fr24_key, const char* use_airlabs_checkbox,
                            const char* use_flightaware_checkbox,
@@ -72,19 +58,10 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
   ui::displayPrefsSaveSweepLineFromForm(sweep_line_checkbox);
   ui::displayPrefsSaveFlightDetailTimeoutFromForm(detail_timeout_str);
 
-  uint8_t range_idx = 0;
-  if (parseRangeIndex(range_index_str, &range_idx)) {
-    ui::radar::scaleSelect(range_idx);
-  }
+  ui::radar::scaleSaveMilesFromForm(range_mi_str);
 
   return loc_ok;
 }
-
-namespace {
-
-SettingsSavedCallback s_saved_callback = nullptr;
-
-}  // namespace
 
 void settingsSetSavedCallback(SettingsSavedCallback cb) { s_saved_callback = cb; }
 

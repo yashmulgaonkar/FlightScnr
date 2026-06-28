@@ -16,7 +16,7 @@ Firmware is **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.
 
 ## Features
 
-- **Radar** - sweeping display with range rings (2/4/6/8 mi, default 4), compass rose, optional sweep line, themed colors (Green default), km/mi/nm units, rim dots for out-of-range traffic. Live ADS-B via [adsb.fi](https://adsb.fi), ~2 s refresh, up to 64 aircraft.
+- **Radar** - sweeping display with range rings (2–30 mi presets: 2, 3, 6, 8, 10, 20, 30; default 8), compass rose, optional sweep line, themed colors (Green default), km/mi/nm units, rim dots for out-of-range traffic. Live ADS-B via [adsb.fi](https://adsb.fi), ~2s refresh, up to 64 aircraft.
 - **Flight detail** - tap a blip or short-press the knob: callsign, airline logo/name, route, ICAO type, altitude, speed. Knob cycles visible aircraft. Optional route lookup (see [APIs](#optional-apis)).
 - **Clock & forecast** - swipe down from radar: NTP time, date, current weather, sunrise/sunset. Swipe right for a 3-day forecast (hi/lo, icons, rain %).
 - **Auto timezone** - Fetch Timezone + DST from your radar center ([timeapi.io](https://timeapi.io), no API key needed). Manual UTC offset on-device disables auto until re-enabled on the web portal.
@@ -24,7 +24,7 @@ Firmware is **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.
 - **Auto-idle clock** (default on) - empty radar (no in-range aircraft) switches to the clock; returns when traffic appears.
 - **Settings** - three on-device pages (network/API status, display/timeouts, color/beep) plus full config at [http://flightscnr.local/](http://flightscnr.local/). Web **Save** applies live - no reboot.
 
-Screen timeouts (configurable on web or device page 2): flight detail 10/20/30 s or manual; clock/forecast 5/10/15 s or manual. Settings and about auto-return to radar after 10 s.
+Screen timeouts (configurable on web or device page 2): flight detail 10/20/30s or manual; clock/forecast 5/10/15s or manual. Settings and about auto-return to radar after 10s 
 
 ## Navigation
 
@@ -47,7 +47,7 @@ On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle c
 3. After connect: boot splash (~5 s) → radar.
 4. Set radar center, weather key, and optional route APIs at [http://flightscnr.local/](http://flightscnr.local/) (or device IP shown on settings page 1).
 
-To change settings later: same URL, **Save**. To reset Wi‑Fi only: hold knob 3 s.
+To change settings later: same URL, **Save**. To reset Wi‑Fi only: hold knob 3s 
 
 ## Screenshots
 
