@@ -18,23 +18,26 @@ constexpr float kKnotsToKmh = kNauticalMileKm;
 constexpr float kKnotsToMph = 1.15077945f;
 constexpr float kFeetToMeters = 0.3048f;
 
+/** Allowed outer-ring ranges (statute miles). */
+constexpr uint8_t kRangeMileOptions[] = {2, 3, 6, 8, 10, 20, 30};
+constexpr size_t kRangeMileOptionCount =
+    sizeof(kRangeMileOptions) / sizeof(kRangeMileOptions[0]);
+
+/** @deprecated Use kRangeMileOptionCount. Kept for label-metrics sizing loops. */
+constexpr size_t kScaleBandCount = kRangeMileOptionCount;
+
 enum class DistanceUnit : uint8_t { Km = 0, StatuteMile = 1, NauticalMile = 2 };
-
-constexpr ScaleBand kScaleBands[] = {
-    {2.0f * kStatuteMileKm, 2.0f * kStatuteMileKm * kLabelToCoverageKm},
-    {4.0f * kStatuteMileKm, 4.0f * kStatuteMileKm * kLabelToCoverageKm},
-    {6.0f * kStatuteMileKm, 6.0f * kStatuteMileKm * kLabelToCoverageKm},
-    {8.0f * kStatuteMileKm, 8.0f * kStatuteMileKm * kLabelToCoverageKm},
-};
-
-constexpr size_t kScaleBandCount = sizeof(kScaleBands) / sizeof(kScaleBands[0]);
 
 void scaleBootLoad();
 void scaleIncrease();
 void scaleDecrease();
-void scaleSelect(uint8_t index);
+void scaleStep(int8_t delta);
+void scaleSelect(uint8_t option_index);
+bool scaleSetMiles(uint8_t miles);
+bool scaleSaveMilesFromForm(const char* miles_str);
 const ScaleBand& scaleActive();
 uint8_t scaleActiveIndex();
+uint8_t scaleActiveMiles();
 
 /** ADS-B query radius (km) scaled to screen edge for rim targets. */
 float adsbQueryRadiusKm();

@@ -15,9 +15,11 @@
 #include "hardware/display_brightness.h"
 #include "services/adsb_client.h"
 #include "services/api_keys.h"
+#include "services/clock_time.h"
 #include "services/map_center.h"
 #include "services/route_cache_store.h"
 #include "services/settings_apply.h"
+#include "services/tz_lookup.h"
 #include "services/weather.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
@@ -130,19 +132,12 @@ void appendAccentOptions(char* buf, size_t len, size_t* used) {
   }
 }
 
-void appendRangeOptions(char* buf, size_t len, size_t* used) {
-  for (uint8_t i = 0; i < ui::radar::kScaleBandCount; ++i) {
-    const ui::radar::ScaleBand& p = ui::radar::kScaleBands[i];
-    const int mi = static_cast<int>(lroundf(p.label_km / 1.609344f));
-    const int n = snprintf(
-        buf + *used, len - *used,
-        "<option value=\"%u\"%s>%d km / %d mi</option>",
-        static_cast<unsigned>(i),
-        (i == ui::radar::scaleActiveIndex()) ? " selected" : "",
-        static_cast<int>(lroundf(p.label_km)), mi);
-    if (n > 0) {
-      *used += static_cast<size_t>(n);
-    }
+void appendRangeMileHint(char* buf, size_t len, size_t* used) {
+  const int n = snprintf(buf + *used, len - *used,
+                         "<p class=\"hint\">Number with optional unit (mi, km, nm; default mi). "
+                         "Snaps to nearest preset: 2, 3, 6, 8, 10, 20, or 30 mi.</p>");
+  if (n > 0) {
+    *used += static_cast<size_t>(n);
   }
 }
 
@@ -254,6 +249,18 @@ void handleSettingsPage() {
     used += static_cast<size_t>(clock_n);
   }
 
+  const int auto_tz_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<div class=\"chk\"><input id=\"auto_timezone\" name=\"auto_timezone\" type=\"checkbox\" "
+      "value=\"T\"%s><label for=\"auto_timezone\">Auto timezone from radar center "
+      "(DST-aware)</label></div>"
+      "<p class=\"note\">Uses your radar lat/lon to resolve the local timezone over Wi‑Fi. "
+      "Turn the clock-settings knob to override manually on the device.</p>",
+      services::clock::useAutoTimezone() ? " checked" : "");
+  if (auto_tz_n > 0) {
+    used += static_cast<size_t>(auto_tz_n);
+  }
+
   const int idle_n = snprintf(
       page + used, kSettingsPageCap - used,
       "<div class=\"chk\"><input id=\"idle_clock\" name=\"idle_clock\" type=\"checkbox\" "
@@ -315,17 +322,15 @@ void handleSettingsPage() {
   }
 
   const int range_lbl = snprintf(page + used, kSettingsPageCap - used,
-                                 "<label for=\"range_idx\">Range preset</label>"
-                                 "<select id=\"range_idx\" name=\"range_idx\">");
+                                 "<label for=\"range_mi\">Radar range</label>"
+                                 "<input id=\"range_mi\" name=\"range_mi\" type=\"text\" "
+                                 "required autocomplete=\"off\" "
+                                 "placeholder=\"e.g. 30mi, 48km, 26nm\" value=\"%umi\">",
+                                 static_cast<unsigned>(ui::radar::scaleActiveMiles()));
   if (range_lbl > 0) {
     used += static_cast<size_t>(range_lbl);
   }
-  appendRangeOptions(page, kSettingsPageCap, &used);
-
-  const int range_end = snprintf(page + used, kSettingsPageCap - used, "</select>");
-  if (range_end > 0) {
-    used += static_cast<size_t>(range_end);
-  }
+  appendRangeMileHint(page, kSettingsPageCap, &used);
 
   const int api_hdr = snprintf(
       page + used, kSettingsPageCap - used,
@@ -538,7 +543,7 @@ void handleSave() {
       s_server->arg("dist_unit").c_str(), s_server->arg("use_miles").c_str(),
       s_server->arg("show_cardinals").c_str(),
       s_server->arg("min_height").c_str(),
-      s_server->arg("range_idx").c_str(), s_server->arg("airlabs_key").c_str(),
+      s_server->arg("range_mi").c_str(), s_server->arg("airlabs_key").c_str(),
       s_server->arg("flightaware_key").c_str(), s_server->arg("fr24_key").c_str(),
       s_server->arg("use_airlabs").c_str(), s_server->arg("use_flightaware").c_str(),
       s_server->arg("use_fr24").c_str(), s_server->arg("airlabs_max_calls").c_str(),
@@ -555,6 +560,8 @@ void handleSave() {
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
+  const bool auto_tz_before = services::clock::useAutoTimezone();
+  services::clock::saveAutoTimezoneFromForm(s_server->arg("auto_timezone").c_str());
   ui::radar::accentSaveFromForm(s_server->arg("radar_accent").c_str());
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
@@ -566,6 +573,12 @@ void handleSave() {
 
   if (weather_key_saved || use_weather_before != services::apikeys::useWeather()) {
     services::weather::notifyEnabledChanged();
+  }
+
+  if (auto_tz_before != services::clock::useAutoTimezone()) {
+    if (services::clock::useAutoTimezone()) {
+      services::tzlookup::notifyLocationChanged();
+    }
   }
 
   sendSavedPage();

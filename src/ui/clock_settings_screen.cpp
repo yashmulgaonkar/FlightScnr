@@ -144,7 +144,7 @@ void clockSettingsScreenDraw() {
   };
   const InfoLine hint_lines[] = {
       {"Knob press: change item", displayFontDetail(), hint_fg},
-      {"Turn knob: change value", displayFontDetail(), hint_fg},
+      {"Turn knob: adjust value", displayFontDetail(), hint_fg},
       {"Swipe right — Clock", displayFontDetail(), hint_fg},
   };
   const int options_h = measureBlockHeight(option_lines, sizeof(option_lines) / sizeof(option_lines[0]));

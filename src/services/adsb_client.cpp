@@ -35,6 +35,25 @@ constexpr uint32_t kFetchStallRecoveryMs = 25000;
 
 void workerYield() { vTaskDelay(1); }
 
+// adsb.fi v3 records carry ~45 fields; we use ~10. A deserialization filter keeps
+// the JsonDocument to just those keys so a large response (many aircraft at long
+// range) can't balloon internal heap and starve the SPI display driver.
+void buildAircraftFilter(JsonDocument& filter) {
+  JsonObject el = filter["ac"].add<JsonObject>();
+  static const char* kKeepKeys[] = {
+      "lat",          "lon",      "true_heading", "mag_heading", "track",
+      "dir",          "gs",       "tas",          "ias",         "baro_rate",
+      "geom_rate",    "alt_baro", "alt_geom",     "flight",      "hex",
+      "t",            "orig_icao", "origin_icao", "dep_icao",    "from",
+      "dest_icao",    "destination_icao", "arr_icao", "to"};
+  for (const char* key : kKeepKeys) {
+    el[key] = true;
+  }
+}
+
+// Read the full HTTP body with explicit connected()/available() waiting. Streaming
+// ArduinoJson straight off the TLS socket is unreliable (momentary gaps look like
+// EOF -> IncompleteInput on large responses), so we buffer first, then filter-parse.
 bool readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
   WiFiClient* stream = http.getStreamPtr();
   if (stream == nullptr || payload == nullptr) {
@@ -565,14 +584,7 @@ void saveAltitudeFloorFromForm(const char* value) {
   }
 }
 
-bool parseAircraftPayload(const String& payload, Aircraft* out, size_t* out_count) {
-  JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, payload);
-  if (err) {
-    Serial.printf("[adsb] JSON parse error: %s\n", err.c_str());
-    return false;
-  }
-
+bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count) {
   JsonArray ac = doc["ac"].as<JsonArray>();
   if (ac.isNull()) {
     *out_count = 0;
@@ -605,6 +617,22 @@ bool parseAircraftPayload(const String& payload, Aircraft* out, size_t* out_coun
 
   *out_count = n;
   return true;
+}
+
+// Parse a buffered response body with a field filter, so only the ~10 keys we use
+// are materialized in the JsonDocument (keeps peak heap low on big responses).
+bool parseAircraftPayload(const String& payload, Aircraft* out, size_t* out_count) {
+  JsonDocument filter;
+  buildAircraftFilter(filter);
+
+  JsonDocument doc;
+  const DeserializationError err =
+      deserializeJson(doc, payload, DeserializationOption::Filter(filter));
+  if (err) {
+    Serial.printf("[adsb] JSON parse error: %s\n", err.c_str());
+    return false;
+  }
+  return parseAircraftDoc(doc, out, out_count);
 }
 
 bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radius_km,

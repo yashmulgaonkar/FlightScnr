@@ -12,18 +12,21 @@ namespace ui::radar {
 namespace {
 
 constexpr char kStoreNs[] = "flightscnr";
-constexpr char kScaleSlotKey[] = "scale_slot";
+constexpr char kRangeMiKey[] = "range_mi";
 constexpr char kDistUnitKey[] = "dist_unit";
 constexpr char kDistMiKey[] = "dist_mi";
 constexpr char kRoseKey[] = "rose_en";
 
 constexpr char kLegacyScaleKey[] = "rangeIdx";
+constexpr char kLegacyScaleSlotKey[] = "scale_slot";
 constexpr char kLegacyMilesKey[] = "useMiles";
 constexpr char kLegacyRoseKey[] = "showCard";
 
-constexpr uint8_t kDefaultScaleIndex = 1;
+constexpr uint8_t kDefaultRangeMiles = 8;
+constexpr uint8_t kLegacyMilesFromIndex[] = {2, 6, 6, 8};
 
-uint8_t s_active_index = kDefaultScaleIndex;
+uint8_t s_active_miles = kDefaultRangeMiles;
+ScaleBand s_active_band{};
 DistanceUnit s_distance_unit = DistanceUnit::Km;
 bool s_compass_rose = true;
 
@@ -65,19 +68,70 @@ void persistDistanceUnit(DistanceUnit unit) {
   persistU8(kDistUnitKey, static_cast<uint8_t>(unit));
 }
 
+bool isAllowedMile(uint8_t miles) {
+  for (size_t i = 0; i < kRangeMileOptionCount; ++i) {
+    if (kRangeMileOptions[i] == miles) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int optionIndexForMiles(uint8_t miles) {
+  for (size_t i = 0; i < kRangeMileOptionCount; ++i) {
+    if (kRangeMileOptions[i] == miles) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+void recomputeActiveBand() {
+  s_active_band.label_km = static_cast<float>(s_active_miles) * kStatuteMileKm;
+  s_active_band.coverage_km = s_active_band.label_km * kLabelToCoverageKm;
+}
+
+void applyMiles(uint8_t miles) {
+  if (!isAllowedMile(miles)) {
+    return;
+  }
+  s_active_miles = miles;
+  recomputeActiveBand();
+  persistU8(kRangeMiKey, s_active_miles);
+}
+
+uint8_t migrateLegacyRangeIndex(uint8_t legacy_index) {
+  if (legacy_index < sizeof(kLegacyMilesFromIndex)) {
+    return kLegacyMilesFromIndex[legacy_index];
+  }
+  return kDefaultRangeMiles;
+}
+
 }  // namespace
 
 void scaleBootLoad() {
   Preferences prefs;
   if (!prefs.begin(kStoreNs, true)) {
+    recomputeActiveBand();
     return;
   }
 
-  uint8_t slot = prefs.getUChar(kScaleSlotKey, 255);
-  if (slot == 255) {
-    slot = prefs.getUChar(kLegacyScaleKey, kDefaultScaleIndex);
+  if (prefs.isKey(kRangeMiKey)) {
+    const uint8_t stored = prefs.getUChar(kRangeMiKey, kDefaultRangeMiles);
+    if (isAllowedMile(stored)) {
+      s_active_miles = stored;
+    } else if (stored > 30) {
+      s_active_miles = 30;
+    } else {
+      s_active_miles = kDefaultRangeMiles;
+    }
+  } else {
+    uint8_t legacy_index = prefs.getUChar(kLegacyScaleSlotKey, 255);
+    if (legacy_index == 255) {
+      legacy_index = prefs.getUChar(kLegacyScaleKey, 1);
+    }
+    s_active_miles = migrateLegacyRangeIndex(legacy_index);
   }
-  s_active_index = (slot < kScaleBandCount) ? slot : kDefaultScaleIndex;
 
   if (prefs.isKey(kDistUnitKey)) {
     const uint8_t raw = prefs.getUChar(kDistUnitKey, 0);
@@ -99,34 +153,109 @@ void scaleBootLoad() {
   }
 
   prefs.end();
+  recomputeActiveBand();
 }
 
-void scaleIncrease() {
-  s_active_index = static_cast<uint8_t>((s_active_index + 1) % kScaleBandCount);
-  persistU8(kScaleSlotKey, s_active_index);
-}
+void scaleIncrease() { scaleStep(1); }
 
-void scaleDecrease() {
-  s_active_index = (s_active_index == 0)
-                       ? static_cast<uint8_t>(kScaleBandCount - 1)
-                       : static_cast<uint8_t>(s_active_index - 1);
-  persistU8(kScaleSlotKey, s_active_index);
-}
+void scaleDecrease() { scaleStep(-1); }
 
-void scaleSelect(uint8_t index) {
-  if (index >= kScaleBandCount) {
+void scaleStep(int8_t delta) {
+  if (delta == 0) {
     return;
   }
-  s_active_index = index;
-  persistU8(kScaleSlotKey, s_active_index);
+  int idx = optionIndexForMiles(s_active_miles);
+  if (idx < 0) {
+    idx = 0;
+  }
+  if (delta > 0) {
+    idx = static_cast<int>((static_cast<size_t>(idx) + 1) % kRangeMileOptionCount);
+  } else {
+    idx = (idx == 0) ? static_cast<int>(kRangeMileOptionCount - 1) : idx - 1;
+  }
+  applyMiles(kRangeMileOptions[static_cast<size_t>(idx)]);
 }
 
-const ScaleBand& scaleActive() { return kScaleBands[s_active_index]; }
+void scaleSelect(uint8_t option_index) {
+  if (option_index >= kRangeMileOptionCount) {
+    return;
+  }
+  applyMiles(kRangeMileOptions[option_index]);
+}
 
-uint8_t scaleActiveIndex() { return s_active_index; }
+bool scaleSetMiles(uint8_t miles) {
+  if (!isAllowedMile(miles)) {
+    return false;
+  }
+  applyMiles(miles);
+  return true;
+}
+
+namespace {
+
+uint8_t snapMilesToPreset(float miles) {
+  uint8_t best = kRangeMileOptions[0];
+  float best_diff = 1e9f;
+  for (size_t i = 0; i < kRangeMileOptionCount; ++i) {
+    const float diff = fabsf(static_cast<float>(kRangeMileOptions[i]) - miles);
+    if (diff < best_diff) {
+      best_diff = diff;
+      best = kRangeMileOptions[i];
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+bool scaleSaveMilesFromForm(const char* range_str) {
+  if (range_str == nullptr || range_str[0] == '\0') {
+    return false;
+  }
+  char* end = nullptr;
+  const float value = strtof(range_str, &end);
+  if (end == range_str || value <= 0.0f) {
+    return false;
+  }
+
+  // Optional unit suffix: km / nm / mi (default statute miles).
+  while (*end == ' ') {
+    ++end;
+  }
+  float miles = value;
+  if (end[0] != '\0') {
+    if ((end[0] == 'k' || end[0] == 'K') && (end[1] == 'm' || end[1] == 'M')) {
+      miles = value / kStatuteMileKm;
+    } else if ((end[0] == 'n' || end[0] == 'N') && (end[1] == 'm' || end[1] == 'M')) {
+      miles = value * (kNauticalMileKm / kStatuteMileKm);
+    } else if ((end[0] == 'm' || end[0] == 'M') && (end[1] == 'i' || end[1] == 'I')) {
+      miles = value;
+    } else {
+      return false;  // Unrecognized unit.
+    }
+  }
+
+  if (miles < 1.0f || miles > 60.0f) {
+    return false;
+  }
+  const uint8_t snapped = snapMilesToPreset(miles);
+  applyMiles(snapped);
+  Serial.printf("Range: %u mi (from \"%s\")\n", static_cast<unsigned>(s_active_miles),
+                range_str);
+  return true;
+}
+
+const ScaleBand& scaleActive() { return s_active_band; }
+
+uint8_t scaleActiveIndex() {
+  const int idx = optionIndexForMiles(s_active_miles);
+  return idx >= 0 ? static_cast<uint8_t>(idx) : 0;
+}
+
+uint8_t scaleActiveMiles() { return s_active_miles; }
 
 float adsbQueryRadiusKm() {
-  const float coverage_km = scaleActive().coverage_km;
+  const float coverage_km = s_active_band.coverage_km;
   const float screen_r_px =
       static_cast<float>(kCenterX - kBeyondRingScreenMarginPx);
   return coverage_km * (screen_r_px / static_cast<float>(kGridOuterRadius));
@@ -209,7 +338,7 @@ void formatScaleTag(char* buf, size_t len, float label_km, DistanceUnit unit) {
 }
 
 void formatActiveScaleTag(char* buf, size_t len) {
-  formatScaleTag(buf, len, scaleActive().label_km, s_distance_unit);
+  formatScaleTag(buf, len, s_active_band.label_km, s_distance_unit);
 }
 
 void formatAltitudeDisplay(const char* alt_ft_tag, char* out, size_t out_len) {

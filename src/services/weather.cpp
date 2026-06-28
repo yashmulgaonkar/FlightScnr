@@ -51,12 +51,7 @@ int32_t s_last_ok_local_day = -1;
 
 // Days since the Unix epoch in local time, or -1 when the clock is unsynced.
 int32_t currentLocalDayIndex() {
-  const time_t now = time(nullptr);
-  if (now < kMinValidEpoch) {
-    return -1;
-  }
-  const time_t local = now + services::clock::timezoneOffsetSec();
-  return static_cast<int32_t>(local / 86400);
+  return services::clock::localDayIndex();
 }
 
 double s_req_lat = 0.0;
@@ -359,7 +354,6 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
       // midnight the first bucket still represents *yesterday*'s civil date.
       // Skip any leading bucket whose local date is before today so day 0 is
       // always today's date and we show today + the next 2 days.
-      const int32_t tz = services::clock::timezoneOffsetSec();
       const int32_t today = currentLocalDayIndex();
       int out_idx = 0;
       for (int i = 0; i < static_cast<int>(intervals.size()) && out_idx < kForecastDays;
@@ -371,9 +365,15 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
         }
         const int64_t epoch = iso8601ToEpoch(d["startTime"].as<const char*>());
         if (today >= 0 && epoch > 0) {
-          const int32_t bucket_day = static_cast<int32_t>((epoch + tz) / 86400);
-          if (bucket_day < today) {
-            continue;  // stale pre-midnight bucket
+          struct tm bucket_local {};
+          const time_t bucket_utc = static_cast<time_t>(epoch);
+          if (localtime_r(&bucket_utc, &bucket_local) != nullptr) {
+            const int32_t bucket_day = static_cast<int32_t>(daysFromCivil(
+                bucket_local.tm_year + 1900, static_cast<unsigned>(bucket_local.tm_mon + 1),
+                static_cast<unsigned>(bucket_local.tm_mday)));
+            if (bucket_day < today) {
+              continue;  // stale pre-midnight bucket
+            }
           }
         }
         DayForecast& fc = out->days[out_idx];

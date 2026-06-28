@@ -39,6 +39,7 @@ ui::InfoSettingsPage s_page = ui::InfoSettingsPage::Main;
 enum class DisplayAdjustRow : uint8_t {
   Brightness,
   Units,
+  Range,
   Compass,
   Sweep,
   DetailTimeout,
@@ -183,13 +184,17 @@ void buildMainStrings(char* ip_line, size_t ip_len, char* wifi_line, size_t wifi
 }
 
 void buildDisplayStrings(char* bright_line, size_t bright_len, char* units_line,
-                         size_t units_len, char* compass_line, size_t compass_len,
-                         char* sweep_line, size_t sweep_len, char* detail_line,
-                         size_t detail_len, char* clock_line, size_t clock_len,
-                         char* idle_line, size_t idle_len) {
+                         size_t units_len, char* range_line, size_t range_len,
+                         char* compass_line, size_t compass_len, char* sweep_line,
+                         size_t sweep_len, char* detail_line, size_t detail_len,
+                         char* clock_line, size_t clock_len, char* idle_line,
+                         size_t idle_len) {
   snprintf(bright_line, bright_len, "Brightness: %u%%",
            static_cast<unsigned>(hardware::displayBrightnessPercent()));
   snprintf(units_line, units_len, "Units: %s", ui::radar::distanceUnitLabel());
+  char range_tag[12];
+  ui::radar::formatActiveScaleTag(range_tag, sizeof(range_tag));
+  snprintf(range_line, range_len, "Range: %s", range_tag);
   snprintf(compass_line, compass_len, "Compass Rose: %s",
            ui::radar::showCompassRose() ? "on" : "off");
   snprintf(sweep_line, sweep_len, "Radar Sweep: %s",
@@ -298,21 +303,24 @@ uint16_t settingsActiveFg() {
 void drawDisplayPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg) {
   char bright_line[32];
   char units_line[24];
+  char range_line[24];
   char compass_line[28];
   char sweep_line[24];
   char detail_line[28];
   char clock_line[28];
   char idle_line[24];
   buildDisplayStrings(bright_line, sizeof(bright_line), units_line, sizeof(units_line),
-                      compass_line, sizeof(compass_line), sweep_line, sizeof(sweep_line),
-                      detail_line, sizeof(detail_line), clock_line, sizeof(clock_line),
-                      idle_line, sizeof(idle_line));
+                      range_line, sizeof(range_line), compass_line, sizeof(compass_line),
+                      sweep_line, sizeof(sweep_line), detail_line, sizeof(detail_line),
+                      clock_line, sizeof(clock_line), idle_line, sizeof(idle_line));
 
   const uint16_t active_fg = settingsActiveFg();
   const uint16_t bright_fg =
       (s_display_focus == DisplayAdjustRow::Brightness) ? active_fg : label_fg;
   const uint16_t units_fg =
       (s_display_focus == DisplayAdjustRow::Units) ? active_fg : label_fg;
+  const uint16_t range_fg =
+      (s_display_focus == DisplayAdjustRow::Range) ? active_fg : label_fg;
   const uint16_t compass_fg =
       (s_display_focus == DisplayAdjustRow::Compass) ? active_fg : label_fg;
   const uint16_t sweep_fg =
@@ -328,6 +336,7 @@ void drawDisplayPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_
   const InfoLine option_lines[] = {
       {bright_line, displayFontBody(), bright_fg},
       {units_line, displayFontBody(), units_fg},
+      {range_line, displayFontBody(), range_fg},
       {compass_line, displayFontBody(), compass_fg},
       {sweep_line, displayFontBody(), sweep_fg},
       {detail_line, displayFontBody(), detail_fg},
@@ -438,6 +447,9 @@ void infoScreenCycleDisplayFocus() {
       s_display_focus = DisplayAdjustRow::Units;
       break;
     case DisplayAdjustRow::Units:
+      s_display_focus = DisplayAdjustRow::Range;
+      break;
+    case DisplayAdjustRow::Range:
       s_display_focus = DisplayAdjustRow::Compass;
       break;
     case DisplayAdjustRow::Compass:
@@ -530,6 +542,9 @@ void infoScreenHandleKnob(int8_t delta) {
       break;
     case DisplayAdjustRow::Units:
       ui::radar::cycleDistanceUnits();
+      break;
+    case DisplayAdjustRow::Range:
+      ui::radar::scaleStep(delta);
       break;
     case DisplayAdjustRow::Compass:
       ui::radar::toggleCompassRose();

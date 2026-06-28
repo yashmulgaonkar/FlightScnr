@@ -77,6 +77,11 @@ constexpr unsigned long kAdsbFetchPollIntervalDetailMs = 10000UL;
 constexpr char kNtpServer1[] = "pool.ntp.org";
 constexpr char kNtpServer2[] = "time.nist.gov";
 
+/** timeapi.io host for lat/lon -> IANA timezone lookup (HTTPS, no API key). */
+constexpr char kTimeApiHost[] = "timeapi.io";
+constexpr uint32_t kTzLookupTimeoutMs = 8000;
+constexpr unsigned long kTzLookupRetryBackoffMs = 60000UL;
+
 /** Route API limit defaults (monthly; reset on calendar month when time is synced). */
 /** AirLabs free tier: up to 1,000 queries/month. */
 constexpr uint32_t kDefaultAirLabsMaxCalls = 1000;
