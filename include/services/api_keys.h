@@ -31,6 +31,12 @@ bool hasWeather();
 const char* weatherKey();
 /** Persist a new weather key from the web form; ignores null/empty. */
 bool saveWeatherKeyFromForm(const char* weather);
+/** Portal/web checkbox ("T" = enabled). */
+void saveWeatherEnabledFromForm(const char* use_weather);
+
+bool useWeather();
+/** True when Tomorrow.io is enabled and a key is configured. */
+bool canUseWeather();
 void maskedWeather(char* out, size_t len);
 
 bool useAirLabs();

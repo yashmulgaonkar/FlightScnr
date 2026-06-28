@@ -125,7 +125,10 @@ void weatherScreenDraw() {
   tft.fillScreen(bg);
   drawCentered("Forecast", 48, displayFontClockDate(), fg, bg);
 
-  if (!services::apikeys::hasWeather()) {
+  if (!services::apikeys::useWeather()) {
+    drawCentered("Tomorrow.io disabled", kCenterY - 12, displayFontDetail(), dim, bg);
+    drawCentered("in web settings", kCenterY + 12, displayFontDetail(), dim, bg);
+  } else if (!services::apikeys::hasWeather()) {
     drawCentered("Add a Tomorrow.io key", kCenterY - 12, displayFontDetail(), dim, bg);
     drawCentered("in web settings", kCenterY + 12, displayFontDetail(), dim, bg);
   } else if (!services::weather::hasData()) {

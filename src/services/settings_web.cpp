@@ -480,6 +480,15 @@ void handleSettingsPage() {
   }
 
   services::apikeys::maskedWeather(masked, sizeof(masked));
+  const int wx_chk = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<div class=\"chk\"><input id=\"use_weather\" name=\"use_weather\" type=\"checkbox\" "
+      "value=\"T\"%s><label for=\"use_weather\">Use Tomorrow.io</label></div>",
+      services::apikeys::useWeather() ? " checked" : "");
+  if (wx_chk > 0) {
+    used += static_cast<size_t>(wx_chk);
+  }
+
   const int wx_n = snprintf(
       page + used, kSettingsPageCap - used,
       "<h2 style=\"font-size:1rem;margin:1.25rem 0 .35rem\">Weather (Tomorrow.io)</h2>"
@@ -539,7 +548,10 @@ void handleSave() {
       s_server->arg("beep_tone").c_str(), s_server->arg("bright_pct").c_str(),
       s_server->arg("show_sweep").c_str(), s_server->arg("detail_timeout").c_str());
 
-  services::apikeys::saveWeatherKeyFromForm(s_server->arg("weather_key").c_str());
+  const bool use_weather_before = services::apikeys::useWeather();
+  const bool weather_key_saved =
+      services::apikeys::saveWeatherKeyFromForm(s_server->arg("weather_key").c_str());
+  services::apikeys::saveWeatherEnabledFromForm(s_server->arg("use_weather").c_str());
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
@@ -550,6 +562,10 @@ void handleSave() {
   if (!loc_ok) {
     sendLocationErrorPage();
     return;
+  }
+
+  if (weather_key_saved || use_weather_before != services::apikeys::useWeather()) {
+    services::weather::notifyEnabledChanged();
   }
 
   sendSavedPage();

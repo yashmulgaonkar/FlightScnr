@@ -403,6 +403,9 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
 }
 
 bool fetchWeatherBlocking(WeatherData* out) {
+  if (!services::apikeys::canUseWeather()) {
+    return false;
+  }
   const char* key = services::apikeys::weatherKey();
   if (key == nullptr || key[0] == '\0') {
     Serial.println("[weather] no API key set");
@@ -513,9 +516,8 @@ void init() {
 
 void bootSanityCheck() {
   Serial.println("[weather] boot sanity check: one synchronous API call");
-  const char* key = services::apikeys::weatherKey();
-  if (key == nullptr || key[0] == '\0') {
-    Serial.println("[weather] boot check: NO API KEY set (configure on settings page)");
+  if (!services::apikeys::canUseWeather()) {
+    Serial.println("[weather] boot check: API disabled or no key set");
     return;
   }
   s_req_lat = services::map_center::latitude();
@@ -606,7 +608,32 @@ void notifyLocationChanged() {
   requestRefresh(true);
 }
 
+void notifyApiKeyChanged() {
+  if (!services::apikeys::canUseWeather()) {
+    return;
+  }
+  s_retry_after_ms = 0;
+  s_last_attempt_ms = 0;
+  Serial.println("[weather] API key changed - refresh requested");
+  services::adsb::cancelPendingFetch();
+  requestRefresh(true);
+}
+
+void notifyEnabledChanged() {
+  if (!services::apikeys::canUseWeather()) {
+    s_live.valid = false;
+    s_staging.valid = false;
+    s_ready = false;
+    Serial.println("[weather] API disabled - cache cleared");
+    return;
+  }
+  notifyApiKeyChanged();
+}
+
 void requestRefresh(bool force) {
+  if (!services::apikeys::canUseWeather()) {
+    return;
+  }
   if (s_pending) {
     return;
   }

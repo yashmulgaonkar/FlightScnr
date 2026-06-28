@@ -58,6 +58,14 @@ void requestOnScreenOpen();
  *  weather cached for the previous coordinates and queues a refresh. */
 void notifyLocationChanged();
 
+/** Call after a weather API key is saved. Clears no-key backoff and queues a
+ *  refresh so first-time setup produces data without waiting for a screen open. */
+void notifyApiKeyChanged();
+
+/** Call after the Tomorrow.io enable checkbox is saved. Clears cached data when
+ *  disabled, or queues a refresh when re-enabled with a key. */
+void notifyEnabledChanged();
+
 bool fetchInProgress();
 /** True when a background fetch has staged fresh data awaiting processReady(). */
 bool fetchReady();
