@@ -29,6 +29,7 @@
 #include "services/weather_icon.h"
 #include "services/settings_apply.h"
 #include "services/wifi_setup.h"
+#include "services/off_hours.h"
 #include "ui/clock_screen.h"
 #include "ui/clock_settings_screen.h"
 #include "ui/details_screen.h"
@@ -75,6 +76,10 @@ unsigned long g_loop_max_ms = 0;
 bool g_radar_full_draw_pending = false;
 unsigned long g_radar_full_draw_pending_since_ms = 0;
 bool g_flight_detail_draw_pending = false;
+
+bool g_off_hours_active = false;
+unsigned long g_off_hours_last_check_ms = 0;
+unsigned long g_off_hours_wake_override_until_ms = 0;
 
 uint32_t g_diag_sweep_frames = 0;
 uint32_t g_diag_slow_loops = 0;
@@ -923,6 +928,50 @@ void tickSecondaryScreenTimeout() {
   }
 }
 
+void tickOffHours() {
+  const unsigned long now = millis();
+  if (now - g_off_hours_last_check_ms < config::kOffHoursCheckIntervalMs) {
+    return;
+  }
+  g_off_hours_last_check_ms = now;
+
+  if (g_off_hours_wake_override_until_ms != 0 && now < g_off_hours_wake_override_until_ms) {
+    return;
+  }
+  if (g_off_hours_wake_override_until_ms != 0 && now >= g_off_hours_wake_override_until_ms) {
+    g_off_hours_wake_override_until_ms = 0;
+  }
+
+  const bool was_active = g_off_hours_active;
+  const bool is_active = services::offhours::active();
+  g_off_hours_active = is_active;
+
+  if (!was_active && is_active) {
+    const auto mode = services::offhours::mode();
+    if (mode == services::offhours::Mode::DisplayOff) {
+      displaySleep();
+      Serial.println("[offhours] entering night mode (display off)");
+    } else {
+      g_screen = AppScreen::Clock;
+      showClock();
+      hardware::displayBrightnessOverride(20);
+      Serial.println("[offhours] entering night mode (dim)");
+    }
+  } else if (was_active && !is_active) {
+    const auto mode = services::offhours::mode();
+    if (mode == services::offhours::Mode::DisplayOff) {
+      displayWake();
+    }
+    hardware::displayBrightnessRestore();
+    g_auto_idle_clock = false;
+    g_screen = AppScreen::Radar;
+    if (WiFi.status() == WL_CONNECTED) {
+      showRadar();
+    }
+    Serial.println("[offhours] exiting night mode");
+  }
+}
+
 void tickAutoIdleClock() {
   if (bootDetailsActive()) {
     return;
@@ -1421,6 +1470,7 @@ void setup() {
   services::clock::bootLoad();
   services::weather::bootLoad();
   services::tzlookup::bootLoad();
+  services::offhours::bootLoad();
 
   if (wifiSetupConnect()) {
     services::clock::startNtp();
@@ -1443,6 +1493,30 @@ void setup() {
 void loop() {
   const unsigned long loop_start = millis();
   hardware::buzzerPoll();
+  tickOffHours();
+  if (g_off_hours_active) {
+    inputPoll();
+    if (inputConsumeKnobPress() || inputConsumeScreenTap(nullptr, nullptr)) {
+      g_off_hours_active = false;
+      if (services::offhours::mode() == services::offhours::Mode::DisplayOff) {
+        displayWake();
+      }
+      hardware::displayBrightnessRestore();
+      g_off_hours_wake_override_until_ms = millis() + 5UL * 60UL * 1000UL;
+      g_screen = AppScreen::Radar;
+      if (WiFi.status() == WL_CONNECTED) {
+        showRadar();
+      }
+      Serial.println("[offhours] manual wake (knob press, 5 min override)");
+    } else {
+      if (services::offhours::mode() == services::offhours::Mode::Dim) {
+        tickClockDisplay();
+      }
+      settingsWebPoll();
+      tickDiagLog();
+      return;
+    }
+  }
   tickBootDetailsSplash();
   tickSecondaryScreenTimeout();
   tickAutoIdleClock();

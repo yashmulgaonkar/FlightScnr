@@ -211,6 +211,11 @@ constexpr uint32_t kMinContiguousHeapForWeather = 20000;
 /** Default unit system when the user has not overridden it (true = °F/imperial). */
 constexpr bool kWeatherUseImperialDefault = false;
 
+// --- Off-hours (night mode) ---
+constexpr uint16_t kOffHoursDefaultStartMin = 1320;  // 22:00
+constexpr uint16_t kOffHoursDefaultEndMin = 420;      // 07:00
+constexpr unsigned long kOffHoursCheckIntervalMs = 60000;  // RTC poll every 60s
+
 // --- FreeRTOS core affinity (ESP32-S3: 0 = PRO_CPU / WiFi, 1 = APP_CPU / UI) ---
 /** HTTPS workers, WiFi event callbacks, mbedTLS — keep off the render loop core. */
 constexpr uint8_t kCoreNetwork = 0;

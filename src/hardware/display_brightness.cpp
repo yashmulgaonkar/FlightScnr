@@ -97,4 +97,14 @@ void displayBrightnessSaveFromForm(const char* percent_str) {
   Serial.printf("Brightness: %u%%\n", static_cast<unsigned>(s_percent));
 }
 
+void displayBrightnessOverride(uint8_t percent) {
+  Arduino_GFX* const panel = tft.raw();
+  if (panel == nullptr) {
+    return;
+  }
+  panel->Display_Brightness(panelLevelForPercent(percent));
+}
+
+void displayBrightnessRestore() { displayApplyBrightness(); }
+
 }  // namespace hardware

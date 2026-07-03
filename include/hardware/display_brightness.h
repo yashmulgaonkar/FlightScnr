@@ -19,4 +19,10 @@ void displayBrightnessSaveFromForm(const char* percent_str);
 /** Apply current level to the panel. */
 void displayApplyBrightness();
 
+/** Temporarily override brightness (does NOT persist). */
+void displayBrightnessOverride(uint8_t percent);
+
+/** Restore brightness to the user's saved level. */
+void displayBrightnessRestore();
+
 }  // namespace hardware

@@ -59,3 +59,15 @@ void displayInit() {
 
   tft.setTextWrap(false);
 }
+
+void displaySleep() {
+  if (s_panel != nullptr) {
+    s_panel->displayOff();
+  }
+}
+
+void displayWake() {
+  if (s_panel != nullptr) {
+    s_panel->displayOn();
+  }
+}

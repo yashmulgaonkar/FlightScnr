@@ -21,6 +21,7 @@
 #include "services/settings_apply.h"
 #include "services/tz_lookup.h"
 #include "services/weather.h"
+#include "services/off_hours.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
 #include "ui/radar_scale.h"
@@ -346,6 +347,45 @@ void handleSettingsPage() {
 
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
+  // ---------- Off-Hours card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#9790;</span>"
+            "Off-Hours<span class=\"sum\">night mode schedule</span>"
+            "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">");
+  appendToggle(page, kSettingsPageCap, &used, "night_en", "Enable off-hours (night mode)",
+               services::offhours::enabled());
+  {
+    const auto night_mode = services::offhours::mode();
+    const int nm = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<label for=\"night_mode\">During off-hours</label>"
+        "<select id=\"night_mode\" name=\"night_mode\">"
+        "<option value=\"0\"%s>Dim clock (20%%)</option>"
+        "<option value=\"1\"%s>Turn off display</option>"
+        "</select>",
+        night_mode == services::offhours::Mode::Dim ? " selected" : "",
+        night_mode == services::offhours::Mode::DisplayOff ? " selected" : "");
+    if (nm > 0) used += static_cast<size_t>(nm);
+  }
+  {
+    const uint16_t start = services::offhours::startMinute();
+    const uint16_t end = services::offhours::endMinute();
+    const int nt = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<div class=\"row2\">"
+        "<div><label for=\"night_start\">Start</label>"
+        "<input type=\"time\" id=\"night_start\" name=\"night_start\" value=\"%02u:%02u\"></div>"
+        "<div><label for=\"night_end\">End</label>"
+        "<input type=\"time\" id=\"night_end\" name=\"night_end\" value=\"%02u:%02u\"></div>"
+        "</div>",
+        start / 60, start % 60, end / 60, end % 60);
+    if (nt > 0) used += static_cast<size_t>(nt);
+  }
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"note\">During off-hours the device shows a dim clock or turns off the "
+            "display. All API calls are paused. Knob press wakes the device.</p>");
+  appendRaw(page, kSettingsPageCap, &used, "</div></details>");
+
   // ---------- Sound card ----------
   appendRaw(page, kSettingsPageCap, &used,
             "<details class=\"card\"><summary><span class=\"ico\">&#9835;</span>Sound"
@@ -587,6 +627,10 @@ void handleSave() {
   const bool auto_tz_before = services::clock::useAutoTimezone();
   services::clock::saveAutoTimezoneFromForm(s_server->arg("auto_timezone").c_str());
   ui::radar::accentSaveFromForm(s_server->arg("radar_accent").c_str());
+  services::offhours::saveFromForm(s_server->arg("night_en").c_str(),
+                                   s_server->arg("night_mode").c_str(),
+                                   s_server->arg("night_start").c_str(),
+                                   s_server->arg("night_end").c_str());
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
 
