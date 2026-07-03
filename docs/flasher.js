@@ -90,7 +90,8 @@ function updateReleaseMeta() {
     return;
   }
 
-  const prefix = release.source === "bundled" ? "Latest bundled" : "Selected";
+  const isLatest = release.source === "bundled" || release.source === "latest";
+  const prefix = isLatest ? "Latest" : "Selected";
   const details = [
     release.name || release.version,
     formatPublishedDate(release.publishedAt),
@@ -102,7 +103,7 @@ function updateReleaseMeta() {
   if (chipErased) {
     notes.push("Chip erase in this session requires Full install.");
   }
-  if (release.source === "bundled") {
+  if (isLatest) {
     notes.push("Latest release supports both Full install and Update app only.");
   } else if (release.appPart) {
     notes.push("Historical releases use Full install only for safety.");
@@ -284,7 +285,7 @@ function populateReleaseSelect() {
   for (const release of releaseChoices) {
     const option = document.createElement("option");
     option.value = release.id;
-    if (release.source === "bundled") {
+    if (release.source === "bundled" || release.source === "latest") {
       option.textContent = `Latest (${release.version || "current"})`;
     } else {
       const published = formatPublishedDate(release.publishedAt);
@@ -294,38 +295,65 @@ function populateReleaseSelect() {
     }
     els.releaseSelect.appendChild(option);
   }
+  const defaultId = releaseChoices[0]?.id ?? BUNDLED_RELEASE_ID;
   const selected = releaseChoices.some((release) => release.id === previous)
     ? previous
-    : BUNDLED_RELEASE_ID;
+    : defaultId;
   els.releaseSelect.value = selected;
   els.releaseSelect.disabled = busy || releaseChoices.length <= 1;
   updateInstallModeUI();
 }
 
 async function loadReleaseOptions() {
-  const choices = [];
+  let bundled = null;
+  let ghReleases = [];
 
   try {
     const manifest = await loadFirmwareManifest();
-    choices.push(buildBundledRelease(manifest));
+    bundled = buildBundledRelease(manifest);
   } catch (err) {
     console.warn("Bundled manifest unavailable:", err);
   }
 
   try {
-    const historical = await loadGitHubReleases();
-    const bundledVersion = choices[0]?.version ?? "";
-    for (const release of historical) {
-      if (release.version === bundledVersion) {
-        continue;
-      }
-      choices.push(release);
-    }
+    ghReleases = await loadGitHubReleases();
     releaseLoadWarning = "";
   } catch (err) {
     releaseLoadWarning =
       "Older GitHub releases are unavailable right now.";
     console.warn("GitHub releases unavailable:", err);
+  }
+
+  const choices = [];
+  const newestGh = ghReleases[0] ?? null;
+
+  if (bundled && newestGh && newestGh.version !== bundled.version) {
+    newestGh.source = "latest";
+    newestGh.allowAppOnly = true;
+    choices.push(newestGh);
+    if (bundled.version) {
+      choices.push(bundled);
+    }
+    for (const release of ghReleases.slice(1)) {
+      if (release.version === bundled.version) {
+        continue;
+      }
+      choices.push(release);
+    }
+  } else if (bundled) {
+    choices.push(bundled);
+    for (const release of ghReleases) {
+      if (release.version === bundled.version) {
+        continue;
+      }
+      choices.push(release);
+    }
+  } else {
+    if (newestGh) {
+      newestGh.source = "latest";
+      newestGh.allowAppOnly = true;
+    }
+    choices.push(...ghReleases);
   }
 
   if (choices.length === 0) {
