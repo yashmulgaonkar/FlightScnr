@@ -87,6 +87,36 @@ a {
   margin: 1.5em 0 0.75em;
 }
 
+.release-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  align-items: center;
+  margin: 1.1em 0 0;
+}
+
+.release-picker label {
+  font-size: 0.95rem;
+}
+
+.release-picker select {
+  min-width: min(24rem, calc(100vw - 40px));
+  max-width: 100%;
+  font: inherit;
+  line-height: 1.4;
+  padding: 0.45em 0.7em;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  background: #fff;
+  color: inherit;
+}
+
+.release-picker select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 button,
 .file-btn {
   appearance: none;
@@ -169,6 +199,11 @@ input[type="file"] {
 
 #release-meta {
   text-align: center;
+}
+
+#release-help {
+  text-align: center;
+  min-height: 1.4em;
 }
 
 .status-line {
@@ -258,6 +293,12 @@ progress {
 
   button,
   .file-btn {
+    border-color: #555;
+    background: #444;
+    color: #fff;
+  }
+
+  .release-picker select {
     border-color: #555;
     background: #444;
     color: #fff;

@@ -87,7 +87,7 @@ python -m platformio run -e tencoder-pro -t upload   # Windows if pio not on PAT
 pio run -e tencoder-pro -t upload                      # otherwise
 ```
 
-**WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) - Connect → Install (factory image at 0x0). Hold screen (**BOOT**) if the port doesn’t appear.
+**WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) - Connect → choose the latest or an older release → Install. Older releases are offered as full installs for safer downgrades. Hold screen (**BOOT**) if the port doesn’t appear.
 
 **Merged binary:** `pio run -t merge -e tencoder-pro` → `.pio/build/tencoder-pro/firmware-merged.bin`
 

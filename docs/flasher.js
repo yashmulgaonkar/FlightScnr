@@ -6,6 +6,9 @@ const FULL_FLASH_OFFSET = 0;
 const APP_FLASH_OFFSET = 0x10000;
 const FIRMWARE_BASE = "./firmware";
 const MANIFEST_URL = `${FIRMWARE_BASE}/manifest.json`;
+const RELEASES_API_URL =
+  "https://api.github.com/repos/yashmulgaonkar/FlightScnr/releases?per_page=20";
+const BUNDLED_RELEASE_ID = "__bundled_latest__";
 
 const els = {
   connectBtn: document.getElementById("connect-btn"),
@@ -18,8 +21,10 @@ const els = {
   installModeFull: document.getElementById("install-mode-full"),
   installModeApp: document.getElementById("install-mode-app"),
   installModeAppLabel: document.getElementById("install-mode-app-label"),
+  releaseSelect: document.getElementById("release-select"),
   status: document.getElementById("status"),
   releaseMeta: document.getElementById("release-meta"),
+  releaseHelp: document.getElementById("release-help"),
   progressWrap: document.getElementById("progress-wrap"),
   progress: document.getElementById("progress"),
   progressLabel: document.getElementById("progress-label"),
@@ -32,6 +37,9 @@ let esploader = null;
 let busy = false;
 /** True after chip erase in this session - app-only install is invalid until full install. */
 let chipErased = false;
+let bundledManifestPromise = null;
+let releaseChoices = [];
+let releaseLoadWarning = "";
 
 function log(line) {
   const ts = new Date().toLocaleTimeString();
@@ -43,6 +51,70 @@ function setStatus(text) {
   els.status.textContent = text;
 }
 
+function formatSizeMb(bytes) {
+  return bytes ? `${(bytes / (1024 * 1024)).toFixed(2)} MB` : "? MB";
+}
+
+function formatPublishedDate(iso) {
+  if (!iso) {
+    return "";
+  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function selectedRelease() {
+  return (
+    releaseChoices.find((release) => release.id === els.releaseSelect.value) ??
+    releaseChoices[0] ??
+    null
+  );
+}
+
+function releaseAllowsAppInstall(release = selectedRelease()) {
+  return Boolean(release?.allowAppOnly && release?.appPart);
+}
+
+function updateReleaseMeta() {
+  const release = selectedRelease();
+  if (!release) {
+    els.releaseMeta.textContent = "Loading firmware releases...";
+    els.releaseHelp.textContent = "";
+    return;
+  }
+
+  const prefix = release.source === "bundled" ? "Latest bundled" : "Selected";
+  const details = [
+    release.name || release.version,
+    formatPublishedDate(release.publishedAt),
+    `${formatSizeMb(release.fullPart?.size)} full image`,
+  ].filter(Boolean);
+  els.releaseMeta.textContent = `${prefix}: ${details.join(" | ")}`;
+
+  const notes = [];
+  if (chipErased) {
+    notes.push("Chip erase in this session requires Full install.");
+  }
+  if (release.source === "bundled") {
+    notes.push("Latest release supports both Full install and Update app only.");
+  } else if (release.appPart) {
+    notes.push("Historical releases use Full install only for safety.");
+  } else {
+    notes.push("This historical release only includes a full-image installer.");
+  }
+  if (releaseLoadWarning) {
+    notes.push(releaseLoadWarning);
+  }
+  els.releaseHelp.textContent = notes.join(" ");
+}
+
 function getInstallMode() {
   if (chipErased || els.installModeApp.disabled) {
     return "full";
@@ -51,12 +123,14 @@ function getInstallMode() {
 }
 
 function updateInstallModeUI() {
-  const appDisabled = chipErased;
+  const appDisabled = busy || chipErased || !releaseAllowsAppInstall();
+  els.installModeFull.disabled = busy;
   els.installModeApp.disabled = appDisabled;
   els.installModeAppLabel.classList.toggle("disabled", appDisabled);
   if (appDisabled) {
     els.installModeFull.checked = true;
   }
+  updateReleaseMeta();
 }
 
 function setBusy(value) {
@@ -65,11 +139,7 @@ function setBusy(value) {
   els.disconnectBtn.disabled = value || port === null;
   els.flashLatestBtn.disabled = value || port === null;
   els.eraseBtn.disabled = value || port === null;
-  els.installModeFull.disabled = value;
-  if (!chipErased) {
-    els.installModeApp.disabled = busy;
-    els.installModeAppLabel.classList.toggle("disabled", busy);
-  }
+  els.releaseSelect.disabled = value || releaseChoices.length <= 1;
   if (value) {
     setStatus("Working…");
     els.status.className = "";
@@ -80,9 +150,7 @@ function setBusy(value) {
     setStatus("Not connected");
     els.status.className = "";
   }
-  if (!value) {
-    updateInstallModeUI();
-  }
+  updateInstallModeUI();
 }
 
 function setProgress(pct, label) {
@@ -114,42 +182,184 @@ function manifestPart(manifest, mode) {
 }
 
 async function loadFirmwareManifest() {
-  const resp = await fetch(MANIFEST_URL, { cache: "no-store" });
-  if (!resp.ok) {
-    throw new Error(`Manifest unavailable (HTTP ${resp.status})`);
+  if (bundledManifestPromise === null) {
+    bundledManifestPromise = (async () => {
+      const resp = await fetch(MANIFEST_URL, { cache: "no-store" });
+      if (!resp.ok) {
+        throw new Error(`Manifest unavailable (HTTP ${resp.status})`);
+      }
+      return resp.json();
+    })();
   }
-  return resp.json();
+  return bundledManifestPromise;
 }
 
-async function loadLatestReleaseMeta() {
+function buildBundledRelease(manifest) {
+  const fullPart = manifestPart(manifest, "full");
+  const appPart = manifestPart(manifest, "app");
+  return {
+    id: BUNDLED_RELEASE_ID,
+    source: "bundled",
+    name: manifest.name || manifest.version || "Latest release",
+    version: manifest.version || "",
+    publishedAt: null,
+    allowAppOnly: Boolean(appPart?.path),
+    fullPart: {
+      url: `${FIRMWARE_BASE}/${fullPart.path}`,
+      offset: fullPart.offset ?? FULL_FLASH_OFFSET,
+      size: fullPart.size ?? manifest.size ?? null,
+      label: fullPart.path,
+      headers: null,
+    },
+    appPart: appPart?.path
+      ? {
+          url: `${FIRMWARE_BASE}/${appPart.path}`,
+          offset: appPart.offset ?? APP_FLASH_OFFSET,
+          size: appPart.size ?? null,
+          label: appPart.path,
+          headers: null,
+        }
+      : null,
+  };
+}
+
+function buildGitHubRelease(release) {
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const fullAsset =
+    assets.find((asset) => asset.name === MERGED_ASSET) ??
+    assets.find((asset) => /merged/i.test(asset.name ?? ""));
+  if (!fullAsset) {
+    return null;
+  }
+  const appAsset =
+    assets.find((asset) => asset.name === APP_ASSET) ??
+    assets.find((asset) => /app/i.test(asset.name ?? ""));
+  return {
+    id: `release:${release.tag_name}`,
+    source: "github",
+    name: release.name || release.tag_name,
+    version: release.tag_name,
+    publishedAt: release.published_at || release.created_at || null,
+    allowAppOnly: false,
+    fullPart: {
+      url: fullAsset.url,
+      offset: FULL_FLASH_OFFSET,
+      size: fullAsset.size ?? null,
+      label: fullAsset.name,
+      headers: { Accept: "application/octet-stream" },
+    },
+    appPart: appAsset
+      ? {
+          url: appAsset.url,
+          offset: APP_FLASH_OFFSET,
+          size: appAsset.size ?? null,
+          label: appAsset.name,
+          headers: { Accept: "application/octet-stream" },
+        }
+      : null,
+  };
+}
+
+async function loadGitHubReleases() {
+  const resp = await fetch(RELEASES_API_URL, {
+    cache: "no-store",
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!resp.ok) {
+    throw new Error(`Release list unavailable (HTTP ${resp.status})`);
+  }
+  const releases = await resp.json();
+  if (!Array.isArray(releases)) {
+    throw new Error("Release list response was not an array");
+  }
+  return releases
+    .filter((release) => !release.draft && !release.prerelease)
+    .map(buildGitHubRelease)
+    .filter(Boolean);
+}
+
+function populateReleaseSelect() {
+  const previous = els.releaseSelect.value;
+  els.releaseSelect.innerHTML = "";
+  for (const release of releaseChoices) {
+    const option = document.createElement("option");
+    option.value = release.id;
+    if (release.source === "bundled") {
+      option.textContent = `Latest (${release.version || "current"})`;
+    } else {
+      const published = formatPublishedDate(release.publishedAt);
+      option.textContent = published
+        ? `${release.version} - ${published}`
+        : release.version || release.name;
+    }
+    els.releaseSelect.appendChild(option);
+  }
+  const selected = releaseChoices.some((release) => release.id === previous)
+    ? previous
+    : BUNDLED_RELEASE_ID;
+  els.releaseSelect.value = selected;
+  els.releaseSelect.disabled = busy || releaseChoices.length <= 1;
+  updateInstallModeUI();
+}
+
+async function loadReleaseOptions() {
+  const choices = [];
+
   try {
     const manifest = await loadFirmwareManifest();
-    const fullPart = manifestPart(manifest, "full");
-    const sizeMb = fullPart.size
-      ? (fullPart.size / (1024 * 1024)).toFixed(2)
-      : manifest.size
-        ? (manifest.size / (1024 * 1024)).toFixed(2)
-        : "?";
-    els.releaseMeta.textContent = `Latest: ${manifest.name || manifest.version} (${sizeMb} MB full image)`;
+    choices.push(buildBundledRelease(manifest));
   } catch (err) {
-    els.releaseMeta.textContent =
-      "Firmware not bundled yet (run Release workflow, then redeploy Pages).";
-    console.warn(err);
+    console.warn("Bundled manifest unavailable:", err);
   }
+
+  try {
+    const historical = await loadGitHubReleases();
+    const bundledVersion = choices[0]?.version ?? "";
+    for (const release of historical) {
+      if (release.version === bundledVersion) {
+        continue;
+      }
+      choices.push(release);
+    }
+    releaseLoadWarning = "";
+  } catch (err) {
+    releaseLoadWarning =
+      "Older GitHub releases are unavailable right now.";
+    console.warn("GitHub releases unavailable:", err);
+  }
+
+  if (choices.length === 0) {
+    releaseChoices = [];
+    els.releaseSelect.innerHTML = "<option>No releases available</option>";
+    els.releaseSelect.disabled = true;
+    els.releaseMeta.textContent =
+      "No firmware available (run Release workflow, then redeploy Pages).";
+    els.releaseHelp.textContent = "";
+    return;
+  }
+
+  releaseChoices = choices;
+  populateReleaseSelect();
 }
 
 async function fetchFirmwareForInstall(mode) {
-  const manifest = await loadFirmwareManifest();
-  const part = manifestPart(manifest, mode);
-  if (!part?.path) {
-    throw new Error("Firmware manifest has no image path");
+  const release = selectedRelease();
+  if (!release) {
+    throw new Error("No firmware release is selected");
   }
-  const url = `${FIRMWARE_BASE}/${part.path}`;
-  const offset =
-    part.offset ?? (mode === "app" ? APP_FLASH_OFFSET : FULL_FLASH_OFFSET);
+  const part = mode === "app" ? release.appPart : release.fullPart;
+  if (!part?.url) {
+    throw new Error("Selected release does not have the requested installer");
+  }
 
-  log(`Downloading ${manifest.name || manifest.version || part.path}…`);
-  const resp = await fetch(url, { cache: "no-store" });
+  const releaseLabel = release.version || release.name || part.label;
+  log(
+    `Downloading ${releaseLabel} (${mode === "app" ? "app-only" : "full install"})…`,
+  );
+  const resp = await fetch(part.url, {
+    cache: "no-store",
+    headers: part.headers ?? undefined,
+  });
   if (!resp.ok) {
     throw new Error(`Download failed (HTTP ${resp.status})`);
   }
@@ -158,7 +368,11 @@ async function fetchFirmwareForInstall(mode) {
     throw new Error("Downloaded file is empty");
   }
   log(`Downloaded ${(buf.byteLength / (1024 * 1024)).toFixed(2)} MB`);
-  return { data: new Uint8Array(buf), offset, label: part.path };
+  return {
+    data: new Uint8Array(buf),
+    offset: part.offset ?? (mode === "app" ? APP_FLASH_OFFSET : FULL_FLASH_OFFSET),
+    label: part.label,
+  };
 }
 
 async function connect() {
@@ -313,6 +527,7 @@ async function runErase() {
 
 els.connectBtn.addEventListener("click", connect);
 els.disconnectBtn.addEventListener("click", disconnect);
+els.releaseSelect.addEventListener("change", updateInstallModeUI);
 
 els.flashLatestBtn.addEventListener("click", () => {
   const mode = getInstallMode();
@@ -356,7 +571,7 @@ navigator.serial?.addEventListener("disconnect", () => {
 });
 
 updateInstallModeUI();
-loadLatestReleaseMeta();
+loadReleaseOptions();
 log("Ready. Use Chrome or Edge on desktop.");
 log("If the port is missing: push the screen down (BOOT) and hold, tap RESET on the back of the board, then Connect.");
 log("If Connect or Install fails: hold the screen in (BOOT) and retry until flashing starts.");

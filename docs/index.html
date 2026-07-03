@@ -42,6 +42,13 @@
         </label>
       </fieldset>
 
+      <div class="release-picker">
+        <label for="release-select">Firmware version</label>
+        <select id="release-select" disabled>
+          <option>Loading versions...</option>
+        </select>
+      </div>
+
       <p class="button-row">
         <button id="connect-btn" type="button">Connect</button>
         <button id="flash-latest-btn" type="button" disabled>Install</button>
@@ -72,6 +79,7 @@
       </dialog>
 
       <p class="meta" id="release-meta">Loading latest release&hellip;</p>
+      <p class="meta" id="release-help"></p>
       <p class="status-line"><span id="status">Not connected</span></p>
 
       <div id="progress-wrap">
