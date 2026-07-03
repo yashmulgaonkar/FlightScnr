@@ -18,4 +18,12 @@ void radarDisplayRefreshAircraft();
  *  only reappears once a blip actually enters the visible scope. */
 size_t radarDisplayInRangeAircraftCount();
 
+/** Debug probes for [radar] resume diagnostics (kRadarResumeDebug). */
+bool radarDisplayDebugBgReady();
+bool radarDisplayDebugContentReady();
+bool radarDisplayDebugContentBaseValid();
+
+/** Drop offscreen radar sprites to relieve heap pressure (rebuilt on next draw). */
+void radarDisplayReleasePressureSprites();
+
 }  // namespace ui

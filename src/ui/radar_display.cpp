@@ -1206,6 +1206,16 @@ void radarDisplayRefreshSweep() {
 
   if (!s_content_ready) {
     if (!ensureContentSprite()) {
+      if (config::kRadarResumeDebug) {
+        static unsigned long s_last_no_sprite_log_ms = 0;
+        const unsigned long now_ms = millis();
+        if (now_ms - s_last_no_sprite_log_ms >= 2000UL) {
+          Serial.printf("[radar] sweep_no_sprite bg=%d content=%d base=%d heap=%u max_blk=%u\n",
+                        s_bg_ready ? 1 : 0, s_content_ready ? 1 : 0,
+                        s_content_base_valid ? 1 : 0, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+          s_last_no_sprite_log_ms = now_ms;
+        }
+      }
       const DrawScope scope(tft);
       if (draw_sweep) {
         unsigned long paint_gap = 0;
@@ -1228,6 +1238,18 @@ void radarDisplayRefreshSweep() {
 
   if (s_aircraft_dirty || !s_content_base_valid) {
     if (!rebuildContentBase()) {
+      if (config::kRadarResumeDebug) {
+        static unsigned long s_last_rebuild_fail_ms = 0;
+        const unsigned long now_ms = millis();
+        if (now_ms - s_last_rebuild_fail_ms >= 2000UL) {
+          Serial.printf("[radar] sweep_rebuild_fail bg=%d content=%d base=%d dirty=%d heap=%u "
+                        "max_blk=%u\n",
+                        s_bg_ready ? 1 : 0, s_content_ready ? 1 : 0,
+                        s_content_base_valid ? 1 : 0, s_aircraft_dirty ? 1 : 0,
+                        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+          s_last_rebuild_fail_ms = now_ms;
+        }
+      }
       return;
     }
 
@@ -1332,6 +1354,16 @@ void radarDisplayRefreshAircraft() {
   if (!ensureContentSprite() || !rebuildContentBase()) {
     s_aircraft_dirty = true;
     s_aircraft_dirty_rect = dirty;
+    if (config::kRadarResumeDebug) {
+      static unsigned long s_last_defer_ms = 0;
+      const unsigned long now_ms = millis();
+      if (now_ms - s_last_defer_ms >= 2000UL) {
+        Serial.printf("[radar] ac_refresh_defer bg=%d content=%d base=%d heap=%u max_blk=%u\n",
+                      s_bg_ready ? 1 : 0, s_content_ready ? 1 : 0,
+                      s_content_base_valid ? 1 : 0, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        s_last_defer_ms = now_ms;
+      }
+    }
     if (config::kRadarSweepTraceDebug) {
       Serial.println("[sweep] aircraft_refresh deferred (no content sprite)");
     }
@@ -1361,5 +1393,26 @@ void radarDisplayRefreshAircraft() {
 }
 
 size_t radarDisplayInRangeAircraftCount() { return inRangeAircraftCount(); }
+
+void radarDisplayReleasePressureSprites() {
+  if (s_content_ready) {
+    s_content.deleteSprite();
+    s_content_ready = false;
+    s_content_base_valid = false;
+    s_sweep_track_valid = false;
+  }
+  if (s_bg_ready) {
+    s_bg.deleteSprite();
+    s_bg_ready = false;
+    s_content_base_valid = false;
+    s_sweep_track_valid = false;
+  }
+}
+
+bool radarDisplayDebugBgReady() { return s_bg_ready; }
+
+bool radarDisplayDebugContentReady() { return s_content_ready; }
+
+bool radarDisplayDebugContentBaseValid() { return s_content_base_valid; }
 
 }  // namespace ui

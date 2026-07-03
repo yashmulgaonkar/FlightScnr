@@ -43,6 +43,12 @@ void tickDetailWorkerWatchdog(unsigned long now_ms);
 /** Clear detail enrichment state when leaving flight detail. */
 void cancelDetailEnrichment();
 
+/** Route worker step name for resume diagnostics. */
+const char* detailWorkerDebugStepTag();
+
+/** True when route worker is waiting for the detail sprite to be released. */
+bool detailWorkerDebugSpriteReleasePending();
+
 /** True when a background detail enrichment finished. */
 bool detailEnrichmentReady();
 

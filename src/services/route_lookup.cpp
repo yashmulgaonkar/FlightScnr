@@ -157,8 +157,19 @@ const char* stepTag(DetailStep step) {
   }
 }
 
+const char* detailWorkerDebugStepTagImpl() {
+  switch (s_detail_step) {
+    case DetailStep::kIdle:
+      return "idle";
+    case DetailStep::kDone:
+      return "done";
+    default:
+      return stepTag(s_detail_step);
+  }
+}
+
 void logDetailStepBegin(DetailStep step, const char* callsign) {
-  if (!config::kSerialTraceDebug) {
+  if (!config::kSerialTraceDebug && !config::kRadarResumeDebug) {
     return;
   }
   s_detail_step_start_ms = millis();
@@ -166,7 +177,7 @@ void logDetailStepBegin(DetailStep step, const char* callsign) {
 }
 
 void logDetailStepEnd(DetailStep step, const char* callsign, bool ok) {
-  if (!config::kSerialTraceDebug) {
+  if (!config::kSerialTraceDebug && !config::kRadarResumeDebug) {
     return;
   }
   const unsigned long elapsed =
@@ -645,8 +656,9 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
   }
 
   const unsigned long http_start_ms = millis();
-  if (config::kSerialTraceDebug && worker_callsign != nullptr) {
-    Serial.printf("[detail] http begin %s\n", worker_callsign);
+  if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
+    Serial.printf("[detail] http begin %s step=%s heap=%u\n", worker_callsign,
+                  detailWorkerDebugStepTagImpl(), ESP.getFreeHeap());
   }
 
   WiFiClientSecure client;
@@ -667,7 +679,7 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
   http.setTimeout(timeout_ms);
   http.setReuse(false);
   const int http_code = http.sendRequest("GET");
-  if (config::kSerialTraceDebug && worker_callsign != nullptr) {
+  if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
     Serial.printf("[detail] http rsp %s code=%d (%lums)\n", worker_callsign, http_code,
                   millis() - http_start_ms);
   }
@@ -675,13 +687,17 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
     if (http_code < 0) {
       cleanup.tls_fail = true;
       s_tls_recover_requested = true;
-      if (config::kSerialTraceDebug && worker_callsign != nullptr) {
+      if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
         Serial.printf("[detail] http tls fail %s code=%d free=%u max_blk=%u\n", worker_callsign,
                       http_code, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
       }
     }
     http.end();
     client.stop();
+    if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
+      Serial.printf("[detail] http end %s code=%d (%lums)\n", worker_callsign, http_code,
+                    millis() - http_start_ms);
+    }
     return false;
   }
   if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
@@ -705,7 +721,8 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
       json_filter != nullptr
           ? deserializeJson(doc, payload, DeserializationOption::Filter(*json_filter))
           : deserializeJson(doc, payload);
-  if (err && config::kSerialTraceDebug && worker_callsign != nullptr) {
+  if (err && (config::kSerialTraceDebug || config::kRadarResumeDebug) &&
+      worker_callsign != nullptr) {
     Serial.printf("[detail] json err %s %s (%u bytes)\n", worker_callsign, err.c_str(),
                   static_cast<unsigned>(payload.length()));
   }
@@ -1356,8 +1373,10 @@ void drainDetailPending() {
 }
 
 void detailWorkerCancelWork() {
-  if (config::kSerialTraceDebug && s_detail_work_callsign[0] != '\0') {
-    Serial.printf("[detail] worker cancel %s\n", s_detail_work_callsign);
+  if ((config::kSerialTraceDebug || config::kRadarResumeDebug) &&
+      s_detail_work_callsign[0] != '\0') {
+    Serial.printf("[detail] worker cancel %s step=%s busy=%d req=%d\n", s_detail_work_callsign,
+                  detailWorkerDebugStepTagImpl(), s_detail_busy ? 1 : 0, s_detail_requested ? 1 : 0);
   }
   s_detail_requested = false;
   s_detail_step = DetailStep::kIdle;
@@ -1733,6 +1752,14 @@ void tickDetailEnrichDebounceImpl(unsigned long now_ms) {
 }
 
 void cancelDetailEnrichmentImpl() {
+  if (config::kRadarResumeDebug) {
+    const bool route_pause = s_detail_debounce_pending || s_detail_has_pending || s_detail_busy ||
+                             s_detail_requested || s_detail_step != DetailStep::kIdle;
+    Serial.printf("[detail] enrich cancel sel=%s step=%s sprite_rel=%d wkr=%d pause=%d\n",
+                  s_detail_selection_callsign[0] != '\0' ? s_detail_selection_callsign : "(none)",
+                  detailWorkerDebugStepTagImpl(), s_detail_sprite_release_pending ? 1 : 0,
+                  (s_detail_busy || s_detail_requested) ? 1 : 0, route_pause ? 1 : 0);
+  }
   s_detail_selection_callsign[0] = '\0';
   s_detail_ready = false;
   s_detail_ready_callsign[0] = '\0';
@@ -1973,5 +2000,9 @@ void resetTlsHardFail() {
   s_route_tls_hard_fail = false;
   s_tls_recover_requested = false;
 }
+
+const char* detailWorkerDebugStepTag() { return detailWorkerDebugStepTagImpl(); }
+
+bool detailWorkerDebugSpriteReleasePending() { return s_detail_sprite_release_pending; }
 
 }  // namespace services::route

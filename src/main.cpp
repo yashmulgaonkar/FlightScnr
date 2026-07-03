@@ -73,6 +73,7 @@ uint32_t g_last_clock_minute_stamp = UINT32_MAX;
 unsigned long g_last_heap_log_ms = 0;
 unsigned long g_loop_max_ms = 0;
 bool g_radar_full_draw_pending = false;
+unsigned long g_radar_full_draw_pending_since_ms = 0;
 bool g_flight_detail_draw_pending = false;
 
 uint32_t g_diag_sweep_frames = 0;
@@ -137,6 +138,59 @@ void logNavContext(const char* event) {
       static_cast<unsigned>(ui::radarDisplayInRangeAircraftCount()), ESP.getFreeHeap());
 }
 
+void logRadarDebugState(const char* tag) {
+  if (!config::kRadarResumeDebug) {
+    return;
+  }
+  const unsigned long now = millis();
+  const unsigned long pending_ms =
+      g_radar_full_draw_pending && g_radar_full_draw_pending_since_ms != 0
+          ? now - g_radar_full_draw_pending_since_ms
+          : 0UL;
+  const unsigned long sweep_age_ms =
+      g_last_sweep_done_ms != 0 ? now - g_last_sweep_done_ms : 0UL;
+  const uint32_t adsb_age_ms = services::adsb::lastFetchOkAgeMs();
+  char adsb_age_buf[16];
+  if (adsb_age_ms == UINT32_MAX) {
+    strncpy(adsb_age_buf, "never", sizeof(adsb_age_buf) - 1);
+  } else {
+    snprintf(adsb_age_buf, sizeof(adsb_age_buf), "%lus", adsb_age_ms / 1000UL);
+  }
+  adsb_age_buf[sizeof(adsb_age_buf) - 1] = '\0';
+
+  Serial.printf(
+      "[radar] %s screen=%s full_draw=%d pending_ms=%lu radar_vis=%d sweep_age_ms=%lu "
+      "bg=%d content=%d base=%d detail_sp=%d https=%d adsb_busy=%d adsb_ready=%d adsb_age=%s "
+      "route_wkr=%d route_pause=%d step=%s sprite_rel=%d heap=%u max_blk=%u\n",
+      tag, screenName(g_screen), g_radar_full_draw_pending ? 1 : 0, pending_ms,
+      g_radar_visible ? 1 : 0, sweep_age_ms, ui::radarDisplayDebugBgReady() ? 1 : 0,
+      ui::radarDisplayDebugContentReady() ? 1 : 0, ui::radarDisplayDebugContentBaseValid() ? 1 : 0,
+      ui::flightDetailSpriteReady() ? 1 : 0, services::https::busy() ? 1 : 0,
+      services::adsb::fetchInProgress() ? 1 : 0, services::adsb::fetchReady() ? 1 : 0, adsb_age_buf,
+      services::route::detailWorkerBusy() ? 1 : 0, services::route::detailAdsbFetchPaused() ? 1 : 0,
+      services::route::detailWorkerDebugStepTag(),
+      services::route::detailWorkerDebugSpriteReleasePending() ? 1 : 0, ESP.getFreeHeap(),
+      ESP.getMaxAllocHeap());
+}
+
+void logFetchDefer(const char* reason) {
+  if (!config::kRadarResumeDebug && !config::kSerialTraceDebug) {
+    return;
+  }
+  static unsigned long s_last_log_ms = 0;
+  const unsigned long now = millis();
+  if (now - s_last_log_ms < 3000UL) {
+    return;
+  }
+  s_last_log_ms = now;
+  Serial.printf("[fetch] defer: %s screen=%s radar_vis=%d https=%d adsb_busy=%d route_pause=%d "
+                "heap=%u max_blk=%u\n",
+                reason, screenName(g_screen), g_radar_visible ? 1 : 0, services::https::busy() ? 1 : 0,
+                services::adsb::fetchInProgress() ? 1 : 0,
+                services::route::detailAdsbFetchPaused() ? 1 : 0, ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+}
+
 void logDiagLine(const char* tag, unsigned long diag_ivl_ms = config::kDiagLogIntervalMs) {
   const unsigned long uptime_sec = millis() / 1000UL;
   const unsigned hours = static_cast<unsigned>(uptime_sec / 3600UL);
@@ -195,7 +249,8 @@ void logDiagLine(const char* tag, unsigned long diag_ivl_ms = config::kDiagLogIn
       "adsb_proc_max=%lums wx_ok=%s wx_valid=%d wx_busy=%d wx_ready=%d wx_backoff=%lus "
       "tz_auto=%d tz_resolved=%d tz_busy=%d "
       "https=%d idle=%d hold=%d idle_clk=%d full_draw=%d route_wkr=%d route_pause=%d "
-      "sweep_gap=%lums sweep_fps=%u slow_loops=%u stk_loop=%u stk_adsb=%u loop_max=%lums lfs=%s\n",
+      "sweep_gap=%lums sweep_fps=%u bg=%d ct=%d base=%d detail_sp=%d slow_loops=%u stk_loop=%u "
+      "stk_adsb=%u loop_max=%lums lfs=%s\n",
       tag, hours, mins, ESP.getFreeHeap(), ESP.getMinFreeHeap(), g_diag_interval_min_heap,
       ESP.getMaxAllocHeap(), heap_caps_get_free_size(MALLOC_CAP_SPIRAM), wifi_up ? "up" : "down",
       rssi, screenName(g_screen), g_radar_visible ? 1 : 0,
@@ -211,7 +266,9 @@ void logDiagLine(const char* tag, unsigned long diag_ivl_ms = config::kDiagLogIn
       g_auto_idle_clock ? 1 : 0, g_hold_empty_radar ? 1 : 0,
       ui::displayPrefsAutoIdleClockEnabled() ? 1 : 0, g_radar_full_draw_pending ? 1 : 0,
       services::route::detailWorkerBusy() ? 1 : 0, services::route::detailAdsbFetchPaused() ? 1 : 0,
-      sweep_gap_ms, sweep_fps, g_diag_slow_loops, loop_stack,
+      sweep_gap_ms, sweep_fps, ui::radarDisplayDebugBgReady() ? 1 : 0,
+      ui::radarDisplayDebugContentReady() ? 1 : 0, ui::radarDisplayDebugContentBaseValid() ? 1 : 0,
+      ui::flightDetailSpriteReady() ? 1 : 0, g_diag_slow_loops, loop_stack,
       services::adsb::fetchTaskStackFreeBytes(), g_loop_max_ms, lfs_buf);
 
   g_loop_max_ms = 0;
@@ -287,6 +344,24 @@ void noteClockWeatherActivity() { g_clock_weather_activity_ms = millis(); }
 void releaseHttpsPressureMemory() {
   ui::flightDetailReleaseSprite();
   services::route::cancelDetailEnrichment();
+  services::route::tickDetailSpriteRelease();
+}
+
+/** After flight detail, release detail/route pressure and let TLS buffers drain.
+ *  Internal free heap settles at ~39KB post-enrichment; WiFi recycle does not
+ *  restore it and stalls the UI for seconds — the ADS-B floor matches route APIs. */
+void reclaimHeapAfterFlightDetail() {
+  const uint32_t heap_before = ESP.getFreeHeap();
+  const uint32_t blk_before = ESP.getMaxAllocHeap();
+
+  releaseHttpsPressureMemory();
+  services::https::drainTlsHeapAfterSession(2500);
+
+  if (config::kRadarResumeDebug || config::kSerialTraceDebug) {
+    Serial.printf("[radar] resume_reclaim heap=%u->%u blk=%u->%u adsb_ok=%d\n", heap_before,
+                  ESP.getFreeHeap(), blk_before, ESP.getMaxAllocHeap(),
+                  services::https::heapReadyForAdsb() ? 1 : 0);
+  }
 }
 
 bool tlsBlocksPanel() {
@@ -307,12 +382,21 @@ void completeDeferredRadarDraw() {
     return;
   }
   if (tlsBlocksPanel()) {
+    if (config::kRadarResumeDebug) {
+      static unsigned long s_last_defer_log_ms = 0;
+      const unsigned long now = millis();
+      if (now - s_last_defer_log_ms >= 2000UL) {
+        logRadarDebugState("defer_draw_tls");
+        s_last_defer_log_ms = now;
+      }
+    }
     return;
   }
   PanelSession panel(tft);
   ui::radarDisplayDraw();
   g_radar_full_draw_pending = false;
-  if (config::kSerialTraceDebug) {
+  g_radar_full_draw_pending_since_ms = 0;
+  if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
     Serial.println("[radar] deferred full draw complete");
   }
 }
@@ -321,6 +405,7 @@ void showRadar() {
   if (WiFi.status() != WL_CONNECTED) {
     g_radar_visible = false;
     g_radar_full_draw_pending = false;
+    g_radar_full_draw_pending_since_ms = 0;
     return;
   }
   ui::flightDetailReleaseSprite();
@@ -330,8 +415,9 @@ void showRadar() {
 
   if (tlsBlocksPanel()) {
     g_radar_full_draw_pending = true;
-    if (config::kSerialTraceDebug) {
-      Serial.println("[radar] defer full draw (tls busy)");
+    g_radar_full_draw_pending_since_ms = millis();
+    if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+      logRadarDebugState("show_defer_tls");
     }
     return;
   }
@@ -339,6 +425,10 @@ void showRadar() {
   PanelSession panel(tft);
   ui::radarDisplayDraw();
   g_radar_full_draw_pending = false;
+  g_radar_full_draw_pending_since_ms = 0;
+  if (config::kRadarResumeDebug) {
+    logRadarDebugState("show_drew");
+  }
 }
 
 void showFlightDetail() {
@@ -347,8 +437,10 @@ void showFlightDetail() {
   }
   if (detailDrawBlocked()) {
     g_flight_detail_draw_pending = true;
-    if (config::kSerialTraceDebug) {
-      Serial.println("[detail] defer draw (worker busy)");
+    if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+      Serial.printf("[radar] detail_draw_block sprite_rel=%d route_wkr=%d heap=%u\n",
+                    services::route::detailWorkerDebugSpriteReleasePending() ? 1 : 0,
+                    services::route::detailWorkerBusy() ? 1 : 0, ESP.getFreeHeap());
     }
     g_radar_visible = false;
     return;
@@ -497,6 +589,7 @@ void applySettingsLive() {
 }
 
 void returnToRadar(bool from_idle_timeout = false, bool manual_navigation = false) {
+  const AppScreen from_screen = g_screen;
   g_auto_idle_clock = false;
   g_hold_empty_radar = false;
   g_manual_radar_timed_visit = false;
@@ -511,8 +604,18 @@ void returnToRadar(bool from_idle_timeout = false, bool manual_navigation = fals
   if (g_screen == AppScreen::Clock || g_screen == AppScreen::Weather) {
     services::weather_icon::releaseBuffer();
   }
+  if (from_screen == AppScreen::FlightDetail && config::kRadarResumeDebug) {
+    const char* cs = ui::flightDetailSelectedCallsign();
+    Serial.printf("[radar] resume_pre callsign=%s step=%s sprite_rel=%d detail_sp=%d "
+                  "route_wkr=%d route_pause=%d https=%d adsb_busy=%d heap=%u\n",
+                  cs != nullptr ? cs : "(none)", services::route::detailWorkerDebugStepTag(),
+                  services::route::detailWorkerDebugSpriteReleasePending() ? 1 : 0,
+                  ui::flightDetailSpriteReady() ? 1 : 0, services::route::detailWorkerBusy() ? 1 : 0,
+                  services::route::detailAdsbFetchPaused() ? 1 : 0, services::https::busy() ? 1 : 0,
+                  services::adsb::fetchInProgress() ? 1 : 0, ESP.getFreeHeap());
+  }
   if (g_screen == AppScreen::FlightDetail) {
-    releaseHttpsPressureMemory();
+    reclaimHeapAfterFlightDetail();
   } else {
     services::route::cancelDetailEnrichment();
   }
@@ -525,6 +628,9 @@ void returnToRadar(bool from_idle_timeout = false, bool manual_navigation = fals
   g_radar_visible = false;
   if (WiFi.status() == WL_CONNECTED) {
     showRadar();
+  }
+  if (from_screen == AppScreen::FlightDetail && config::kRadarResumeDebug) {
+    logRadarDebugState(from_idle_timeout ? "resume_timeout" : "resume");
   }
   Serial.println(from_idle_timeout ? "Screen: radar (timeout)"
                                    : "Screen: radar");
@@ -604,6 +710,16 @@ void openFlightDetailFromRadar(int16_t tap_x, int16_t tap_y, bool from_screen_ta
   inputDiscardPendingInteractions();
   requestFlightDetailRouteEnrich(true);
   showFlightDetail();
+  if (config::kRadarResumeDebug) {
+    const char* cs = ui::flightDetailSelectedCallsign();
+    Serial.printf("[radar] detail_open callsign=%s detail_sp=%d route_wkr=%d route_pause=%d "
+                  "https=%d adsb_busy=%d heap=%u max_blk=%u\n",
+                  cs != nullptr ? cs : "(none)", ui::flightDetailSpriteReady() ? 1 : 0,
+                  services::route::detailWorkerBusy() ? 1 : 0,
+                  services::route::detailAdsbFetchPaused() ? 1 : 0, services::https::busy() ? 1 : 0,
+                  services::adsb::fetchInProgress() ? 1 : 0, ESP.getFreeHeap(),
+                  ESP.getMaxAllocHeap());
+  }
   Serial.println("Screen: flight detail");
   logNavContext("flight_detail");
 }
@@ -964,19 +1080,33 @@ void handleInput() {
 
 void tickRadarAnimation() {
   if (g_radar_full_draw_pending) {
-    if (config::kOvernightPerfLog || config::kRadarSweepTraceDebug) {
+    if (config::kOvernightPerfLog || config::kRadarSweepTraceDebug || config::kRadarResumeDebug) {
       static unsigned long s_last_skip_log_ms = 0;
       const unsigned long now = millis();
-      const unsigned long log_ivl = config::kOvernightPerfLog ? 30000UL : 2000UL;
+      const unsigned long log_ivl =
+          config::kRadarResumeDebug ? 2000UL
+                                    : (config::kOvernightPerfLog ? 30000UL : 2000UL);
       if (now - s_last_skip_log_ms >= log_ivl) {
-        Serial.printf("[perf] sweep_skip full_draw_pending https=%d heap=%u\n",
-                      services::https::busy() ? 1 : 0, ESP.getFreeHeap());
+        if (config::kRadarResumeDebug) {
+          logRadarDebugState("sweep_skip");
+        } else {
+          Serial.printf("[perf] sweep_skip full_draw_pending https=%d heap=%u\n",
+                        services::https::busy() ? 1 : 0, ESP.getFreeHeap());
+        }
         s_last_skip_log_ms = now;
       }
     }
     return;
   }
   if (g_screen != AppScreen::Radar || !g_radar_visible) {
+    if (config::kRadarResumeDebug && g_screen == AppScreen::Radar) {
+      static unsigned long s_last_vis_skip_ms = 0;
+      const unsigned long now = millis();
+      if (now - s_last_vis_skip_ms >= 3000UL) {
+        logRadarDebugState("sweep_skip_vis");
+        s_last_vis_skip_ms = now;
+      }
+    }
     return;
   }
 
@@ -1010,6 +1140,59 @@ void tickRadarAnimation() {
   ui::radarDisplayRefreshSweep();
   g_last_sweep_done_ms = millis();
   g_diag_sweep_frames++;
+}
+
+void tickRadarSweepHeartbeat() {
+  if (!config::kRadarResumeDebug || g_screen != AppScreen::Radar || !g_radar_visible ||
+      g_radar_full_draw_pending) {
+    return;
+  }
+  static unsigned long s_last_hb_ms = 0;
+  const unsigned long now = millis();
+  if (now - s_last_hb_ms < 5000UL) {
+    return;
+  }
+  logRadarDebugState("sweep_ok");
+  s_last_hb_ms = now;
+}
+
+void tickRadarStallWatchdog() {
+  if (!config::kRadarResumeDebug || g_screen != AppScreen::Radar || !g_radar_visible) {
+    return;
+  }
+  static unsigned long s_last_stall_log_ms = 0;
+  const unsigned long now = millis();
+  if (now - s_last_stall_log_ms < 5000UL) {
+    return;
+  }
+
+  const unsigned long sweep_age_ms =
+      g_last_sweep_done_ms != 0 ? now - g_last_sweep_done_ms : 999999UL;
+  const uint32_t adsb_age_ms = services::adsb::lastFetchOkAgeMs();
+  const bool full_draw_stall =
+      g_radar_full_draw_pending && g_radar_full_draw_pending_since_ms != 0 &&
+      now - g_radar_full_draw_pending_since_ms >= 5000UL;
+  const bool sweep_stall = !g_radar_full_draw_pending && sweep_age_ms >= 3000UL;
+  const bool adsb_stall = adsb_age_ms != UINT32_MAX && adsb_age_ms >= 15000UL &&
+                          !services::adsb::fetchInProgress() && !services::adsb::fetchReady();
+
+  if (!full_draw_stall && !sweep_stall && !adsb_stall) {
+    return;
+  }
+
+  if (full_draw_stall && sweep_stall && adsb_stall) {
+    logRadarDebugState("stall_frozen");
+  } else if (full_draw_stall) {
+    logRadarDebugState("stall_full_draw");
+  } else if (sweep_stall && adsb_stall) {
+    logRadarDebugState("stall_frozen");
+  } else if (sweep_stall) {
+    logRadarDebugState("stall_no_sweep");
+  } else if (adsb_stall) {
+    logRadarDebugState("stall_no_adsb");
+  }
+
+  s_last_stall_log_ms = now;
 }
 
 bool canRecycleWifiForTlsMemory(unsigned long now) {
@@ -1074,6 +1257,13 @@ void tickAdsbFetch() {
   const bool on_detail = g_screen == AppScreen::FlightDetail;
   const bool prefetch = bootDetailsActive();
   if (!adsbFetchScreenActive()) {
+    if (config::kRadarResumeDebug && g_screen == AppScreen::Radar) {
+      static unsigned long s_last_inactive_ms = 0;
+      if (now - s_last_inactive_ms >= 3000UL) {
+        logRadarDebugState("fetch_inactive");
+        s_last_inactive_ms = now;
+      }
+    }
     return;
   }
 
@@ -1099,9 +1289,22 @@ void tickAdsbFetch() {
     } else if (on_radar && config::kRadarSweepTraceDebug && process_ms >= 5) {
       Serial.printf("[sweep] fetch_ready process_ms=%lu ac=%u\n", process_ms,
                     static_cast<unsigned>(services::adsb::aircraftCount()));
+    } else if (on_radar && config::kRadarResumeDebug) {
+      Serial.printf("[fetch] done ac=%u ac_in=%u full_draw=%d proc_ms=%lu\n",
+                    static_cast<unsigned>(services::adsb::aircraftCount()),
+                    static_cast<unsigned>(ui::radarDisplayInRangeAircraftCount()),
+                    g_radar_full_draw_pending ? 1 : 0, process_ms);
     }
     if (g_radar_full_draw_pending && g_screen == AppScreen::Radar && g_radar_visible) {
       completeDeferredRadarDraw();
+      if (config::kRadarResumeDebug && g_radar_full_draw_pending) {
+        static unsigned long s_last_ac_skip_log_ms = 0;
+        const unsigned long ac_now = millis();
+        if (ac_now - s_last_ac_skip_log_ms >= 2000UL) {
+          logRadarDebugState("ac_refresh_skip");
+          s_last_ac_skip_log_ms = ac_now;
+        }
+      }
     } else if (on_radar) {
       ui::radarDisplayRefreshAircraft();
       if (config::kRadarSweepTraceDebug) {
@@ -1127,39 +1330,22 @@ void tickAdsbFetch() {
     return;
   }
   if (services::adsb::rateLimitBackoffActive(now)) {
-    if (config::kSerialTraceDebug) {
-      static unsigned long s_last_ratelimit_log_ms = 0;
-      if (now - s_last_ratelimit_log_ms >= 5000UL) {
-        Serial.println("[fetch] defer: adsb.fi rate limited");
-        s_last_ratelimit_log_ms = now;
-      }
-    }
+    logFetchDefer("adsb.fi rate limited");
     return;
   }
   if (services::adsb::fetchInProgress()) {
     return;
   }
   if (services::https::busy()) {
-    if (config::kSerialTraceDebug) {
-      static unsigned long s_last_https_defer_log_ms = 0;
-      if (now - s_last_https_defer_log_ms >= 3000UL) {
-        Serial.println("[fetch] defer: https busy");
-        s_last_https_defer_log_ms = now;
-      }
-    }
+    logFetchDefer("https busy");
     return;
   }
   if (on_detail && services::route::detailAdsbFetchPaused()) {
-    if (config::kSerialTraceDebug) {
-      static unsigned long s_last_detail_defer_log_ms = 0;
-      if (now - s_last_detail_defer_log_ms >= 3000UL) {
-        Serial.println("[fetch] defer: detail route active");
-        s_last_detail_defer_log_ms = now;
-      }
-    }
+    logFetchDefer("detail route active");
     return;
   }
   if (!adsbDnsReady(now)) {
+    logFetchDefer("DNS not ready");
     return;
   }
   if (!services::https::heapReadyForAdsb()) {
@@ -1170,20 +1356,13 @@ void tickAdsbFetch() {
     if ((on_radar || prefetch || on_detail) && now - s_last_heap_recover_ms >= 10000UL) {
       s_last_heap_recover_ms = now;
       releaseHttpsPressureMemory();
-      if (config::kSerialTraceDebug) {
+      if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
         Serial.printf("[fetch] heap recover free=%u max_blk=%u\n", ESP.getFreeHeap(),
                       ESP.getMaxAllocHeap());
       }
     }
     if (!services::https::heapReadyForAdsb()) {
-      if (config::kSerialTraceDebug) {
-        static unsigned long s_last_heap_defer_log_ms = 0;
-        if (now - s_last_heap_defer_log_ms >= 3000UL) {
-          Serial.printf("[fetch] defer: heap free=%u max_blk=%u\n", ESP.getFreeHeap(),
-                        ESP.getMaxAllocHeap());
-          s_last_heap_defer_log_ms = now;
-        }
-      }
+      logFetchDefer("heap low");
       return;
     }
   }
@@ -1192,9 +1371,10 @@ void tickAdsbFetch() {
   if (services::adsb::fetchRequest(services::map_center::latitude(),
                                    services::map_center::longitude(), fetch_km)) {
     g_last_adsb_fetch_ms = now;
-    if (config::kSerialTraceDebug) {
+    if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
       const char* where = prefetch ? "prefetch" : (on_detail ? "detail" : "radar");
-      Serial.printf("[fetch] queued (screen=%s)\n", where);
+      Serial.printf("[fetch] queued screen=%s km=%.1f full_draw=%d heap=%u\n", where, fetch_km,
+                    g_radar_full_draw_pending ? 1 : 0, ESP.getFreeHeap());
     }
   }
 }
@@ -1205,9 +1385,10 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  Serial.printf("[diag] boot reset=%s fw=%s overnight=%d diag_ivl=%lus slow>%lums\n",
+  Serial.printf("[diag] boot reset=%s fw=%s overnight=%d radar_resume_dbg=%d diag_ivl=%lus slow>%lums\n",
                 resetReasonName(), config::kFirmwareVersion, config::kOvernightPerfLog ? 1 : 0,
-                config::kDiagLogIntervalMs / 1000UL, config::kDiagSlowLoopMs);
+                config::kRadarResumeDebug ? 1 : 0, config::kDiagLogIntervalMs / 1000UL,
+                config::kDiagSlowLoopMs);
   Serial.println("FlightScnr (T-Encoder Pro)");
 
   // The ADS-B fetch worker is pinned to core 0 so its CPU-bound mbedTLS handshake
@@ -1263,6 +1444,8 @@ void loop() {
   services::route::tickCacheFlush(millis());
   tickFlightDetailRouteEnrich();
   tickDiagLog();
+  tickRadarSweepHeartbeat();
+  tickRadarStallWatchdog();
 
   if (WiFi.status() != WL_CONNECTED) {
     settingsWebStop();

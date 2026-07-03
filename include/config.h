@@ -111,6 +111,9 @@ constexpr bool kSerialTraceDebug = false;
  *  ~35° even though the sweep actually rendered every intermediate frame. */
 constexpr bool kRadarSweepTraceDebug = false;
 
+/** [radar] resume diagnostics: detail->radar hang / full_draw_pending (disable once fixed). */
+constexpr bool kRadarResumeDebug = true;
+
 /** Full ADS-B aircraft table on serial (very verbose). */
 constexpr bool kAdsbVerboseAircraftLog = false;
 
@@ -147,11 +150,11 @@ constexpr unsigned long kAdsbFetchBackoffMs = 15000UL;
 constexpr unsigned long kAdsbRateLimitBackoffMs = 15000UL;
 
 /** Defer ADS-B HTTPS if internal free heap is below this.
- *  Raised from 28000: a large response (13+ aircraft) consumed ~27KB of internal
- *  heap mid-fetch and drove `min` to 628 bytes, corrupting the SPI driver state
- *  (spi_device_polling_end panic). This floor keeps ~12KB headroom after the
- *  peak so an allocation can never return null underneath the display driver. */
-constexpr uint32_t kMinFreeHeapForAdsbHttps = 42000;
+ *  Was 42000; lowered to align with kMinFreeHeapForRouteHttps. After flight-detail
+ *  route enrichment, internal free heap settles at ~39KB (TLS/fragmentation) while
+ *  max_blk stays healthy — route APIs and ADS-B both use buffered+filtered JSON.
+ *  kMinContiguousHeapForAdsbTls is the primary guard against SPI driver panic. */
+constexpr uint32_t kMinFreeHeapForAdsbHttps = 38000;
 /** ADS-B TLS + JSON — require a healthy contiguous block too. */
 constexpr uint32_t kMinContiguousHeapForAdsbTls = 20000;
 
