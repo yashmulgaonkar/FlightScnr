@@ -56,6 +56,9 @@ constexpr int kDisplayHeight = 390;
 
 /** Flight detail / device settings return to radar; clock settings return to clock (ms). */
 constexpr unsigned long kSecondaryScreenTimeoutMs = 10000;
+/** Minimum time radar stays visible before idle-clock can reclaim (ms).
+ *  Gives ADS-B a chance to deliver aircraft data after screen opens. */
+constexpr unsigned long kRadarMinVisibleMs = 5000;
 /** Details splash shown at boot before radar (ms). */
 constexpr unsigned long kBootDetailsDurationMs = 5000;
 
@@ -148,6 +151,13 @@ constexpr unsigned long kAdsbFetchBackoffMs = 15000UL;
  *  A 429 is throttling, not a TLS fault, so we back off instead of recycling
  *  WiFi (which would reconnect and immediately hammer the API again). */
 constexpr unsigned long kAdsbRateLimitBackoffMs = 15000UL;
+
+/** Defer radar SPI panel writes when largest contiguous block is below this.
+ *  The ESP-IDF SPI master driver uses internal DMA descriptors; corrupted driver
+ *  state from prior heap exhaustion causes `spi_device_polling_end` assertion panics.
+ *  Normal steady-state after TLS fragmentation is ~27636; only defer during true
+ *  crisis when the driver's internal allocations would likely fail. */
+constexpr uint32_t kMinContiguousHeapForPanelSpi = 10000;
 
 /** Defer ADS-B HTTPS if internal free heap is below this.
  *  Was 42000; lowered to align with kMinFreeHeapForRouteHttps. After flight-detail

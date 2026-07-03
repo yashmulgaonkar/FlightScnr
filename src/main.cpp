@@ -364,8 +364,8 @@ void reclaimHeapAfterFlightDetail() {
   }
 }
 
-bool tlsBlocksPanel() {
-  return services::adsb::fetchInProgress() || services::https::busy();
+bool heapBlocksPanel() {
+  return ESP.getMaxAllocHeap() < config::kMinContiguousHeapForPanelSpi;
 }
 
 /** Flight detail draw uses RAM/sprite only — not the HTTPS lock.
@@ -381,12 +381,12 @@ void completeDeferredRadarDraw() {
   if (!g_radar_full_draw_pending || g_screen != AppScreen::Radar || !g_radar_visible) {
     return;
   }
-  if (tlsBlocksPanel()) {
+  if (heapBlocksPanel()) {
     if (config::kRadarResumeDebug) {
       static unsigned long s_last_defer_log_ms = 0;
       const unsigned long now = millis();
       if (now - s_last_defer_log_ms >= 2000UL) {
-        logRadarDebugState("defer_draw_tls");
+        logRadarDebugState("defer_spi_heap");
         s_last_defer_log_ms = now;
       }
     }
@@ -413,11 +413,11 @@ void showRadar() {
   g_last_radar_frame_ms = millis();
   g_last_adsb_fetch_ms = 0;
 
-  if (tlsBlocksPanel()) {
+  if (heapBlocksPanel()) {
     g_radar_full_draw_pending = true;
     g_radar_full_draw_pending_since_ms = millis();
     if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
-      logRadarDebugState("show_defer_tls");
+      logRadarDebugState("show_defer_heap");
     }
     return;
   }
@@ -435,7 +435,7 @@ void showFlightDetail() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
-  if (detailDrawBlocked()) {
+  if (detailDrawBlocked() || heapBlocksPanel()) {
     g_flight_detail_draw_pending = true;
     if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
       Serial.printf("[radar] detail_draw_block sprite_rel=%d route_wkr=%d heap=%u\n",
@@ -950,7 +950,8 @@ void tickAutoIdleClock() {
 
   if (!g_auto_idle_clock && !g_hold_empty_radar && !g_manual_radar_timed_visit &&
       g_screen == AppScreen::Radar && g_radar_visible && ac == 0 &&
-      ui::displayPrefsAutoIdleClockEnabled()) {
+      ui::displayPrefsAutoIdleClockEnabled() &&
+      millis() - g_last_radar_frame_ms >= config::kRadarMinVisibleMs) {
     openClockFromIdleRadar();
   }
 }
@@ -1135,6 +1136,15 @@ void tickRadarAnimation() {
     }
   }
 
+  if (ESP.getMaxAllocHeap() < config::kMinContiguousHeapForPanelSpi) {
+    static unsigned long s_last_spi_defer_ms = 0;
+    if (now - s_last_spi_defer_ms >= 2000UL) {
+      logRadarDebugState("defer_spi_heap");
+      s_last_spi_defer_ms = now;
+    }
+    return;
+  }
+
   g_last_radar_frame_ms = now;
   PanelSession panel(tft);
   ui::radarDisplayRefreshSweep();
@@ -1311,7 +1321,7 @@ void tickAdsbFetch() {
         Serial.println("[sweep] aircraft_refresh noted");
       }
     } else if (on_detail) {
-      if (!detailDrawBlocked()) {
+      if (!detailDrawBlocked() && !heapBlocksPanel()) {
         PanelSession panel(tft);
         ui::flightDetailRefresh();
       }

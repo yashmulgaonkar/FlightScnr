@@ -519,10 +519,7 @@ INLINE void Arduino_ESP32QSPI::CS_LOW(void)
 INLINE void Arduino_ESP32QSPI::POLL_START()
 {
   esp_err_t ret = spi_device_polling_start(_handle, _spi_tran, portMAX_DELAY);
-  // if (ret != ESP_OK)
-  // {
-  //   log_e("spi_device_polling_start error: %d", ret);
-  // }
+  _poll_active = (ret == ESP_OK);
 }
 
 /**
@@ -532,11 +529,11 @@ INLINE void Arduino_ESP32QSPI::POLL_START()
  */
 INLINE void Arduino_ESP32QSPI::POLL_END()
 {
-  esp_err_t ret = spi_device_polling_end(_handle, portMAX_DELAY);
-  // if (ret != ESP_OK)
-  // {
-  //   log_e("spi_device_polling_end error: %d", ret);
-  // }
+  if (!_poll_active) {
+    return;
+  }
+  spi_device_polling_end(_handle, portMAX_DELAY);
+  _poll_active = false;
 }
 
 #endif // #if defined(ESP32)

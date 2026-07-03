@@ -47,6 +47,7 @@ private:
 
   int8_t _cs, _sck, _mosi, _miso, _quadwp, _quadhd;
   bool _is_shared_interface;
+  bool _poll_active = false;
 
   PORTreg_t _csPortSet; ///< PORT register for chip select SET
   PORTreg_t _csPortClr; ///< PORT register for chip select CLEAR
