@@ -18,8 +18,14 @@ bool pulsePhase();
 bool militaryAlertEnabled();
 bool emergencyAlertEnabled();
 bool hideNonAlertedEnabled();
+bool watchCallsignsEnabled();
+size_t watchCallsignCount();
+
+/** Comma-separated watch list for settings form (e.g. ACA739,UAL123). */
+void watchCallsignsFormatted(char* out, size_t out_len);
 
 void saveFromForm(const char* mil_checkbox, const char* emrg_checkbox,
-                  const char* hide_checkbox);
+                  const char* hide_checkbox, const char* watch_callsigns,
+                  bool update_watch_callsigns);
 
 }  // namespace services::alert

@@ -33,7 +33,7 @@ WebServer* s_server = nullptr;
 bool s_active = false;
 
 /** Static storage — must not live on loopTask stack (~8 KB). */
-constexpr size_t kSettingsPageCap = 16384;
+constexpr size_t kSettingsPageCap = 24576;
 char s_settings_page[kSettingsPageCap];
 
 const char kPageHead[] = R"HTML(<!DOCTYPE html>
@@ -114,9 +114,13 @@ void formatUsdMicro(uint32_t micro, char* out, size_t len, int decimals) {
 }
 
 void appendRaw(char* page, size_t len, size_t* used, const char* html) {
+  if (*used >= len) {
+    return;
+  }
   const int n = snprintf(page + *used, len - *used, "%s", html);
   if (n > 0) {
-    *used += static_cast<size_t>(n);
+    const size_t space = len - *used;
+    *used += static_cast<size_t>(n) < space ? static_cast<size_t>(n) : space - 1;
   }
 }
 
@@ -214,6 +218,9 @@ void handleSettingsPage() {
   char* const page = s_settings_page;
   size_t used = 0;
   char masked[24];
+  char watch_buf[160];
+  services::alert::watchCallsignsFormatted(watch_buf, sizeof(watch_buf));
+  const size_t watch_count = services::alert::watchCallsignCount();
 
   const int head_n = snprintf(page, kSettingsPageCap, "%s", kPageHead);
   if (head_n > 0) {
@@ -415,7 +422,7 @@ void handleSettingsPage() {
 
   // ---------- Alerts card ----------
   appendRaw(page, kSettingsPageCap, &used,
-            "<details class=\"card\"><summary><span class=\"ico\">&#9888;</span>Alerts"
+            "<details class=\"card\" open><summary><span class=\"ico\">&#9888;</span>Alerts"
             "<span class=\"sum\">aircraft alerts</span><span class=\"chev\">&#9656;</span>"
             "</summary><div class=\"body\">");
   appendToggle(page, kSettingsPageCap, &used, "alert_mil", "Alert on military aircraft",
@@ -426,6 +433,31 @@ void handleSettingsPage() {
   appendToggle(page, kSettingsPageCap, &used, "alert_hide",
                "Hide non-alerted aircraft on radar",
                services::alert::hideNonAlertedEnabled());
+  const int watch_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<label for=\"alert_watch\">Alert on ICAO flight numbers</label>"
+      "<input id=\"alert_watch\" type=\"text\" "
+      "autocomplete=\"off\" placeholder=\"ACA739, UAL123\" value=\"%s\">",
+      watch_buf);
+
+  if (watch_n > 0) {
+    used += static_cast<size_t>(watch_n);
+  }
+  if (watch_count == 0) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<p class=\"usage\">No flight numbers tracked.</p>");
+  } else {
+    const int tracked_n = snprintf(page + used, kSettingsPageCap - used,
+                                   "<p class=\"usage\"><b>Tracking %u:</b> %s</p>",
+                                   static_cast<unsigned>(watch_count), watch_buf);
+    if (tracked_n > 0) {
+      used += static_cast<size_t>(tracked_n);
+    }
+  }
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"hint\">Comma-separated callsigns (3-letter airline + flight number). "
+            "Buzzes and highlights when a watched flight appears on radar. "
+            "To clear all, delete the text in the field above and tap <b>Save</b>.</p>");
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
   // ---------- Route APIs card ----------
@@ -601,12 +633,28 @@ void handleSettingsPage() {
       "<p class=\"foot\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
       "github.com/yashmulgaonkar/FlightScnr</a></p>"
       "</div>"
+      "<input type=\"hidden\" name=\"alert_watch\" id=\"alert_watch_post\" value=\"%s\">"
+      "<script>"
+      "document.querySelector('form[action=\"/save\"]').addEventListener('submit',function(){"
+      "var v=document.getElementById('alert_watch'),h=document.getElementById('alert_watch_post');"
+      "if(v&&h){h.value=v.value;}"
+      "});"
+      "</script>"
       "<div class=\"savebar\"><div class=\"inner\">"
       "<button class=\"save\" type=\"submit\">Save</button></div></div>"
       "</form></body></html>",
-      config::kGithubRepoUrl);
+      config::kGithubRepoUrl, watch_buf);
   if (tail_n > 0) {
-    used += static_cast<size_t>(tail_n);
+    const size_t space = kSettingsPageCap - used;
+    used += static_cast<size_t>(tail_n) < space ? static_cast<size_t>(tail_n) : space - 1;
+  }
+  if (used >= kSettingsPageCap) {
+    used = kSettingsPageCap - 1;
+  }
+  page[used] = '\0';
+  if (used >= kSettingsPageCap - 512) {
+    Serial.printf("[settings] page warn used=%u cap=%u\n", static_cast<unsigned>(used),
+                  static_cast<unsigned>(kSettingsPageCap));
   }
 
   s_server->send(200, "text/html; charset=utf-8", page);
@@ -647,9 +695,19 @@ void handleSave() {
                                    s_server->arg("night_mode").c_str(),
                                    s_server->arg("night_start").c_str(),
                                    s_server->arg("night_end").c_str());
+  const bool watch_arg_present = s_server->hasArg("alert_watch");
+  char watch_form[160] = "";
+  if (watch_arg_present) {
+    strncpy(watch_form, s_server->arg("alert_watch").c_str(), sizeof(watch_form) - 1);
+    watch_form[sizeof(watch_form) - 1] = '\0';
+    Serial.printf("[alert] form watch='%s'\n", watch_form);
+  } else {
+    Serial.println("[alert] form watch arg missing (keeping saved list)");
+  }
   services::alert::saveFromForm(s_server->arg("alert_mil").c_str(),
                                 s_server->arg("alert_emrg").c_str(),
-                                s_server->arg("alert_hide").c_str());
+                                s_server->arg("alert_hide").c_str(),
+                                watch_arg_present ? watch_form : nullptr, watch_arg_present);
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
 
