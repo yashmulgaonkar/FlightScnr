@@ -11,6 +11,7 @@
 #include "hardware/panel.h"
 #include "ui/display_prefs.h"
 #include "services/adsb_client.h"
+#include "services/aircraft_alert.h"
 #include "services/aircraft_type_lookup.h"
 #include "geo/flat_earth.h"
 #include "services/map_center.h"
@@ -33,6 +34,8 @@ uint16_t kColorAircraft = 0x001F;
 uint16_t kColorTagType = 0x5DFF;
 uint16_t kColorTagAltitudeAscend = 0x07FF;
 uint16_t kColorTagAltitudeDescend = 0xF81F;
+uint16_t kColorAlertMilitary = 0xFBE0;    // orange
+uint16_t kColorAlertEmergency = 0xF800;   // red
 
 }  // namespace radar
 
@@ -356,7 +359,11 @@ void drawAircraft() {
   size_t draw_count = 0;
   size_t dot_count = 0;
 
+  const bool hide_others = services::alert::hideNonAlertedEnabled();
   for (size_t i = 0; i < n; ++i) {
+    if (hide_others && !services::alert::isHighlighted(planes[i])) {
+      continue;
+    }
     float dx_km = 0.0f;
     float dy_km = 0.0f;
     float dist_km = 0.0f;
@@ -392,11 +399,20 @@ void drawAircraft() {
     drawBeyondRingMarker(dots[d].x, dots[d].y, planes[i].track_deg);
   }
 
+  const bool pulse_on = services::alert::pulsePhase();
   sortDrawItemsFarFirst(items, draw_count);
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
-    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, planes[i].track_deg,
-                          radar::kColorAircraft);
+    uint16_t color = radar::kColorAircraft;
+    if (services::alert::isHighlighted(planes[i])) {
+      if (pulse_on) {
+        color = planes[i].isEmergencySquawk() ? radar::kColorAlertEmergency
+                                              : radar::kColorAlertMilitary;
+      } else {
+        color = radar::kColorGrid;
+      }
+    }
+    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, planes[i].track_deg, color);
   }
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
@@ -840,11 +856,20 @@ void drawAircraftInRect(const IntRect& dirty) {
     drawBeyondRingMarker(dots[d].x, dots[d].y, planes[i].track_deg);
   }
 
+  const bool pulse_on2 = services::alert::pulsePhase();
   sortDrawItemsFarFirst(items, draw_count);
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
-    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, planes[i].track_deg,
-                          radar::kColorAircraft);
+    uint16_t color = radar::kColorAircraft;
+    if (services::alert::isHighlighted(planes[i])) {
+      if (pulse_on2) {
+        color = planes[i].isEmergencySquawk() ? radar::kColorAlertEmergency
+                                              : radar::kColorAlertMilitary;
+      } else {
+        color = radar::kColorGrid;
+      }
+    }
+    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, planes[i].track_deg, color);
   }
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
@@ -1236,6 +1261,23 @@ void radarDisplayRefreshSweep() {
     }
   }
 
+  {
+    static bool s_last_pulse = false;
+    const bool cur_pulse = services::alert::pulsePhase();
+    if (cur_pulse != s_last_pulse) {
+      s_last_pulse = cur_pulse;
+      const size_t ac_n = services::adsb::aircraftCount();
+      const services::adsb::Aircraft* ac_list = services::adsb::aircraftList();
+      for (size_t i = 0; i < ac_n; ++i) {
+        if (services::alert::isHighlighted(ac_list[i])) {
+          s_aircraft_dirty = true;
+          s_aircraft_dirty_rect = IntRect{0, 0, radar::kSize, radar::kSize};
+          break;
+        }
+      }
+    }
+  }
+
   if (s_aircraft_dirty || !s_content_base_valid) {
     if (!rebuildContentBase()) {
       if (config::kRadarResumeDebug) {
@@ -1393,6 +1435,12 @@ void radarDisplayRefreshAircraft() {
 }
 
 size_t radarDisplayInRangeAircraftCount() { return inRangeAircraftCount(); }
+
+void radarDisplayInvalidateAircraft() {
+  s_aircraft_dirty = true;
+  s_aircraft_dirty_rect = IntRect{0, 0, radar::kSize, radar::kSize};
+  s_content_base_valid = false;
+}
 
 void radarDisplayReleasePressureSprites() {
   if (s_content_ready) {

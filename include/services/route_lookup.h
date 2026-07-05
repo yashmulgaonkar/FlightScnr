@@ -86,6 +86,9 @@ bool detailEnrichmentInFlight(const char* callsign);
 /** Route worker saw a transient TLS/memory failure — request faster WiFi recycle. */
 void noteTlsMemoryFailure();
 
+/** True if a TLS recover request is pending (does not consume it). */
+bool tlsRecoverRequested();
+
 /** True once after noteTlsMemoryFailure (cleared on read). */
 bool consumeTlsRecoverRequest();
 

@@ -33,6 +33,7 @@ namespace {
 constexpr char kAirLabsBase[] = "https://airlabs.co/api/v9/flight";
 constexpr char kAirLabsRoutesBase[] = "https://airlabs.co/api/v9/routes";
 constexpr char kFlightAwareBase[] = "https://aeroapi.flightaware.com/aeroapi/flights/";
+constexpr char kFlightAwareSearchBase[] = "https://aeroapi.flightaware.com/aeroapi/flights/search";
 constexpr char kFr24Base[] =
     "https://fr24api.flightradar24.com/api/flight-summary/light";
 
@@ -64,6 +65,8 @@ volatile bool s_detail_busy = false;
 volatile bool s_detail_ready = false;
 char s_detail_ready_callsign[9] = "";
 volatile bool s_detail_immediate_deferred = false;
+volatile bool s_detail_heap_deferred = false;
+char s_detail_heap_deferred_callsign[9] = "";
 volatile bool s_detail_sprite_release_pending = false;
 volatile bool s_detail_sprite_released_ack = false;
 char s_detail_pending_callsign[9] = "";
@@ -89,6 +92,12 @@ enum class DetailStep : uint8_t {
 DetailStep s_detail_step = DetailStep::kIdle;
 char s_detail_work_callsign[9] = "";
 unsigned long s_detail_step_start_ms = 0;
+unsigned long s_detail_heap_skip_since_ms = 0;
+unsigned long s_detail_heap_skip_log_ms = 0;
+DetailStep s_detail_log_active_step = DetailStep::kIdle;
+
+constexpr unsigned long kDetailHeapSkipAdvanceMs = 3000UL;
+constexpr unsigned long kDetailHeapSkipRetryMs = 50UL;
 
 constexpr size_t kMaxHttpPayloadBytes = 49152;
 
@@ -119,26 +128,15 @@ RouteJsonAllocator s_route_json_allocator;
 volatile bool s_route_tls_hard_fail = false;
 volatile bool s_tls_recover_requested = false;
 
-const JsonDocument& flightAwareJsonFilter() {
-  static bool ready = false;
-  static JsonDocument filter;
-  if (!ready) {
-    filter["flights"]["*"]["origin"]["code_icao"] = true;
-    filter["flights"]["*"]["origin"]["code_iata"] = true;
-    filter["flights"]["*"]["origin"]["code"] = true;
-    filter["flights"]["*"]["destination"]["code_icao"] = true;
-    filter["flights"]["*"]["destination"]["code_iata"] = true;
-    filter["flights"]["*"]["destination"]["code"] = true;
-    filter["flights"]["*"]["operator"] = true;
-    filter["flights"]["*"]["operator_icao"] = true;
-    filter["flights"]["*"]["operator_iata"] = true;
-    filter["flights"]["*"]["status"] = true;
-    ready = true;
-  }
-  return filter;
-}
-
 bool apiAvailable();
+DetailStep firstLiveApiStep();
+bool tryDetailCacheOnly(const char* callsign);
+bool lookupPrefixFallback(const char* callsign, RouteInfo* route);
+void storeCache(const char* callsign, const RouteInfo& info, ApiSource src, bool api_done);
+void applyRouteToCallsign(const char* callsign, const RouteInfo& info);
+void logRouteLine(const char* callsign, const RouteInfo& route, const char* tag);
+void signalDetailUiRefresh(const char* callsign);
+bool isCurrentDetailSelection(const char* callsign);
 
 const char* stepTag(DetailStep step) {
   switch (step) {
@@ -168,15 +166,59 @@ const char* detailWorkerDebugStepTagImpl() {
   }
 }
 
+void resetDetailStepLogging() {
+  s_detail_log_active_step = DetailStep::kIdle;
+  s_detail_heap_skip_since_ms = 0;
+}
+
 void logDetailStepBegin(DetailStep step, const char* callsign) {
+  if (s_detail_log_active_step == step) {
+    return;
+  }
+  s_detail_log_active_step = step;
+  s_detail_step_start_ms = millis();
   if (!config::kSerialTraceDebug && !config::kRadarResumeDebug) {
     return;
   }
-  s_detail_step_start_ms = millis();
   Serial.printf("[detail] step %s %s begin\n", stepTag(step), callsign);
 }
 
+void logHeapSkipRateLimited(const char* callsign) {
+  if (!config::kSerialTraceDebug && !config::kRadarResumeDebug) {
+    return;
+  }
+  const unsigned long now = millis();
+  if (now - s_detail_heap_skip_log_ms < 2000UL) {
+    return;
+  }
+  s_detail_heap_skip_log_ms = now;
+  Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", callsign, ESP.getFreeHeap(),
+                ESP.getMaxAllocHeap());
+}
+
+DetailStep nextStepAfterLiveApiMiss(DetailStep step);
+
+/** Stay on the current API step while heap is low; advance waterfall after timeout. */
+bool detailWorkerAdvanceOnHeapSkip(DetailStep current) {
+  const unsigned long now = millis();
+  if (s_detail_heap_skip_since_ms == 0) {
+    s_detail_heap_skip_since_ms = now;
+    return false;
+  }
+  if (now - s_detail_heap_skip_since_ms < kDetailHeapSkipAdvanceMs) {
+    return false;
+  }
+  s_detail_heap_skip_since_ms = 0;
+  s_detail_step = nextStepAfterLiveApiMiss(current);
+  if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+    Serial.printf("[detail] heap skip advance %s -> %s\n", stepTag(current),
+                  stepTag(s_detail_step));
+  }
+  return true;
+}
+
 void logDetailStepEnd(DetailStep step, const char* callsign, bool ok) {
+  s_detail_log_active_step = DetailStep::kIdle;
   if (!config::kSerialTraceDebug && !config::kRadarResumeDebug) {
     return;
   }
@@ -189,56 +231,6 @@ void logDetailStepEnd(DetailStep step, const char* callsign, bool ok) {
 bool isCurrentDetailSelection(const char* callsign);
 
 void workerYield() { vTaskDelay(1); }
-
-bool readHttpPayload(HTTPClient& http, String* payload, const char* worker_callsign,
-                     uint32_t timeout_ms) {
-  WiFiClient* stream = http.getStreamPtr();
-  if (stream == nullptr || payload == nullptr) {
-    return false;
-  }
-  payload->clear();
-  const int content_len = http.getSize();
-  if (content_len > 0) {
-    payload->reserve(static_cast<unsigned>(content_len));
-  }
-  const unsigned long deadline_ms = millis() + timeout_ms;
-  uint8_t buf[512];
-  while (http.connected() || stream->available()) {
-    if (millis() >= deadline_ms) {
-      if (config::kSerialTraceDebug) {
-        Serial.printf("[detail] http read timeout (%ums)\n", timeout_ms);
-      }
-      return false;
-    }
-    if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
-      if (config::kSerialTraceDebug) {
-        Serial.printf("[detail] http read abort worker=%s\n", worker_callsign);
-      }
-      return false;
-    }
-    if (stream->available() == 0) {
-      if (!http.connected()) {
-        break;
-      }
-      workerYield();
-      continue;
-    }
-    const size_t n = stream->readBytes(buf, sizeof(buf));
-    if (n == 0) {
-      workerYield();
-      continue;
-    }
-    if (payload->length() + n > kMaxHttpPayloadBytes) {
-      if (config::kSerialTraceDebug) {
-        Serial.printf("[detail] http read too large (>%u)\n",
-                      static_cast<unsigned>(kMaxHttpPayloadBytes));
-      }
-      return false;
-    }
-    payload->concat(reinterpret_cast<const char*>(buf), n);
-  }
-  return payload->length() > 0;
-}
 
 void routeClear(RouteInfo* r) {
   if (r == nullptr) {
@@ -263,7 +255,7 @@ bool slotNeedsApiRouteUpgrade(const CacheSlot& slot) {
     return false;
   }
   if (slot.source == ApiSource::kPrefix) {
-    return !(slot.api_done && routeHasData(slot.route));
+    return !slot.api_done;
   }
   if (routeEndpointsComplete(slot.route)) {
     return false;
@@ -287,19 +279,19 @@ void applyRouteToAircraft(services::adsb::Aircraft& ac, const RouteInfo& info) {
     char resolved[5];
     if (services::airport::normalizeRouteCode(info.origin, resolved, sizeof(resolved))) {
       strncpy(ac.route_origin, resolved, sizeof(ac.route_origin) - 1);
+      ac.route_origin[sizeof(ac.route_origin) - 1] = '\0';
     } else {
-      strncpy(ac.route_origin, info.origin, sizeof(ac.route_origin) - 1);
+      ac.route_origin[0] = '\0';
     }
-    ac.route_origin[sizeof(ac.route_origin) - 1] = '\0';
   }
   if (info.dest[0] != '\0') {
     char resolved[5];
     if (services::airport::normalizeRouteCode(info.dest, resolved, sizeof(resolved))) {
       strncpy(ac.route_dest, resolved, sizeof(ac.route_dest) - 1);
+      ac.route_dest[sizeof(ac.route_dest) - 1] = '\0';
     } else {
-      strncpy(ac.route_dest, info.dest, sizeof(ac.route_dest) - 1);
+      ac.route_dest[0] = '\0';
     }
-    ac.route_dest[sizeof(ac.route_dest) - 1] = '\0';
   }
 }
 
@@ -320,15 +312,101 @@ void copyAirportCode(const char* s, char* out, size_t out_len) {
   out[n] = '\0';
 }
 
-void copyRouteIcao(const char* s, char* out, size_t out_len) {
-  copyAirportCode(s, out, out_len);
-  if (out[0] == '\0') {
+void copyValidatedRouteCode(const char* s, char* out, size_t out_len) {
+  out[0] = '\0';
+  if (s == nullptr || s[0] == '\0' || out_len == 0) {
+    return;
+  }
+  char compact[5];
+  size_t n = 0;
+  for (size_t i = 0; s[i] != '\0' && n < 4; ++i) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+    if (!isalnum(c)) {
+      continue;
+    }
+    compact[n++] = static_cast<char>(toupper(c));
+  }
+  compact[n] = '\0';
+  if (n == 0) {
     return;
   }
   char resolved[5];
-  if (services::airport::normalizeRouteCode(out, resolved, sizeof(resolved))) {
+  if (services::airport::normalizeRouteCode(compact, resolved, sizeof(resolved))) {
     copyAirportCode(resolved, out, out_len);
   }
+}
+
+void copyRouteIcao(const char* s, char* out, size_t out_len) {
+  copyValidatedRouteCode(s, out, out_len);
+}
+
+void applyCallsignAirlineFallback(const char* callsign, RouteInfo* route) {
+  if (route == nullptr || callsign == nullptr || callsign[0] == '\0' ||
+      route->airline[0] != '\0') {
+    return;
+  }
+  services::airline::resolveFromCallsign(callsign, true, route->airline, sizeof(route->airline));
+  services::airline::resolveIcaoFromCallsign(callsign, true, route->airline_icao,
+                                             sizeof(route->airline_icao));
+}
+
+bool detailRouteApiAllowed() { return services::https::heapReadyForRouteApi(); }
+
+unsigned long detailEnrichDebounceMs() {
+  return ESP.getMaxAllocHeap() < config::kDetailEnrichHeapPressureBlk
+             ? config::kDetailEnrichDebouncePressureMs
+             : kDetailEnrichDebounceMs;
+}
+
+void setDetailHeapDeferred(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return;
+  }
+  strncpy(s_detail_heap_deferred_callsign, callsign, sizeof(s_detail_heap_deferred_callsign) - 1);
+  s_detail_heap_deferred_callsign[sizeof(s_detail_heap_deferred_callsign) - 1] = '\0';
+  s_detail_heap_deferred = true;
+  if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+    Serial.printf("[detail] heap defer %s free=%u max_blk=%u\n", callsign, ESP.getFreeHeap(),
+                  ESP.getMaxAllocHeap());
+  }
+}
+
+void clearDetailHeapDeferred() {
+  s_detail_heap_deferred = false;
+  s_detail_heap_deferred_callsign[0] = '\0';
+}
+
+bool syncPrefixOnlyEnrich(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return false;
+  }
+  if (tryDetailCacheOnly(callsign)) {
+    setDetailHeapDeferred(callsign);
+    return true;
+  }
+  RouteInfo info;
+  if (lookupPrefixFallback(callsign, &info)) {
+    storeCache(callsign, info, ApiSource::kPrefix, false);
+    applyRouteToCallsign(callsign, info);
+    if (isCurrentDetailSelection(callsign)) {
+      s_detail_result = info;
+      s_detail_result_src = ApiSource::kPrefix;
+      logRouteLine(callsign, info, "pfx");
+      signalDetailUiRefresh(callsign);
+    }
+  }
+  setDetailHeapDeferred(callsign);
+  return true;
+}
+
+DetailStep nextStepAfterCacheMiss(const char* callsign) {
+  if (!detailRouteApiAllowed()) {
+    return DetailStep::kPrefix;
+  }
+  if (services::airline::isNNumber(callsign)) {
+    return DetailStep::kPrefix;
+  }
+  return apiAvailable() ? firstLiveApiStep() : DetailStep::kPrefix;
 }
 
 bool isIcaoRadioCallsign(const char* cs) {
@@ -608,6 +686,10 @@ bool prepareRouteHttp(const char* worker_callsign, uint32_t timeout_ms) {
   if (heap_ok && tls_idle) {
     return true;
   }
+  if (ESP.getFreeHeap() < config::kMinFreeHeapForRouteHttps ||
+      ESP.getMaxAllocHeap() < config::kMinContiguousHeapForRouteTls) {
+    return false;
+  }
   if (config::kSerialTraceDebug) {
     Serial.printf("[detail] heap wait %s free=%u max_blk=%u\n", worker_callsign,
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -687,6 +769,7 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
     if (http_code < 0) {
       cleanup.tls_fail = true;
       s_tls_recover_requested = true;
+      s_route_tls_hard_fail = true;
       if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
         Serial.printf("[detail] http tls fail %s code=%d free=%u max_blk=%u\n", worker_callsign,
                       http_code, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -705,16 +788,26 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
     client.stop();
     return false;
   }
-  String payload;
-  if (!readHttpPayload(http, &payload, worker_callsign, timeout_ms)) {
-    http.end();
-    client.stop();
-    return false;
-  }
+  // getString() decodes chunked transfer bodies; raw stream reads leave chunk
+  // size prefixes that make ArduinoJson report InvalidInput (see tz_lookup).
+  String payload = http.getString();
   http.end();
   client.stop();
   workerYield();
   if (worker_callsign != nullptr && !isCurrentDetailSelection(worker_callsign)) {
+    return false;
+  }
+  if (payload.isEmpty()) {
+    if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
+      Serial.printf("[detail] http empty %s\n", worker_callsign);
+    }
+    return false;
+  }
+  if (payload.length() > kMaxHttpPayloadBytes) {
+    if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
+      Serial.printf("[detail] http too large %s (%u bytes)\n", worker_callsign,
+                    static_cast<unsigned>(payload.length()));
+    }
     return false;
   }
   const DeserializationError err =
@@ -727,6 +820,12 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
                   static_cast<unsigned>(payload.length()));
   }
   return !err;
+}
+
+bool fetchFlightAwareJson(const char* url, const char* worker_callsign, JsonDocument& doc,
+                          const char* api_key) {
+  const HttpHeader headers[] = {{"x-apikey", api_key}};
+  return httpGetJson(url, doc, worker_callsign, config::kDetailApiTimeoutMs, headers, 1, nullptr);
 }
 
 void copyAirlineIcao(const char* s, char* out, size_t out_len) {
@@ -806,19 +905,16 @@ DetailStep firstLiveApiStep() {
 
 DetailStep nextApiStepAfter(DetailStep step) {
   switch (step) {
-    case DetailStep::kFlightAware:
-      if (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs()) {
-        return DetailStep::kAirLabs;
-      }
-      if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24()) {
-        return DetailStep::kFr24;
-      }
-      return DetailStep::kPrefix;
     case DetailStep::kAirLabs:
       if (apikeys::useFlightAware() && apikeys::hasFlightAware() &&
           apikeys::canUseFlightAware()) {
         return DetailStep::kFlightAware;
       }
+      if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24()) {
+        return DetailStep::kFr24;
+      }
+      return DetailStep::kPrefix;
+    case DetailStep::kFlightAware:
       if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24()) {
         return DetailStep::kFr24;
       }
@@ -911,6 +1007,7 @@ bool lookupAirLabsUrl(const char* base_url, const char* query, const char* calls
     }
     return false;
   }
+  applyCallsignAirlineFallback(callsign, route);
   return routeHasData(*route);
 }
 
@@ -942,8 +1039,10 @@ bool lookupAirLabsWithKey(const char* callsign, RouteInfo* route, const char* ap
   if (api_key == nullptr || api_key[0] == '\0' || route == nullptr) {
     return false;
   }
+  if (s_route_tls_hard_fail) {
+    return false;
+  }
   routeClear(route);
-  s_route_tls_hard_fail = false;
 
   if (lookupAirLabsIdent(callsign, callsign, route, api_key, key_index)) {
     return true;
@@ -981,26 +1080,35 @@ bool lookupAirLabsFirstKey(const char* callsign, RouteInfo* route) {
   return false;
 }
 
+bool faRouteCodeValid(const char* raw) {
+  char tmp[5];
+  copyValidatedRouteCode(raw, tmp, sizeof(tmp));
+  return tmp[0] != '\0';
+}
+
 bool faAirportHasCode(const JsonObject& ap) {
   if (ap.isNull()) {
     return false;
   }
-  const char* c = ap["code_icao"].as<const char*>();
-  if (c != nullptr && c[0] != '\0') {
+  if (faRouteCodeValid(ap["code_icao"].as<const char*>())) {
     return true;
   }
-  c = ap["code_iata"].as<const char*>();
-  if (c != nullptr && c[0] != '\0') {
+  if (faRouteCodeValid(ap["code_iata"].as<const char*>())) {
     return true;
   }
-  c = ap["code"].as<const char*>();
-  return c != nullptr && c[0] != '\0';
+  return faRouteCodeValid(ap["code"].as<const char*>());
+}
+
+bool flightStatusEnRoute(const char* status) {
+  if (status == nullptr || status[0] == '\0') {
+    return false;
+  }
+  return strcasecmp(status, "En Route") == 0 || strcasecmp(status, "Enroute") == 0;
 }
 
 bool pickFlightAwareFlight(JsonArray flights, JsonObject* chosen) {
   for (JsonObject f : flights) {
-    const char* status = f["status"].as<const char*>();
-    if (status != nullptr && strcmp(status, "En Route") == 0 &&
+    if (flightStatusEnRoute(f["status"].as<const char*>()) &&
         faAirportHasCode(f["origin"].as<JsonObject>()) &&
         faAirportHasCode(f["destination"].as<JsonObject>())) {
       *chosen = f;
@@ -1014,48 +1122,49 @@ bool pickFlightAwareFlight(JsonArray flights, JsonObject* chosen) {
       return true;
     }
   }
-  if (!flights.isNull() && flights.size() > 0) {
-    *chosen = flights[0].as<JsonObject>();
-    return true;
-  }
   return false;
 }
 
-bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char* api_key) {
-  if (api_key == nullptr || api_key[0] == '\0' || route == nullptr) {
-    return false;
+void copyFaOperatorFields(const JsonObject& flight, RouteInfo* route) {
+  if (route == nullptr) {
+    return;
   }
-  routeClear(route);
-  s_route_tls_hard_fail = false;
-
-  String url = kFlightAwareBase;
-  url += callsign;
-  url += "?max_pages=1";
-
-  const HttpHeader headers[] = {{"x-apikey", api_key}};
-  JsonDocument doc(&s_route_json_allocator);
-  if (!httpGetJson(url.c_str(), doc, callsign, config::kDetailApiTimeoutMs, headers, 1,
-                   &flightAwareJsonFilter())) {
-    return false;
+  if (flight["operator"].is<const char*>()) {
+    copyJsonAirlineName(flight, "operator", route->airline, sizeof(route->airline));
+  } else if (flight["operator"].is<JsonObject>()) {
+    const JsonObject op = flight["operator"].as<JsonObject>();
+    copyJsonAirlineName(op, "name", route->airline, sizeof(route->airline));
+    if (route->airline[0] == '\0') {
+      copyJsonAirlineName(op, "shortname", route->airline, sizeof(route->airline));
+    }
+    if (route->airline_icao[0] == '\0') {
+      const char* op_icao = op["icao"].as<const char*>();
+      if (op_icao == nullptr || op_icao[0] == '\0') {
+        op_icao = op["code_icao"].as<const char*>();
+      }
+      copyAirlineIcao(op_icao, route->airline_icao, sizeof(route->airline_icao));
+    }
+    if (route->airline[0] == '\0') {
+      const char* op_iata = op["iata"].as<const char*>();
+      if (op_iata == nullptr || op_iata[0] == '\0') {
+        op_iata = op["code_iata"].as<const char*>();
+      }
+      if (op_iata != nullptr && op_iata[0] != '\0') {
+        char code[4];
+        strncpy(code, op_iata, sizeof(code) - 1);
+        code[sizeof(code) - 1] = '\0';
+        services::airline::lookupByCode(code, route->airline, sizeof(route->airline));
+      }
+    }
   }
 
-  JsonArray flights = doc["flights"].as<JsonArray>();
-  if (flights.isNull() || flights.size() == 0) {
-    return false;
-  }
-
-  JsonObject flight;
-  if (!pickFlightAwareFlight(flights, &flight)) {
-    return false;
-  }
-
-  JsonObject origin = flight["origin"].as<JsonObject>();
-  JsonObject dest = flight["destination"].as<JsonObject>();
-  copyRouteFromFaAirport(origin, route->origin, sizeof(route->origin));
-  copyRouteFromFaAirport(dest, route->dest, sizeof(route->dest));
-
-  copyJsonAirlineName(flight, "operator", route->airline, sizeof(route->airline));
-  if (route->airline[0] == '\0') {
+  if (route->airline[0] != '\0' && strlen(route->airline) <= 3) {
+    char resolved[48];
+    if (services::airline::lookupByCode(route->airline, resolved, sizeof(resolved))) {
+      strncpy(route->airline, resolved, sizeof(route->airline) - 1);
+      route->airline[sizeof(route->airline) - 1] = '\0';
+    }
+  } else if (route->airline[0] == '\0') {
     char code[4];
     const char* op_iata = flight["operator_iata"].as<const char*>();
     if (op_iata != nullptr && op_iata[0] != '\0') {
@@ -1074,7 +1183,99 @@ bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char
     const char* op_icao = flight["operator_icao"].as<const char*>();
     copyAirlineIcao(op_icao, route->airline_icao, sizeof(route->airline_icao));
   }
-  return routeHasData(*route);
+}
+
+bool parseFlightAwareDoc(JsonDocument& doc, const char* callsign, RouteInfo* route) {
+  JsonArray flights = doc["flights"].as<JsonArray>();
+  if (flights.isNull() || flights.size() == 0) {
+    if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && callsign != nullptr) {
+      Serial.printf("[detail] fa empty %s flights=0\n", callsign);
+    }
+    return false;
+  }
+
+  JsonObject flight;
+  if (!pickFlightAwareFlight(flights, &flight)) {
+    if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && callsign != nullptr) {
+      Serial.printf("[detail] fa empty %s flights=%u pick=0\n", callsign,
+                    static_cast<unsigned>(flights.size()));
+    }
+    return false;
+  }
+
+  JsonObject origin = flight["origin"].as<JsonObject>();
+  JsonObject dest = flight["destination"].as<JsonObject>();
+  copyRouteFromFaAirport(origin, route->origin, sizeof(route->origin));
+  copyRouteFromFaAirport(dest, route->dest, sizeof(route->dest));
+
+  copyFaOperatorFields(flight, route);
+  applyCallsignAirlineFallback(callsign, route);
+
+  const bool ok = routeEndpointsComplete(*route);
+  if (!ok && (config::kSerialTraceDebug || config::kRadarResumeDebug) && callsign != nullptr) {
+    Serial.printf("[detail] fa empty %s flights=%u orig=%d dest=%d op=%d\n", callsign,
+                  static_cast<unsigned>(flights.size()), route->origin[0] != '\0' ? 1 : 0,
+                  route->dest[0] != '\0' ? 1 : 0, route->airline[0] != '\0' ? 1 : 0);
+  }
+  return ok;
+}
+
+bool lookupFlightAwareIdent(const char* ident, const char* worker_callsign, RouteInfo* route,
+                            const char* api_key) {
+  if (ident == nullptr || ident[0] == '\0' || route == nullptr || api_key == nullptr ||
+      api_key[0] == '\0') {
+    return false;
+  }
+
+  JsonDocument doc(&s_route_json_allocator);
+
+  // Airborne search by flight designator — best match for live ADS-B traffic.
+  // https://www.flightaware.com/aeroapi/portal/documentation#get-/flights/search
+  String url = kFlightAwareSearchBase;
+  url += "?query=-idents%20";
+  url += ident;
+  url += "&max_pages=1";
+  if (fetchFlightAwareJson(url.c_str(), worker_callsign, doc, api_key) &&
+      parseFlightAwareDoc(doc, worker_callsign, route)) {
+    return true;
+  }
+
+  // Fallback: /flights/{ident} defaults to registration — force designator interpretation.
+  url = kFlightAwareBase;
+  url += ident;
+  url += "?ident_type=designator&max_pages=1";
+  doc.clear();
+  if (fetchFlightAwareJson(url.c_str(), worker_callsign, doc, api_key) &&
+      parseFlightAwareDoc(doc, worker_callsign, route)) {
+    return true;
+  }
+  return false;
+}
+
+bool lookupFlightAwareWithKey(const char* callsign, RouteInfo* route, const char* api_key) {
+  if (api_key == nullptr || api_key[0] == '\0' || route == nullptr) {
+    return false;
+  }
+  if (s_route_tls_hard_fail) {
+    return false;
+  }
+  routeClear(route);
+
+  if (lookupFlightAwareIdent(callsign, callsign, route, api_key)) {
+    return true;
+  }
+
+  char iata[9];
+  if (services::airline::buildFlightIataFromCallsign(callsign, iata, sizeof(iata)) &&
+      strcmp(iata, callsign) != 0) {
+    RouteInfo alt;
+    routeClear(&alt);
+    if (lookupFlightAwareIdent(iata, callsign, &alt, api_key)) {
+      *route = alt;
+      return true;
+    }
+  }
+  return false;
 }
 
 bool lookupFlightAwareFirstKey(const char* callsign, RouteInfo* route) {
@@ -1253,16 +1454,19 @@ void clearDetailDebounce() {
   s_detail_debounce_callsign[0] = '\0';
 }
 
+unsigned long s_detail_retarget_hold_log_ms = 0;
+
 void scheduleDetailEnrichDebounce(const char* callsign, unsigned long now_ms) {
   if (callsign == nullptr || callsign[0] == '\0') {
     return;
   }
   strncpy(s_detail_debounce_callsign, callsign, sizeof(s_detail_debounce_callsign) - 1);
   s_detail_debounce_callsign[sizeof(s_detail_debounce_callsign) - 1] = '\0';
-  s_detail_debounce_deadline_ms = now_ms + kDetailEnrichDebounceMs;
+  const unsigned long debounce_ms = detailEnrichDebounceMs();
+  s_detail_debounce_deadline_ms = now_ms + debounce_ms;
   s_detail_debounce_pending = true;
   if (config::kSerialTraceDebug) {
-    Serial.printf("[detail] debounce %s %lums\n", callsign, kDetailEnrichDebounceMs);
+    Serial.printf("[detail] debounce %s %lums\n", callsign, debounce_ms);
   }
 }
 
@@ -1386,6 +1590,7 @@ void detailWorkerCancelWork() {
   s_detail_worker_callsign[0] = '\0';
   routeClear(&s_detail_result);
   s_detail_result_src = ApiSource::kNone;
+  resetDetailStepLogging();
 }
 
 /** Returns true when work was cancelled (selection cleared). */
@@ -1395,6 +1600,18 @@ bool detailWorkerRetargetIfNeeded() {
     return true;
   }
   if (isCurrentDetailSelection(s_detail_work_callsign)) {
+    return false;
+  }
+  if (s_detail_debounce_pending &&
+      strcmp(s_detail_selection_callsign, s_detail_work_callsign) != 0) {
+    if (config::kRadarResumeDebug) {
+      const unsigned long now_ms = millis();
+      if (now_ms - s_detail_retarget_hold_log_ms >= 2000UL) {
+        s_detail_retarget_hold_log_ms = now_ms;
+        Serial.printf("[detail] retarget hold debounce %s (work %s)\n",
+                      s_detail_selection_callsign, s_detail_work_callsign);
+      }
+    }
     return false;
   }
   if (s_detail_step == DetailStep::kDone) {
@@ -1414,6 +1631,7 @@ bool detailWorkerRetargetIfNeeded() {
   routeClear(&s_detail_result);
   s_detail_result_src = ApiSource::kNone;
   s_detail_ready = false;
+  resetDetailStepLogging();
   if (s_detail_has_pending &&
       strcmp(s_detail_pending_callsign, s_detail_selection_callsign) == 0) {
     s_detail_has_pending = false;
@@ -1469,11 +1687,7 @@ void detailWorkerRunStep() {
         return;
       }
       logDetailStepEnd(DetailStep::kCache, callsign, false);
-      if (services::airline::isNNumber(callsign)) {
-        s_detail_step = DetailStep::kPrefix;
-      } else {
-        s_detail_step = apiAvailable() ? firstLiveApiStep() : DetailStep::kPrefix;
-      }
+      s_detail_step = nextStepAfterCacheMiss(callsign);
       return;
     }
     case DetailStep::kAirLabs: {
@@ -1484,11 +1698,13 @@ void detailWorkerRunStep() {
       if (s_route_tls_hard_fail) {
         s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kAirLabs);
       } else if (!prepareRouteHttp(callsign, config::kDetailApiTimeoutMs)) {
-        if (config::kSerialTraceDebug) {
-          Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", callsign,
-                        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        logHeapSkipRateLimited(callsign);
+        if (!detailWorkerAdvanceOnHeapSkip(DetailStep::kAirLabs)) {
+          vTaskDelay(pdMS_TO_TICKS(kDetailHeapSkipRetryMs));
+          return;
         }
-        s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kAirLabs);
+        logDetailStepEnd(DetailStep::kAirLabs, callsign, false);
+        return;
       } else if (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs() &&
                  lookupAirLabsFirstKey(callsign, &live)) {
         s_detail_result = live;
@@ -1514,11 +1730,13 @@ void detailWorkerRunStep() {
       if (s_route_tls_hard_fail) {
         s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kFlightAware);
       } else if (!prepareRouteHttp(callsign, config::kDetailApiTimeoutMs)) {
-        if (config::kSerialTraceDebug) {
-          Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", callsign,
-                        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        logHeapSkipRateLimited(callsign);
+        if (!detailWorkerAdvanceOnHeapSkip(DetailStep::kFlightAware)) {
+          vTaskDelay(pdMS_TO_TICKS(kDetailHeapSkipRetryMs));
+          return;
         }
-        s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kFlightAware);
+        logDetailStepEnd(DetailStep::kFlightAware, callsign, false);
+        return;
       } else if (apikeys::useFlightAware() && apikeys::hasFlightAware() &&
                  apikeys::canUseFlightAware() && lookupFlightAwareFirstKey(callsign, &live)) {
         s_detail_result = live;
@@ -1544,11 +1762,13 @@ void detailWorkerRunStep() {
       if (s_route_tls_hard_fail) {
         s_detail_step = DetailStep::kPrefix;
       } else if (!prepareRouteHttp(callsign, config::kDetailApiTimeoutMs)) {
-        if (config::kSerialTraceDebug) {
-          Serial.printf("[detail] http skip %s heap free=%u max_blk=%u\n", callsign,
-                        ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        logHeapSkipRateLimited(callsign);
+        if (!detailWorkerAdvanceOnHeapSkip(DetailStep::kFr24)) {
+          vTaskDelay(pdMS_TO_TICKS(kDetailHeapSkipRetryMs));
+          return;
         }
-        s_detail_step = DetailStep::kPrefix;
+        logDetailStepEnd(DetailStep::kFr24, callsign, false);
+        return;
       } else if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24() &&
                  lookupFr24FirstKey(callsign, &live)) {
         s_detail_result = live;
@@ -1572,11 +1792,16 @@ void detailWorkerRunStep() {
     case DetailStep::kPrefix: {
       logDetailStepBegin(DetailStep::kPrefix, callsign);
       bool ok = false;
+      const bool defer_api = !detailRouteApiAllowed();
       if (lookupPrefixFallback(callsign, &s_detail_result)) {
         s_detail_result_src = ApiSource::kPrefix;
-        storeCache(callsign, s_detail_result, ApiSource::kPrefix, true);
+        storeCache(callsign, s_detail_result, ApiSource::kPrefix, !defer_api);
+        applyRouteToCallsign(callsign, s_detail_result);
         if (isCurrentDetailSelection(callsign)) {
           logRouteLine(callsign, s_detail_result, "pfx");
+        }
+        if (defer_api) {
+          setDetailHeapDeferred(callsign);
         }
         ok = true;
       } else {
@@ -1609,7 +1834,7 @@ void detailWorkerTask(void* /*arg*/) {
       routeClear(&s_detail_result);
       s_detail_result_src = ApiSource::kNone;
       s_detail_step = DetailStep::kCache;
-      s_route_tls_hard_fail = false;
+      resetDetailStepLogging();
       if (config::kSerialTraceDebug) {
         Serial.printf("[detail] worker begin %s\n", s_detail_work_callsign);
       }
@@ -1645,6 +1870,10 @@ void queueDetailEnrichment(const char* callsign) {
     }
     return;
   }
+  if (!detailRouteApiAllowed()) {
+    syncPrefixOnlyEnrich(callsign);
+    return;
+  }
   if (s_detail_busy || s_detail_requested) {
     if (config::kSerialTraceDebug) {
       Serial.printf("[detail] queue busy -> pending %s\n", callsign);
@@ -1656,7 +1885,30 @@ void queueDetailEnrichment(const char* callsign) {
   startDetailWorker(callsign);
 }
 
+void tickDetailHeapDefer() {
+  if (!s_detail_heap_deferred || s_detail_heap_deferred_callsign[0] == '\0') {
+    return;
+  }
+  if (!isCurrentDetailSelection(s_detail_heap_deferred_callsign)) {
+    clearDetailHeapDeferred();
+    return;
+  }
+  if (services::adsb::fetchInProgress() || services::https::busy()) {
+    return;
+  }
+  if (!detailRouteApiAllowed()) {
+    return;
+  }
+  if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+    Serial.printf("[detail] heap defer fire %s free=%u max_blk=%u\n",
+                  s_detail_heap_deferred_callsign, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  }
+  clearDetailHeapDeferred();
+  queueDetailEnrichment(s_detail_selection_callsign);
+}
+
 void tickDetailImmediateDefer() {
+
   if (!s_detail_immediate_deferred || s_detail_selection_callsign[0] == '\0') {
     return;
   }
@@ -1686,6 +1938,7 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
     s_detail_selection_callsign[sizeof(s_detail_selection_callsign) - 1] = '\0';
     s_detail_ready = false;
     s_detail_immediate_deferred = false;
+    clearDetailHeapDeferred();
     if ((s_detail_busy || s_detail_requested) &&
         strcmp(callsign, s_detail_worker_callsign) != 0) {
       setDetailPending(callsign);
@@ -1708,12 +1961,15 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
         !services::https::heapReadyForRouteApi()) {
       if (tryDetailCacheOnly(callsign)) {
         if (config::kSerialTraceDebug) {
-          Serial.printf("[detail] immediate cache hit %s (tls busy)\n", callsign);
+          Serial.printf("[detail] immediate cache hit %s (defer)\n", callsign);
         }
       } else {
-        s_detail_immediate_deferred = true;
-        if (config::kSerialTraceDebug) {
-          Serial.println("[detail] immediate enrich deferred (tls busy)");
+        syncPrefixOnlyEnrich(callsign);
+        if (services::adsb::fetchInProgress() || services::https::busy()) {
+          s_detail_immediate_deferred = true;
+          if (config::kSerialTraceDebug) {
+            Serial.println("[detail] immediate enrich deferred (tls busy)");
+          }
         }
       }
       return;
@@ -1730,6 +1986,7 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
 
 void tickDetailEnrichDebounceImpl(unsigned long now_ms) {
   tickDetailImmediateDefer();
+  tickDetailHeapDefer();
   if (!s_detail_debounce_pending || s_detail_debounce_callsign[0] == '\0') {
     return;
   }
@@ -1764,6 +2021,7 @@ void cancelDetailEnrichmentImpl() {
   s_detail_ready = false;
   s_detail_ready_callsign[0] = '\0';
   s_detail_immediate_deferred = false;
+  clearDetailHeapDeferred();
   s_detail_sprite_release_pending = false;
   s_detail_sprite_released_ack = false;
   s_detail_has_pending = false;
@@ -1987,6 +2245,8 @@ bool detailEnrichmentInFlight(const char* callsign) {
 }
 
 void noteTlsMemoryFailure() { s_tls_recover_requested = true; }
+
+bool tlsRecoverRequested() { return s_tls_recover_requested; }
 
 bool consumeTlsRecoverRequest() {
   if (!s_tls_recover_requested) {

@@ -164,14 +164,14 @@ constexpr uint32_t kMinContiguousHeapForPanelSpi = 10000;
  *  route enrichment, internal free heap settles at ~39KB (TLS/fragmentation) while
  *  max_blk stays healthy — route APIs and ADS-B both use buffered+filtered JSON.
  *  kMinContiguousHeapForAdsbTls is the primary guard against SPI driver panic. */
-constexpr uint32_t kMinFreeHeapForAdsbHttps = 38000;
+constexpr uint32_t kMinFreeHeapForAdsbHttps = 32000;
 /** ADS-B TLS + JSON — require a healthy contiguous block too. */
-constexpr uint32_t kMinContiguousHeapForAdsbTls = 20000;
+constexpr uint32_t kMinContiguousHeapForAdsbTls = 18000;
 
 /** Defer route API HTTPS if internal free heap is below this.
  *  Raised from 24000 for the same reason: route enrichment polls run on the
  *  flight-detail screen alongside the full ADS-B response in memory. */
-constexpr uint32_t kMinFreeHeapForRouteHttps = 38000;
+constexpr uint32_t kMinFreeHeapForRouteHttps = 32000;
 /** Route API TLS + JSON — require a healthy contiguous block too. */
 constexpr uint32_t kMinContiguousHeapForRouteTls = 18000;
 /** Target max_blk before opening another TLS session (after prior session ends). */
@@ -183,6 +183,10 @@ constexpr uint32_t kDetailApiTimeoutMs = 4000;
 constexpr unsigned long kDetailWorkerStallMs = 12000UL;
 /** Faster recovery when the worker is enriching a callsign you scrolled past. */
 constexpr unsigned long kDetailWorkerStaleStallMs = 6000UL;
+/** Longer flight-detail enrich debounce when max_blk is below pressure threshold. */
+constexpr unsigned long kDetailEnrichDebouncePressureMs = 1200UL;
+/** Enter enrich pressure mode (longer debounce, defer live APIs) below this max_blk. */
+constexpr uint32_t kDetailEnrichHeapPressureBlk = 20000;
 
 // --- Weather (Tomorrow.io) ---
 /** Tomorrow.io API host (HTTPS). One realtime + one daily-forecast GET per refresh. */

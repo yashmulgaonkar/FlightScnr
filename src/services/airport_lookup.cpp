@@ -131,9 +131,20 @@ bool resolveToIcao(const char* code, char* icao_out) {
   }
 
   if (normalized[3] != '\0') {
+    for (size_t i = 0; i < 4; ++i) {
+      if (!isalpha(static_cast<unsigned char>(normalized[i]))) {
+        return false;
+      }
+    }
     memcpy(icao_out, normalized, 4);
     icao_out[4] = '\0';
     return true;
+  }
+
+  for (size_t i = 0; normalized[i] != '\0'; ++i) {
+    if (!isalpha(static_cast<unsigned char>(normalized[i]))) {
+      return false;
+    }
   }
 
   char iata_key[4] = {normalized[0], normalized[1], normalized[2], '\0'};

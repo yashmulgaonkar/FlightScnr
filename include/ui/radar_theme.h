@@ -108,5 +108,7 @@ extern uint16_t kColorAircraft;
 extern uint16_t kColorTagType;
 extern uint16_t kColorTagAltitudeAscend;
 extern uint16_t kColorTagAltitudeDescend;
+extern uint16_t kColorAlertMilitary;
+extern uint16_t kColorAlertEmergency;
 
 }  // namespace ui::radar

@@ -30,6 +30,7 @@
 #include "services/settings_apply.h"
 #include "services/wifi_setup.h"
 #include "services/off_hours.h"
+#include "services/aircraft_alert.h"
 #include "ui/clock_screen.h"
 #include "ui/clock_settings_screen.h"
 #include "ui/details_screen.h"
@@ -352,6 +353,51 @@ void releaseHttpsPressureMemory() {
   services::route::tickDetailSpriteRelease();
 }
 
+/** Drop radar PSRAM sprites and drain TLS when max_blk is still tight after detail. */
+void recoverRadarHeapPressure(const char* reason, uint32_t drain_ms = 1200) {
+  const uint32_t blk_now = ESP.getMaxAllocHeap();
+  if (blk_now >= config::kMinContiguousHeapForAdsbTls) {
+    return;
+  }
+
+  // Mid-TLS sprite teardown does not coalesce heap; it only forces expensive redraws.
+  if ((services::https::busy() || services::adsb::fetchInProgress()) &&
+      strcmp(reason, "detail_resume") != 0) {
+    return;
+  }
+
+  static unsigned long s_last_recover_ms = 0;
+  static uint32_t s_last_recover_blk = 0;
+  const unsigned long now = millis();
+  if (s_last_recover_ms != 0 && now - s_last_recover_ms < 10000UL &&
+      blk_now + 512U >= s_last_recover_blk) {
+    return;
+  }
+
+  const uint32_t free_before = ESP.getFreeHeap();
+  ui::radarDisplayReleasePressureSprites();
+  if (drain_ms > 0) {
+    services::https::drainTlsHeapAfterSession(drain_ms);
+  }
+  s_last_recover_ms = now;
+  s_last_recover_blk = ESP.getMaxAllocHeap();
+
+  if (config::kRadarResumeDebug || config::kSerialTraceDebug) {
+    static unsigned long s_last_log_ms = 0;
+    if (now - s_last_log_ms >= 2000UL) {
+      s_last_log_ms = now;
+      Serial.printf("[radar] heap_pressure %s free=%u->%u blk=%u->%u\n", reason, free_before,
+                    ESP.getFreeHeap(), blk_now, ESP.getMaxAllocHeap());
+    }
+  }
+}
+
+void noteRadarFullDrawComplete() {
+  const unsigned long now = millis();
+  g_last_sweep_done_ms = now;
+  g_last_radar_frame_ms = now;
+}
+
 /** After flight detail, release detail/route pressure and let TLS buffers drain.
  *  Internal free heap settles at ~39KB post-enrichment; WiFi recycle does not
  *  restore it and stalls the UI for seconds — the ADS-B floor matches route APIs. */
@@ -361,6 +407,7 @@ void reclaimHeapAfterFlightDetail() {
 
   releaseHttpsPressureMemory();
   services::https::drainTlsHeapAfterSession(2500);
+  recoverRadarHeapPressure("detail_resume");
 
   if (config::kRadarResumeDebug || config::kSerialTraceDebug) {
     Serial.printf("[radar] resume_reclaim heap=%u->%u blk=%u->%u adsb_ok=%d\n", heap_before,
@@ -387,6 +434,9 @@ void completeDeferredRadarDraw() {
     return;
   }
   if (heapBlocksPanel()) {
+    recoverRadarHeapPressure("deferred_draw", 600);
+  }
+  if (heapBlocksPanel()) {
     if (config::kRadarResumeDebug) {
       static unsigned long s_last_defer_log_ms = 0;
       const unsigned long now = millis();
@@ -401,6 +451,7 @@ void completeDeferredRadarDraw() {
   ui::radarDisplayDraw();
   g_radar_full_draw_pending = false;
   g_radar_full_draw_pending_since_ms = 0;
+  noteRadarFullDrawComplete();
   if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
     Serial.println("[radar] deferred full draw complete");
   }
@@ -415,8 +466,11 @@ void showRadar() {
   }
   ui::flightDetailReleaseSprite();
   g_radar_visible = true;
-  g_last_radar_frame_ms = millis();
   g_last_adsb_fetch_ms = 0;
+
+  if (heapBlocksPanel()) {
+    recoverRadarHeapPressure("show_radar", 600);
+  }
 
   if (heapBlocksPanel()) {
     g_radar_full_draw_pending = true;
@@ -431,6 +485,7 @@ void showRadar() {
   ui::radarDisplayDraw();
   g_radar_full_draw_pending = false;
   g_radar_full_draw_pending_since_ms = 0;
+  noteRadarFullDrawComplete();
   if (config::kRadarResumeDebug) {
     logRadarDebugState("show_drew");
   }
@@ -759,7 +814,15 @@ void onRangeStep(int8_t delta) {
                 ui::radar::scaleActive().coverage_km);
 
   if (g_radar_visible && WiFi.status() == WL_CONNECTED) {
+    recoverRadarHeapPressure("range_change", 400);
+    if (heapBlocksPanel()) {
+      g_radar_full_draw_pending = true;
+      g_radar_full_draw_pending_since_ms = millis();
+      return;
+    }
+    PanelSession panel(tft);
     ui::radarDisplayDraw();
+    noteRadarFullDrawComplete();
   }
 }
 
@@ -1278,7 +1341,8 @@ void recycleWifiForTls(unsigned long now, const char* reason) {
 }
 
 void tryTlsWifiRefresh(unsigned long now) {
-  if (services::route::consumeTlsRecoverRequest() && canRecycleWifiForTlsMemory(now)) {
+  if (services::route::tlsRecoverRequested() && canRecycleWifiForTlsMemory(now)) {
+    services::route::consumeTlsRecoverRequest();
     recycleWifiForTls(now, "TLS memory pressure");
     return;
   }
@@ -1336,6 +1400,8 @@ void tickAdsbFetch() {
     const bool enrich_routes = g_screen == AppScreen::FlightDetail;
     const unsigned long process_start = millis();
     services::adsb::fetchProcessReady(enrich_routes);
+    services::alert::checkNewAircraft(services::adsb::aircraftList(),
+                                      services::adsb::aircraftCount());
     const unsigned long process_ms = millis() - process_start;
     if (process_ms > g_diag_adsb_process_max_ms) {
       g_diag_adsb_process_max_ms = process_ms;
@@ -1412,9 +1478,22 @@ void tickAdsbFetch() {
       ui::flightDetailReleaseSprite();
     }
     static unsigned long s_last_heap_recover_ms = 0;
-    if ((on_radar || prefetch || on_detail) && now - s_last_heap_recover_ms >= 10000UL) {
+    static uint8_t s_heap_recover_attempts = 0;
+    if ((on_radar || prefetch || on_detail) && now - s_last_heap_recover_ms >= 5000UL) {
       s_last_heap_recover_ms = now;
       releaseHttpsPressureMemory();
+      ++s_heap_recover_attempts;
+      if (s_heap_recover_attempts >= 3 && (on_radar || on_detail)) {
+        ui::radarDisplayReleasePressureSprites();
+        Serial.printf("[fetch] sprite_release free=%u max_blk=%u\n", ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+      }
+      if (s_heap_recover_attempts >= 5 && canRecycleWifiForTlsMemory(now)) {
+        recycleWifiForTls(now, "heap stuck — WiFi recycle");
+        s_heap_recover_attempts = 0;
+        s_last_heap_recover_ms = now;
+        return;
+      }
       if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
         Serial.printf("[fetch] heap recover free=%u max_blk=%u\n", ESP.getFreeHeap(),
                       ESP.getMaxAllocHeap());
@@ -1424,6 +1503,7 @@ void tickAdsbFetch() {
       logFetchDefer("heap low");
       return;
     }
+    s_heap_recover_attempts = 0;
   }
 
   const float fetch_km = ui::radar::adsbQueryRadiusKm();
@@ -1471,6 +1551,7 @@ void setup() {
   services::weather::bootLoad();
   services::tzlookup::bootLoad();
   services::offhours::bootLoad();
+  services::alert::bootLoad();
 
   if (wifiSetupConnect()) {
     services::clock::startNtp();

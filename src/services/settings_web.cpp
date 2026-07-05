@@ -21,6 +21,7 @@
 #include "services/settings_apply.h"
 #include "services/tz_lookup.h"
 #include "services/weather.h"
+#include "services/aircraft_alert.h"
 #include "services/off_hours.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
@@ -412,6 +413,21 @@ void handleSettingsPage() {
   }
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
+  // ---------- Alerts card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#9888;</span>Alerts"
+            "<span class=\"sum\">aircraft alerts</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">");
+  appendToggle(page, kSettingsPageCap, &used, "alert_mil", "Alert on military aircraft",
+               services::alert::militaryAlertEnabled());
+  appendToggle(page, kSettingsPageCap, &used, "alert_emrg",
+               "Alert on emergency squawk (7700/7600/7500)",
+               services::alert::emergencyAlertEnabled());
+  appendToggle(page, kSettingsPageCap, &used, "alert_hide",
+               "Hide non-alerted aircraft on radar",
+               services::alert::hideNonAlertedEnabled());
+  appendRaw(page, kSettingsPageCap, &used, "</div></details>");
+
   // ---------- Route APIs card ----------
   appendRaw(page, kSettingsPageCap, &used,
             "<details class=\"card\"><summary><span class=\"ico\">&#9992;</span>Route APIs"
@@ -631,6 +647,9 @@ void handleSave() {
                                    s_server->arg("night_mode").c_str(),
                                    s_server->arg("night_start").c_str(),
                                    s_server->arg("night_end").c_str());
+  services::alert::saveFromForm(s_server->arg("alert_mil").c_str(),
+                                s_server->arg("alert_emrg").c_str(),
+                                s_server->arg("alert_hide").c_str());
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
 

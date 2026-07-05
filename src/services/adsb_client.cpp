@@ -25,6 +25,39 @@
 
 namespace services::adsb {
 
+AircraftCategory Aircraft::classify() const {
+  if (isMilitary()) {
+    return AircraftCategory::Military;
+  }
+  if (category[0] == 'A') {
+    switch (category[1]) {
+      case '1': return AircraftCategory::LightAircraft;
+      case '2': return AircraftCategory::SmallAircraft;
+      case '3': return AircraftCategory::Large;
+      case '4': return AircraftCategory::Large;  // high vortex large (B757)
+      case '5': return AircraftCategory::Heavy;
+      case '6': return AircraftCategory::HighPerformance;
+      case '7': return AircraftCategory::Helicopter;
+    }
+  } else if (category[0] == 'B') {
+    switch (category[1]) {
+      case '1': return AircraftCategory::Glider;
+      case '2': return AircraftCategory::LighterThanAir;
+      case '4': return AircraftCategory::LightAircraft;  // ultralight
+      case '6': return AircraftCategory::UAV;
+    }
+  } else if (category[0] == 'C') {
+    if (category[1] >= '1' && category[1] <= '2') {
+      return AircraftCategory::GroundVehicle;
+    }
+  }
+  // Fallback: check ICAO type for helicopter designators (Hx)
+  if (type[0] == 'H' && type[1] >= '1' && type[1] <= '4') {
+    return AircraftCategory::Helicopter;
+  }
+  return AircraftCategory::Unknown;
+}
+
 namespace {
 
 constexpr char kApiBase[] = "https://opendata.adsb.fi/api/v3/lat/";
@@ -44,7 +77,8 @@ void buildAircraftFilter(JsonDocument& filter) {
       "lat",          "lon",      "true_heading", "mag_heading", "track",
       "dir",          "gs",       "tas",          "ias",         "baro_rate",
       "geom_rate",    "alt_baro", "alt_geom",     "flight",      "hex",
-      "t",            "orig_icao", "origin_icao", "dep_icao",    "from",
+      "t",            "dbFlags",  "category",     "squawk",
+      "orig_icao",    "origin_icao", "dep_icao",  "from",
       "dest_icao",    "destination_icao", "arr_icao", "to"};
   for (const char* key : kKeepKeys) {
     el[key] = true;
@@ -413,6 +447,9 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   }
 
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));
+  copyJsonStringTrimmed(plane, "category", ac->category, sizeof(ac->category));
+  copyJsonStringTrimmed(plane, "squawk", ac->squawk, sizeof(ac->squawk));
+  ac->db_flags = static_cast<uint8_t>(plane["dbFlags"] | 0);
   formatAltitudeTag(plane, ac->alt, sizeof(ac->alt));
   if (!pickVerticalRateFpm(plane, &ac->vert_rate_fpm)) {
     ac->vert_rate_fpm = kVertRateUnknown;

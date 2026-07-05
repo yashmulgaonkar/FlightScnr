@@ -49,6 +49,15 @@ uint8_t s_tone_index = kDefaultToneIndex;
 bool s_playing = false;
 unsigned long s_stop_at_ms = 0;
 
+constexpr uint16_t kAlertFreqHz = 2500;
+constexpr uint8_t kAlertDuty = 127;
+constexpr uint8_t kAlertBeepMs = 60;
+constexpr uint8_t kAlertIntervalMs = 140;  // beep + gap
+constexpr uint8_t kAlertBeepCount = 3;
+
+uint8_t s_alert_beeps_remaining = 0;
+unsigned long s_alert_next_ms = 0;
+
 size_t toneIndexFromLegacyPercent(uint8_t pct) {
   for (size_t i = 0; i < kToneLevelCount; ++i) {
     if (kLegacyTonePercents[i] == pct) {
@@ -176,13 +185,28 @@ void buzzerClick() {
 }
 
 void buzzerPoll() {
-  if (!s_playing) {
-    return;
-  }
-  if (millis() >= s_stop_at_ms) {
+  if (s_playing && millis() >= s_stop_at_ms) {
     ledcWrite(kLedcChannel, 0);
     s_playing = false;
   }
+
+  if (s_alert_beeps_remaining == 0) {
+    return;
+  }
+  if (millis() < s_alert_next_ms) {
+    return;
+  }
+  ledcChangeFrequency(kLedcChannel, kAlertFreqHz, kLedcResolution);
+  ledcWrite(kLedcChannel, kAlertDuty);
+  s_playing = true;
+  s_stop_at_ms = millis() + kAlertBeepMs;
+  --s_alert_beeps_remaining;
+  s_alert_next_ms = millis() + kAlertIntervalMs;
+}
+
+void buzzerAlert() {
+  s_alert_beeps_remaining = kAlertBeepCount;
+  s_alert_next_ms = 0;
 }
 
 void saveBeepEnabledFromForm(const char* checkbox_value) {

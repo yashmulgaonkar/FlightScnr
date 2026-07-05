@@ -23,6 +23,9 @@ bool radarDisplayDebugBgReady();
 bool radarDisplayDebugContentReady();
 bool radarDisplayDebugContentBaseValid();
 
+/** Force aircraft layer to redraw on the next sweep frame. */
+void radarDisplayInvalidateAircraft();
+
 /** Drop offscreen radar sprites to relieve heap pressure (rebuilt on next draw). */
 void radarDisplayReleasePressureSprites();
 

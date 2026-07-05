@@ -8,6 +8,23 @@ namespace services::adsb {
 /** Vertical rate unavailable (baro_rate / geom_rate not in feed). */
 constexpr int16_t kVertRateUnknown = INT16_MIN;
 
+/** Aircraft classification derived from dbFlags, ADS-B category, and ICAO type. */
+enum class AircraftCategory : uint8_t {
+  Unknown = 0,
+  Military,
+  Heavy,
+  Large,
+  SmallAircraft,
+  LightAircraft,
+  Helicopter,
+  UAV,
+  Glider,
+  LighterThanAir,
+  HighPerformance,
+  GroundVehicle,
+  Private,
+};
+
 struct Aircraft {
   float lat;
   float lon;
@@ -22,8 +39,23 @@ struct Aircraft {
   char route_dest[5];    /** Destination ICAO (e.g. KBOS). */
   char type[5];
   char alt[12];
+  char category[3];      /** ADS-B emitter category (e.g. "A3", "B6"). */
+  char squawk[5];        /** Transponder squawk code (e.g. "7700", "1200"). */
+  uint8_t db_flags = 0;  /** readsb dbFlags: bit0=military, bit1=interesting, bit2=PIA, bit3=LADD */
   /** Feet per minute from baro_rate (fallback geom_rate); kVertRateUnknown if missing. */
   int16_t vert_rate_fpm = kVertRateUnknown;
+
+  bool isMilitary() const { return (db_flags & 0x01) != 0; }
+  bool isInteresting() const { return (db_flags & 0x02) != 0; }
+  /** 7700=emergency, 7600=radio failure, 7500=hijack. */
+  bool isEmergencySquawk() const {
+    return (squawk[0] == '7' && squawk[1] == '7' && squawk[2] == '0' && squawk[3] == '0') ||
+           (squawk[0] == '7' && squawk[1] == '6' && squawk[2] == '0' && squawk[3] == '0') ||
+           (squawk[0] == '7' && squawk[1] == '5' && squawk[2] == '0' && squawk[3] == '0');
+  }
+
+  /** Classify this aircraft based on all available data. */
+  AircraftCategory classify() const;
 };
 
 constexpr size_t kMaxAircraft = 64;
