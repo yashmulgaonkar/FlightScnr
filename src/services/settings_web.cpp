@@ -3,6 +3,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include <esp_heap_caps.h>
+
 #include <cmath>
 #include <cstdio>
 
@@ -32,9 +34,22 @@ namespace {
 WebServer* s_server = nullptr;
 bool s_active = false;
 
-/** Static storage — must not live on loopTask stack (~8 KB). */
+/** Page compose buffer — PSRAM, allocated on first request.
+ *  Must not be a static internal-DRAM array (24 KB of DRAM gone at link time)
+ *  and must never pass through WebServer::send(code, type, const char*): that
+ *  overload copies the whole page into an internal-heap String, which under a
+ *  ~26 KB post-detail heap starved lwIP (min free 5 KB), stalled loop() for
+ *  ~12 s, and left max_blk permanently fragmented below the panel/TLS gates. */
 constexpr size_t kSettingsPageCap = 24576;
-char s_settings_page[kSettingsPageCap];
+char* s_settings_page = nullptr;
+
+char* settingsPageBuffer() {
+  if (s_settings_page == nullptr) {
+    s_settings_page = static_cast<char*>(
+        heap_caps_malloc(kSettingsPageCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  }
+  return s_settings_page;
+}
 
 const char kPageHead[] = R"HTML(<!DOCTYPE html>
 <html lang="en"><head>
@@ -215,7 +230,11 @@ void appendRangeMileHint(char* buf, size_t len, size_t* used) {
 
 void handleSettingsPage() {
   services::apikeys::load();
-  char* const page = s_settings_page;
+  char* const page = settingsPageBuffer();
+  if (page == nullptr) {
+    s_server->send(503, "text/plain", "Out of memory");
+    return;
+  }
   size_t used = 0;
   char masked[24];
   char watch_buf[160];
@@ -657,7 +676,12 @@ void handleSettingsPage() {
                   static_cast<unsigned>(kSettingsPageCap));
   }
 
-  s_server->send(200, "text/html; charset=utf-8", page);
+  // Zero-copy send: set the length up front, emit headers with an empty body,
+  // then stream the PSRAM buffer directly. Never pass `page` to send() — the
+  // const char* overload duplicates the whole page into an internal-heap String.
+  s_server->setContentLength(used);
+  s_server->send(200, "text/html; charset=utf-8", "");
+  s_server->sendContent(page, used);
 }
 
 void handleSave() {

@@ -6,6 +6,8 @@
 
 #include <ArduinoJson.h>
 
+#include <esp_heap_caps.h>
+
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -85,18 +87,72 @@ void buildAircraftFilter(JsonDocument& filter) {
   }
 }
 
+// The ADS-B response body and its parsed JsonDocument used to live on the
+// internal heap (Arduino String + default ArduinoJson allocator). Every ~5s poll
+// consumed ~25-30 KB of internal RAM in small realloc steps, fragmenting max_blk
+// down to a few KB, starving lwIP, and eventually escalating into a WiFi recycle.
+// Buffering in PSRAM keeps the internal heap for the WiFi/TCP stack only.
+constexpr size_t kFetchMaxPayloadBytes = 262144;
+
+struct PsramPayload {
+  char* data = nullptr;
+  size_t len = 0;
+  size_t cap = 0;
+
+  ~PsramPayload() {
+    if (data != nullptr) {
+      heap_caps_free(data);
+    }
+  }
+
+  bool reserve(size_t want) {
+    if (want <= cap) {
+      return true;
+    }
+    if (want > kFetchMaxPayloadBytes) {
+      return false;
+    }
+    void* p = heap_caps_realloc(data, want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == nullptr) {
+      p = heap_caps_realloc(data, want, MALLOC_CAP_8BIT);
+    }
+    if (p == nullptr) {
+      return false;
+    }
+    data = static_cast<char*>(p);
+    cap = want;
+    return true;
+  }
+
+  bool append(const uint8_t* src, size_t n) {
+    if (len + n + 1 > cap) {
+      size_t grow = cap < 8192 ? 8192 : cap * 2;
+      if (grow < len + n + 1) {
+        grow = len + n + 1;
+      }
+      if (!reserve(grow)) {
+        return false;
+      }
+    }
+    memcpy(data + len, src, n);
+    len += n;
+    data[len] = '\0';
+    return true;
+  }
+};
+
 // Read the full HTTP body with explicit connected()/available() waiting. Streaming
 // ArduinoJson straight off the TLS socket is unreliable (momentary gaps look like
 // EOF -> IncompleteInput on large responses), so we buffer first, then filter-parse.
-bool readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
+bool readHttpPayload(HTTPClient& http, PsramPayload* payload, uint32_t timeout_ms) {
   WiFiClient* stream = http.getStreamPtr();
   if (stream == nullptr || payload == nullptr) {
     return false;
   }
-  payload->clear();
   const int content_len = http.getSize();
-  if (content_len > 0) {
-    payload->reserve(static_cast<unsigned>(content_len));
+  if (content_len > 0 && !payload->reserve(static_cast<size_t>(content_len) + 1)) {
+    Serial.printf("[fetch] payload alloc failed (%d bytes)\n", content_len);
+    return false;
   }
   const unsigned long deadline_ms = millis() + timeout_ms;
   uint8_t buf[512];
@@ -119,9 +175,12 @@ bool readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
       workerYield();
       continue;
     }
-    payload->concat(reinterpret_cast<const char*>(buf), n);
+    if (!payload->append(buf, n)) {
+      Serial.println("[fetch] payload alloc failed (grow)");
+      return false;
+    }
   }
-  return payload->length() > 0;
+  return payload->len > 0;
 }
 
 void logAircraftToSerial(const Aircraft* planes, size_t count, double center_lat,
@@ -656,15 +715,42 @@ bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count) {
   return true;
 }
 
+// PSRAM-first allocator so the filtered JsonDocument never fragments internal
+// heap (mirrors RouteJsonAllocator in route_lookup.cpp).
+struct AdsbJsonAllocator : ArduinoJson::Allocator {
+  void* allocate(size_t size) override {
+    void* ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ptr == nullptr) {
+      ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    }
+    return ptr;
+  }
+  void deallocate(void* ptr) override {
+    if (ptr != nullptr) {
+      heap_caps_free(ptr);
+    }
+  }
+  void* reallocate(void* ptr, size_t new_size) override {
+    void* out = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (out == nullptr) {
+      out = heap_caps_realloc(ptr, new_size, MALLOC_CAP_8BIT);
+    }
+    return out;
+  }
+};
+
+AdsbJsonAllocator s_adsb_json_allocator;
+
 // Parse a buffered response body with a field filter, so only the ~10 keys we use
 // are materialized in the JsonDocument (keeps peak heap low on big responses).
-bool parseAircraftPayload(const String& payload, Aircraft* out, size_t* out_count) {
-  JsonDocument filter;
+bool parseAircraftPayload(const char* payload, size_t payload_len, Aircraft* out,
+                          size_t* out_count) {
+  JsonDocument filter(&s_adsb_json_allocator);
   buildAircraftFilter(filter);
 
-  JsonDocument doc;
+  JsonDocument doc(&s_adsb_json_allocator);
   const DeserializationError err =
-      deserializeJson(doc, payload, DeserializationOption::Filter(filter));
+      deserializeJson(doc, payload, payload_len, DeserializationOption::Filter(filter));
   if (err) {
     Serial.printf("[adsb] JSON parse error: %s\n", err.c_str());
     return false;
@@ -728,7 +814,12 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
                     config::kAdsbRateLimitBackoffMs);
     } else {
       s_fetch_rate_limited = false;
-      if (code < 0) {
+      // Only a failed connect (TLS handshake could not allocate/complete) or an
+      // explicit out-of-RAM error means memory pressure worth a WiFi recycle.
+      // Read timeouts (-11) and dropped connections (-5) are usually transient
+      // network conditions; they feed the fail streak, and the streak-based
+      // recycle in tryTlsWifiRefresh() remains the last resort.
+      if (code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_TOO_LESS_RAM) {
         services::route::noteTlsMemoryFailure();
       }
       if (code == HTTPC_ERROR_CONNECTION_REFUSED) {
@@ -743,7 +834,7 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
     return false;
   }
 
-  String payload;
+  PsramPayload payload;
   if (!readHttpPayload(http, &payload, kFetchHttpTimeoutMs + 4000U)) {
     http.end();
     client.stop();
@@ -754,7 +845,7 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
 
   services::https::drainTlsHeapAfterSession();
   workerYield();
-  if (!parseAircraftPayload(payload, out, out_count)) {
+  if (!parseAircraftPayload(payload.data, payload.len, out, out_count)) {
     if (config::kSerialTraceDebug) {
       Serial.printf("[fetch] fail parse (%lums)\n", millis() - fetch_start_ms);
     }

@@ -160,22 +160,24 @@ constexpr unsigned long kAdsbRateLimitBackoffMs = 15000UL;
 constexpr uint32_t kMinContiguousHeapForPanelSpi = 10000;
 
 /** Defer ADS-B HTTPS if internal free heap is below this.
- *  Was 42000; lowered to align with kMinFreeHeapForRouteHttps. After flight-detail
- *  route enrichment, internal free heap settles at ~39KB (TLS/fragmentation) while
- *  max_blk stays healthy — route APIs and ADS-B both use buffered+filtered JSON.
- *  kMinContiguousHeapForAdsbTls is the primary guard against SPI driver panic. */
-constexpr uint32_t kMinFreeHeapForAdsbHttps = 32000;
-/** ADS-B TLS + JSON — require a healthy contiguous block too. */
-constexpr uint32_t kMinContiguousHeapForAdsbTls = 18000;
+ *  mbedTLS buffers (https_lock PSRAM allocator), the response payload, and the
+ *  parsed JsonDocument all live in PSRAM now, so a fetch only needs internal RAM
+ *  for lwIP socket buffers and small client structs (~2-4KB observed). Sized so
+ *  the post-flight-detail steady state keeps polling: the lazily created
+ *  route_detail worker task permanently carves its 16KB stack out of internal
+ *  heap, settling free at ~26KB / max_blk ~12KB. The old 32000/18000 gates could
+ *  never pass after that, deadlocking ADS-B ("[fetch] defer: heap low" forever). */
+constexpr uint32_t kMinFreeHeapForAdsbHttps = 22000;
+/** ADS-B TLS needs only small internal blocks now; panel SPI has its own guard. */
+constexpr uint32_t kMinContiguousHeapForAdsbTls = 10000;
 
 /** Defer route API HTTPS if internal free heap is below this.
- *  Raised from 24000 for the same reason: route enrichment polls run on the
- *  flight-detail screen alongside the full ADS-B response in memory. */
-constexpr uint32_t kMinFreeHeapForRouteHttps = 32000;
-/** Route API TLS + JSON — require a healthy contiguous block too. */
-constexpr uint32_t kMinContiguousHeapForRouteTls = 18000;
+ *  Slightly above the ADS-B bar so traffic polling wins when memory is tight. */
+constexpr uint32_t kMinFreeHeapForRouteHttps = 24000;
+/** Route API TLS + JSON — PSRAM-backed like ADS-B. */
+constexpr uint32_t kMinContiguousHeapForRouteTls = 10000;
 /** Target max_blk before opening another TLS session (after prior session ends). */
-constexpr uint32_t kMinContiguousHeapForTlsReconnect = 40000;
+constexpr uint32_t kMinContiguousHeapForTlsReconnect = 20000;
 
 /** Route detail API connect/read timeout (ms). Keep short for fast scroll cancel. */
 constexpr uint32_t kDetailApiTimeoutMs = 4000;
@@ -185,8 +187,10 @@ constexpr unsigned long kDetailWorkerStallMs = 12000UL;
 constexpr unsigned long kDetailWorkerStaleStallMs = 6000UL;
 /** Longer flight-detail enrich debounce when max_blk is below pressure threshold. */
 constexpr unsigned long kDetailEnrichDebouncePressureMs = 1200UL;
-/** Enter enrich pressure mode (longer debounce, defer live APIs) below this max_blk. */
-constexpr uint32_t kDetailEnrichHeapPressureBlk = 20000;
+/** Enter enrich pressure mode (longer debounce, defer live APIs) below this max_blk.
+ *  Must sit below the ~12KB max_blk that remains after the route_detail worker
+ *  stack is carved out, or live route APIs never run on the detail screen. */
+constexpr uint32_t kDetailEnrichHeapPressureBlk = 10000;
 
 // --- Weather (Tomorrow.io) ---
 /** Tomorrow.io API host (HTTPS). One realtime + one daily-forecast GET per refresh. */
@@ -206,12 +210,12 @@ constexpr unsigned long kWeatherRateLimitBackoffMs = 5UL * 60UL * 1000UL;  // 5 
 /** Minimum spacing between weather fetch attempts — throttles rapid screen
  *  switching so a burst of opens can't blow the API's per-second limit. */
 constexpr unsigned long kWeatherMinFetchIntervalMs = 20000UL;  // 20 s
-/** Weather is the lowest-priority HTTPS user, so it only opens a TLS session
- *  when there is real headroom — a marginal heap fails the mbedTLS SHA buffer
- *  allocation (esp-sha "Failed to allocate buf memory" / -32512). Higher than
- *  the ADS-B bar so weather defers to the clock idling instead of contending. */
-constexpr uint32_t kMinFreeHeapForWeather = 36000;
-constexpr uint32_t kMinContiguousHeapForWeather = 20000;
+/** Weather is the lowest-priority HTTPS user — keep its bar above ADS-B so it
+ *  defers when memory is tight. With mbedTLS in PSRAM the old 36000/20000 gates
+ *  are obsolete and would permanently block weather after the route_detail
+ *  worker stack claims its 16KB of internal heap. */
+constexpr uint32_t kMinFreeHeapForWeather = 24000;
+constexpr uint32_t kMinContiguousHeapForWeather = 12000;
 /** Default unit system when the user has not overridden it (true = °F/imperial). */
 constexpr bool kWeatherUseImperialDefault = false;
 

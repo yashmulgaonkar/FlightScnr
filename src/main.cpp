@@ -1479,6 +1479,7 @@ void tickAdsbFetch() {
     }
     static unsigned long s_last_heap_recover_ms = 0;
     static uint8_t s_heap_recover_attempts = 0;
+    static uint8_t s_stuck_recycles = 0;
     if ((on_radar || prefetch || on_detail) && now - s_last_heap_recover_ms >= 5000UL) {
       s_last_heap_recover_ms = now;
       releaseHttpsPressureMemory();
@@ -1489,6 +1490,17 @@ void tickAdsbFetch() {
                       ESP.getMaxAllocHeap());
       }
       if (s_heap_recover_attempts >= 5 && canRecycleWifiForTlsMemory(now)) {
+        // Last resort: recycling WiFi can only reclaim TLS/TCP memory. If the
+        // fragmentation is held by something else (e.g. a stray long-lived
+        // allocation splitting the heap), repeated recycles change nothing and
+        // the device sits frozen forever — reboot instead; recovery takes ~15s.
+        ++s_stuck_recycles;
+        if (s_stuck_recycles >= 3) {
+          Serial.printf("[fetch] heap unrecoverable after %u recycles free=%u max_blk=%u — restart\n",
+                        s_stuck_recycles, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+          delay(200);
+          esp_restart();
+        }
         recycleWifiForTls(now, "heap stuck — WiFi recycle");
         s_heap_recover_attempts = 0;
         s_last_heap_recover_ms = now;
@@ -1504,6 +1516,7 @@ void tickAdsbFetch() {
       return;
     }
     s_heap_recover_attempts = 0;
+    s_stuck_recycles = 0;
   }
 
   const float fetch_km = ui::radar::adsbQueryRadiusKm();

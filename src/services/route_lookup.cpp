@@ -768,7 +768,13 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
   if (http_code != HTTP_CODE_OK) {
     if (http_code < 0) {
       cleanup.tls_fail = true;
-      s_tls_recover_requested = true;
+      // Pause route APIs on any transport error, but only ask for a WiFi
+      // recycle on connect/alloc failures — read timeouts are usually just a
+      // slow server and don't justify tearing the link down.
+      if (http_code == HTTPC_ERROR_CONNECTION_REFUSED ||
+          http_code == HTTPC_ERROR_TOO_LESS_RAM) {
+        s_tls_recover_requested = true;
+      }
       s_route_tls_hard_fail = true;
       if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
         Serial.printf("[detail] http tls fail %s code=%d free=%u max_blk=%u\n", worker_callsign,
@@ -1854,6 +1860,10 @@ void ensureDetailWorker() {
   if (s_detail_task != nullptr) {
     return;
   }
+  // NOTE: this task stack is 16KB of *internal* RAM, allocated on first
+  // flight-detail open and never freed. It typically splits the largest free
+  // block, dropping max_blk from ~27KB to ~12KB for the rest of the session —
+  // every heap gate in config.h must stay satisfiable below that ceiling.
   xTaskCreatePinnedToCore(detailWorkerTask, "route_detail", 16384, nullptr, 1,
                           &s_detail_task, config::kCoreNetwork);
 }
