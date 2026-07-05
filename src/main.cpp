@@ -966,7 +966,14 @@ void tickSecondaryScreenTimeout() {
   if (g_screen == AppScreen::Clock || g_screen == AppScreen::Weather) {
     const unsigned long timeout_ms = ui::displayPrefsClockWeatherTimeoutMs();
     if (timeout_ms != 0 && millis() - g_clock_weather_activity_ms >= timeout_ms) {
-      returnToRadar(true);
+      // Clock/forecast timeout returns to radar after a manual visit only.
+      // When idle-clock put us here (empty radar), stay on clock until visible
+      // traffic appears — tickAutoIdleClock() is the only path back to radar.
+      if (!g_auto_idle_clock) {
+        returnToRadar(true);
+      } else {
+        g_clock_weather_activity_ms = millis();
+      }
     }
     return;
   }
@@ -1052,8 +1059,8 @@ void tickAutoIdleClock() {
     return;
   }
 
-  // Idle-clock transitions use drawn-aircraft count (respects alert-hide).
-  // ac_in in [diag] still reports raw in-range totals for debugging.
+  // Idle-clock uses in-range visible planes only (hide filter, no edge blips).
+  // ac_in in [diag] is raw in-range total without hide filter.
   const size_t ac_vis = ui::radarDisplayVisibleAircraftCount();
   if (ac_vis > 0) {
     g_hold_empty_radar = false;

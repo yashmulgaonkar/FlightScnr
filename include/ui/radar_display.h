@@ -18,8 +18,8 @@ void radarDisplayRefreshAircraft();
  *  only reappears once a blip actually enters the visible scope. */
 size_t radarDisplayInRangeAircraftCount();
 
-/** Count of aircraft that would be drawn on radar (respects alert-hide filter and
- *  includes beyond-ring edge dots). Used for idle-clock empty-radar detection. */
+/** Count of in-range aircraft that would be drawn as full planes (respects
+ *  alert-hide). Excludes beyond-ring edge blips. Used for idle-clock transitions. */
 size_t radarDisplayVisibleAircraftCount();
 
 /** Debug probes for [radar] resume diagnostics (kRadarResumeDebug). */
