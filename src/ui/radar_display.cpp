@@ -348,6 +348,33 @@ size_t inRangeAircraftCount() {
   return in_range;
 }
 
+/** Aircraft that would actually be drawn (hide filter + in-range or beyond-ring dot). */
+size_t visibleAircraftCount() {
+  const size_t n = services::adsb::aircraftCount();
+  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
+  const bool hide_others = services::alert::hideNonAlertedEnabled();
+  size_t visible = 0;
+  for (size_t i = 0; i < n; ++i) {
+    if (hide_others && !services::alert::isHighlighted(planes[i])) {
+      continue;
+    }
+    float dx_km = 0.0f;
+    float dy_km = 0.0f;
+    float dist_km = 0.0f;
+    localOffsetFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
+    if (isInsideOuterRingKm(dist_km)) {
+      ++visible;
+      continue;
+    }
+    int dot_x = 0;
+    int dot_y = 0;
+    if (beyondRingEdgeDotFromLatLon(planes[i].lat, planes[i].lon, &dot_x, &dot_y)) {
+      ++visible;
+    }
+  }
+  return visible;
+}
+
 void drawAircraft() {
   initLabelMetrics();
 
@@ -1435,6 +1462,8 @@ void radarDisplayRefreshAircraft() {
 }
 
 size_t radarDisplayInRangeAircraftCount() { return inRangeAircraftCount(); }
+
+size_t radarDisplayVisibleAircraftCount() { return visibleAircraftCount(); }
 
 void radarDisplayInvalidateAircraft() {
   s_aircraft_dirty = true;

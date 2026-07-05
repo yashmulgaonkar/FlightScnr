@@ -63,6 +63,7 @@ unsigned long g_last_adsb_fetch_ms = 0;
 unsigned long g_last_adsb_ssl_recover_ms = 0;
 unsigned long g_last_tls_proactive_refresh_ms = 0;
 unsigned long g_last_radar_frame_ms = 0;
+unsigned long g_radar_visible_since_ms = 0;
 unsigned long g_last_sweep_done_ms = 0;
 unsigned long g_secondary_activity_ms = 0;
 unsigned long g_clock_weather_activity_ms = 0;
@@ -460,12 +461,14 @@ void completeDeferredRadarDraw() {
 void showRadar() {
   if (WiFi.status() != WL_CONNECTED) {
     g_radar_visible = false;
+    g_radar_visible_since_ms = 0;
     g_radar_full_draw_pending = false;
     g_radar_full_draw_pending_since_ms = 0;
     return;
   }
   ui::flightDetailReleaseSprite();
   g_radar_visible = true;
+  g_radar_visible_since_ms = millis();
   g_last_adsb_fetch_ms = 0;
 
   if (heapBlocksPanel()) {
@@ -655,8 +658,13 @@ void returnToRadar(bool from_idle_timeout = false, bool manual_navigation = fals
   g_manual_radar_timed_visit = false;
   if (manual_navigation) {
     if (ui::displayPrefsAutoIdleClockEnabled()) {
-      g_manual_radar_timed_visit = true;
-      g_clock_weather_activity_ms = millis();
+      // Manual visit grace only applies when clock/forecast has a timed return;
+      // with Manual (0) timeout, fall through to normal idle-clock after
+      // kRadarMinVisibleMs so empty radar can still reclaim the clock screen.
+      if (ui::displayPrefsClockWeatherTimeoutMs() != 0) {
+        g_manual_radar_timed_visit = true;
+        g_clock_weather_activity_ms = millis();
+      }
     } else {
       g_hold_empty_radar = true;
     }
@@ -1044,15 +1052,15 @@ void tickAutoIdleClock() {
     return;
   }
 
-  // Only count aircraft inside the outer ring (drawn as airplanes). Off-screen
-  // beyond-ring blips should not pull us back to the radar.
-  const size_t ac = ui::radarDisplayInRangeAircraftCount();
-  if (ac > 0) {
+  // Idle-clock transitions use drawn-aircraft count (respects alert-hide).
+  // ac_in in [diag] still reports raw in-range totals for debugging.
+  const size_t ac_vis = ui::radarDisplayVisibleAircraftCount();
+  if (ac_vis > 0) {
     g_hold_empty_radar = false;
     g_manual_radar_timed_visit = false;
   }
 
-  if (g_auto_idle_clock && ac > 0 &&
+  if (g_auto_idle_clock && ac_vis > 0 &&
       (g_screen == AppScreen::Clock || g_screen == AppScreen::Weather)) {
     returnToRadar(false);
     Serial.println("Screen: radar (aircraft)");
@@ -1060,11 +1068,45 @@ void tickAutoIdleClock() {
     return;
   }
 
+  const bool idle_pref = ui::displayPrefsAutoIdleClockEnabled();
+  const unsigned long radar_vis_age_ms =
+      g_radar_visible_since_ms != 0 ? millis() - g_radar_visible_since_ms : 0UL;
+  const bool radar_min_met = radar_vis_age_ms >= config::kRadarMinVisibleMs;
+
   if (!g_auto_idle_clock && !g_hold_empty_radar && !g_manual_radar_timed_visit &&
-      g_screen == AppScreen::Radar && g_radar_visible && ac == 0 &&
-      ui::displayPrefsAutoIdleClockEnabled() &&
-      millis() - g_last_radar_frame_ms >= config::kRadarMinVisibleMs) {
+      g_screen == AppScreen::Radar && g_radar_visible && ac_vis == 0 && idle_pref &&
+      radar_min_met) {
     openClockFromIdleRadar();
+    return;
+  }
+
+  if (config::kRadarResumeDebug && idle_pref && g_screen == AppScreen::Radar &&
+      !g_auto_idle_clock) {
+    static unsigned long s_last_idle_defer_ms = 0;
+    const unsigned long now = millis();
+    if (now - s_last_idle_defer_ms >= 10000UL) {
+      s_last_idle_defer_ms = now;
+      const char* reason = nullptr;
+      if (g_hold_empty_radar) {
+        reason = "hold";
+      } else if (g_manual_radar_timed_visit) {
+        reason = "manual_visit";
+      } else if (!g_radar_visible) {
+        reason = "radar_not_visible";
+      } else if (ac_vis > 0) {
+        reason = "ac_visible";
+      } else if (!radar_min_met) {
+        reason = "radar_min_wait";
+      }
+      if (reason != nullptr) {
+        Serial.printf("[idle_clk] defer: %s ac_vis=%u ac_in=%u manual=%d hold=%d "
+                      "radar_vis=%d vis_age_ms=%lu\n",
+                      reason, static_cast<unsigned>(ac_vis),
+                      static_cast<unsigned>(ui::radarDisplayInRangeAircraftCount()),
+                      g_manual_radar_timed_visit ? 1 : 0, g_hold_empty_radar ? 1 : 0,
+                      g_radar_visible ? 1 : 0, radar_vis_age_ms);
+      }
+    }
   }
 }
 
