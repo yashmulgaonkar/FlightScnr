@@ -251,6 +251,12 @@ void checkNewAircraft(const services::adsb::Aircraft* list, size_t count) {
     if (!shouldAlert(list[i])) {
       continue;
     }
+    // Beep only when the alert target is inside the range ring (full plane on
+    // grid). Beyond-ring edge blips are ignored; if it later enters range, we
+    // beep then (not marked seen while still off-screen).
+    if (!ui::radarDisplayIsInRange(list[i])) {
+      continue;
+    }
     const uint32_t h = hashCallsign(list[i].callsign);
     if (alreadySeen(h)) {
       continue;

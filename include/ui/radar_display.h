@@ -2,6 +2,8 @@
 
 #include <cstddef>
 
+#include "services/adsb_client.h"
+
 namespace ui {
 
 /** Draw the static sonar/radar grid (black disc, green overlay, labels). */
@@ -21,6 +23,9 @@ size_t radarDisplayInRangeAircraftCount();
 /** Count of in-range aircraft that would be drawn as full planes (respects
  *  alert-hide). Excludes beyond-ring edge blips. Used for idle-clock transitions. */
 size_t radarDisplayVisibleAircraftCount();
+
+/** True if aircraft is inside the outer range ring (drawn as a plane, not an edge blip). */
+bool radarDisplayIsInRange(const services::adsb::Aircraft& ac);
 
 /** Debug probes for [radar] resume diagnostics (kRadarResumeDebug). */
 bool radarDisplayDebugBgReady();

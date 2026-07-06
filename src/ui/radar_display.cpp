@@ -332,16 +332,20 @@ void sortBeyondDotsFarFirst(BeyondDotDrawItem* items, size_t count) {
   }
 }
 
+bool isAircraftInRange(const services::adsb::Aircraft& ac) {
+  float dx_km = 0.0f;
+  float dy_km = 0.0f;
+  float dist_km = 0.0f;
+  localOffsetFromCenter(ac.lat, ac.lon, &dx_km, &dy_km, &dist_km);
+  return isInsideOuterRingKm(dist_km);
+}
+
 size_t inRangeAircraftCount() {
   const size_t n = services::adsb::aircraftCount();
   const services::adsb::Aircraft* planes = services::adsb::aircraftList();
   size_t in_range = 0;
   for (size_t i = 0; i < n; ++i) {
-    float dx_km = 0.0f;
-    float dy_km = 0.0f;
-    float dist_km = 0.0f;
-    localOffsetFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
-    if (isInsideOuterRingKm(dist_km)) {
+    if (isAircraftInRange(planes[i])) {
       ++in_range;
     }
   }
@@ -360,11 +364,7 @@ size_t visibleAircraftCount() {
     if (hide_others && !services::alert::isHighlighted(planes[i])) {
       continue;
     }
-    float dx_km = 0.0f;
-    float dy_km = 0.0f;
-    float dist_km = 0.0f;
-    localOffsetFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
-    if (isInsideOuterRingKm(dist_km)) {
+    if (isAircraftInRange(planes[i])) {
       ++visible;
     }
   }
@@ -1460,6 +1460,8 @@ void radarDisplayRefreshAircraft() {
 size_t radarDisplayInRangeAircraftCount() { return inRangeAircraftCount(); }
 
 size_t radarDisplayVisibleAircraftCount() { return visibleAircraftCount(); }
+
+bool radarDisplayIsInRange(const services::adsb::Aircraft& ac) { return isAircraftInRange(ac); }
 
 void radarDisplayInvalidateAircraft() {
   s_aircraft_dirty = true;
