@@ -173,6 +173,28 @@ void localOffsetFromCenter(float lat, float lon, float* dx_km, float* dy_km,
                      lat, lon, dx_km, dy_km, dist_km);
 }
 
+/** Rotate east/north so geographic facingDeg() maps to screen-up. */
+void rotateEastNorthForFacing(float east_km, float north_km, float* out_east,
+                              float* out_north) {
+  const float f = static_cast<float>(radar::facingDeg()) * 3.14159265f / 180.0f;
+  const float c = cosf(f);
+  const float s = sinf(f);
+  *out_east = east_km * c - north_km * s;
+  *out_north = east_km * s + north_km * c;
+}
+
+/** Track/nose angle for drawing after facing rotation. */
+float displayTrackDeg(float track_deg) {
+  float t = track_deg - static_cast<float>(radar::facingDeg());
+  while (t < 0.0f) {
+    t += 360.0f;
+  }
+  while (t >= 360.0f) {
+    t -= 360.0f;
+  }
+  return t;
+}
+
 float innerRingMaxKm() {
   const float outer_km = radar::scaleActive().label_km;
   return outer_km * (static_cast<float>(radar::kGridOuterRadius -
@@ -188,6 +210,7 @@ void latLonToScreen(float lat, float lon, int* out_x, int* out_y) {
   float dy_km = 0.0f;
   float dist_km = 0.0f;
   localOffsetFromCenter(lat, lon, &dx_km, &dy_km, &dist_km);
+  rotateEastNorthForFacing(dx_km, dy_km, &dx_km, &dy_km);
 
   *out_x = radar::kCenterX + static_cast<int>(lroundf(dx_km * px_per_km));
   *out_y = radar::kCenterY - static_cast<int>(lroundf(dy_km * px_per_km));
@@ -209,6 +232,7 @@ bool beyondRingEdgeDotFromLatLon(float lat, float lon, int* out_x, int* out_y) {
   if (dist_km < 0.01f || isInsideOuterRingKm(dist_km)) {
     return false;
   }
+  rotateEastNorthForFacing(dx_km, dy_km, &dx_km, &dy_km);
 
   const int cx = radar::kCenterX;
   const int cy = radar::kCenterY;
@@ -419,7 +443,7 @@ void drawAircraft() {
   sortBeyondDotsFarFirst(dots, dot_count);
   for (size_t d = 0; d < dot_count; ++d) {
     const size_t i = dots[d].index;
-    drawBeyondRingMarker(dots[d].x, dots[d].y, planes[i].track_deg);
+    drawBeyondRingMarker(dots[d].x, dots[d].y, displayTrackDeg(planes[i].track_deg));
   }
 
   const bool pulse_on = services::alert::pulsePhase();
@@ -435,7 +459,8 @@ void drawAircraft() {
         color = radar::kColorGrid;
       }
     }
-    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, planes[i].track_deg, color);
+    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, displayTrackDeg(planes[i].track_deg),
+                          color);
   }
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
@@ -556,13 +581,18 @@ void drawRings(int cx, int cy, int outer_radius) {
 
 void drawGridSpokes(int cx, int cy, int radius, uint16_t color) {
   const float hw = radar::kGridStrokeHalfWidth;
-  drawDashedWideLine(cx, cy - radius, cx, cy + radius, hw, color);
-  drawDashedWideLine(cx - radius, cy, cx + radius, cy, hw, color);
-
-  constexpr float kInvSqrt2 = 0.70710678f;
-  const int d = static_cast<int>(lroundf(static_cast<float>(radius) * kInvSqrt2));
-  drawDashedWideLine(cx + d, cy - d, cx - d, cy + d, hw, color);
-  drawDashedWideLine(cx - d, cy - d, cx + d, cy + d, hw, color);
+  const float facing = static_cast<float>(radar::facingDeg());
+  auto spoke = [&](float angle_deg_from_up) {
+    const float rad = angle_deg_from_up * 3.14159265f / 180.0f;
+    const int dx = static_cast<int>(lroundf(sinf(rad) * static_cast<float>(radius)));
+    const int dy = static_cast<int>(lroundf(-cosf(rad) * static_cast<float>(radius)));
+    drawDashedWideLine(cx - dx, cy - dy, cx + dx, cy + dy, hw, color);
+  };
+  // Geographic N-S / E-W / diagonals, rotated so facing is at screen-up.
+  spoke(-facing);
+  spoke(-facing + 90.0f);
+  spoke(-facing + 45.0f);
+  spoke(-facing + 135.0f);
 }
 
 void drawIntercardinalLabel(const char* text, int cx, int cy, int radius,
@@ -574,30 +604,34 @@ void drawIntercardinalLabel(const char* text, int cx, int cy, int radius,
   drawCardinalLabel(text, x, y, TextDatum::MiddleCenter);
 }
 
+bool s_force_cardinals = false;
+
 void drawCardinalLabels() {
-  if (!radar::showCompassRose()) {
+  if (!s_force_cardinals && !radar::showCompassRose()) {
     return;
   }
   const int cx = radar::kCenterX;
   const int cy = radar::kCenterY;
-  const int edge = radar::kSize - 1;
   const int rim_r = radar::kGridOuterRadius;
+  const float facing = static_cast<float>(radar::facingDeg());
 
-  drawCardinalLabel("N", cx, radar::kCardinalNorthOffsetY, TextDatum::TopCenter);
-  drawCardinalLabel("S", cx, edge - radar::kCardinalSouthOffsetY, TextDatum::BottomCenter);
-  drawCardinalLabel("W", 0, cy, TextDatum::MiddleLeft);
-  drawCardinalLabel("E", edge, cy, TextDatum::MiddleRight);
-
-  drawIntercardinalLabel("NE", cx, cy, rim_r, 45.0f);
-  drawIntercardinalLabel("SE", cx, cy, rim_r, 135.0f);
-  drawIntercardinalLabel("SW", cx, cy, rim_r, 225.0f);
-  drawIntercardinalLabel("NW", cx, cy, rim_r, 315.0f);
+  // Geographic bearings → screen angle from up = bearing - facing.
+  drawIntercardinalLabel("N", cx, cy, rim_r, 0.0f - facing);
+  drawIntercardinalLabel("NE", cx, cy, rim_r, 45.0f - facing);
+  drawIntercardinalLabel("E", cx, cy, rim_r, 90.0f - facing);
+  drawIntercardinalLabel("SE", cx, cy, rim_r, 135.0f - facing);
+  drawIntercardinalLabel("S", cx, cy, rim_r, 180.0f - facing);
+  drawIntercardinalLabel("SW", cx, cy, rim_r, 225.0f - facing);
+  drawIntercardinalLabel("W", cx, cy, rim_r, 270.0f - facing);
+  drawIntercardinalLabel("NW", cx, cy, rim_r, 315.0f - facing);
 }
 
 /** Anchor scale text on the ring along kScaleLabelBearingDeg (between W and SW). */
 void scaleLabelAnchorOnRing(int cx, int cy, int ring_radius, int gap_px, int* x,
                             int* y) {
-  const float rad = radar::kScaleLabelBearingDeg * 3.14159265f / 180.0f;
+  const float bearing =
+      radar::kScaleLabelBearingDeg - static_cast<float>(radar::facingDeg());
+  const float rad = bearing * 3.14159265f / 180.0f;
   const float r = static_cast<float>(ring_radius - gap_px);
   *x = cx + static_cast<int>(lroundf(sinf(rad) * r));
   *y = cy - static_cast<int>(lroundf(cosf(rad) * r));
@@ -876,7 +910,7 @@ void drawAircraftInRect(const IntRect& dirty) {
   sortBeyondDotsFarFirst(dots, dot_count);
   for (size_t d = 0; d < dot_count; ++d) {
     const size_t i = dots[d].index;
-    drawBeyondRingMarker(dots[d].x, dots[d].y, planes[i].track_deg);
+    drawBeyondRingMarker(dots[d].x, dots[d].y, displayTrackDeg(planes[i].track_deg));
   }
 
   const bool pulse_on2 = services::alert::pulsePhase();
@@ -892,7 +926,8 @@ void drawAircraftInRect(const IntRect& dirty) {
         color = radar::kColorGrid;
       }
     }
-    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, planes[i].track_deg, color);
+    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, displayTrackDeg(planes[i].track_deg),
+                          color);
   }
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
@@ -1482,6 +1517,48 @@ void radarDisplayReleasePressureSprites() {
     s_content_base_valid = false;
     s_sweep_track_valid = false;
   }
+}
+
+void drawOrientationHints(PlaneGfx& gfx) {
+  char facing_buf[16];
+  radar::facingLabel(facing_buf, sizeof(facing_buf));
+  char line[40];
+  snprintf(line, sizeof(line), "Facing %s", facing_buf);
+
+  // Body size matches settings rows; draw into a sprite/offscreen buffer so
+  // CO5300 2x2 pixelAlign does not chunk the glyphs.
+  displayFontApply(gfx, displayFontBody());
+  gfx.setTextDatum(TextDatum::TopCenter);
+  gfx.setTextColor(radar::kColorLabel, radar::kColorBackground);
+  gfx.drawString(line, radar::kCenterX, 28);
+  gfx.drawString("Tap to save", radar::kCenterX, radar::kSize - 48);
+  gfx.setTextDatum(TextDatum::TopLeft);
+}
+
+void radarDisplayDrawOrientationPreview() {
+  initPalette();
+  initLabelMetrics();
+  s_force_cardinals = true;
+
+  // Rebuild offscreen and push once — avoids the live fillScreen blank between
+  // each 5° dial step that direct-to-panel redraw caused.
+  if (rebuildBackgroundSprite()) {
+    drawOrientationHints(s_bg.gfx());
+    s_bg.pushSprite(0, 0);
+  } else if (tft.beginOffscreen()) {
+    {
+      const DrawScope scope(tft);
+      drawStaticGrid(tft);
+      drawOrientationHints(tft);
+    }
+    tft.endOffscreen();
+  } else {
+    const DrawScope scope(tft);
+    drawStaticGrid(tft);
+    drawOrientationHints(tft);
+  }
+
+  s_force_cardinals = false;
 }
 
 bool radarDisplayDebugBgReady() { return s_bg_ready; }

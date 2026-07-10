@@ -306,6 +306,19 @@ void handleSettingsPage() {
 
   appendToggle(page, kSettingsPageCap, &used, "show_cardinals", "Show compass rose",
                ui::radar::showCompassRose());
+  {
+    const int facing_n = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<label for=\"facing_deg\">Facing direction (degrees at top of radar, 0=N)</label>"
+        "<input id=\"facing_deg\" name=\"facing_deg\" type=\"number\" min=\"0\" max=\"359\" "
+        "step=\"5\" value=\"%u\">"
+        "<p class=\"hint\">0=North, 90=East, 180=South, 270=West. Snaps to 5&deg; steps. "
+        "On the device: Settings &rarr; Display &rarr; Facing, then turn the dial.</p>",
+        static_cast<unsigned>(ui::radar::facingDeg()));
+    if (facing_n > 0) {
+      used += static_cast<size_t>(facing_n);
+    }
+  }
   appendToggle(page, kSettingsPageCap, &used, "show_sweep", "Show radar sweep line",
                ui::displayPrefsSweepLineEnabled());
 
@@ -712,6 +725,7 @@ void handleSave() {
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
+  ui::radar::saveFacingDegFromForm(s_server->arg("facing_deg").c_str());
   const bool auto_tz_before = services::clock::useAutoTimezone();
   services::clock::saveAutoTimezoneFromForm(s_server->arg("auto_timezone").c_str());
   ui::radar::accentSaveFromForm(s_server->arg("radar_accent").c_str());

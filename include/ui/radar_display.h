@@ -38,4 +38,7 @@ void radarDisplayInvalidateAircraft();
 /** Drop offscreen radar sprites to relieve heap pressure (rebuilt on next draw). */
 void radarDisplayReleasePressureSprites();
 
+/** Grid + rose preview for facing adjust (no aircraft/sweep). Always shows cardinals. */
+void radarDisplayDrawOrientationPreview();
+
 }  // namespace ui

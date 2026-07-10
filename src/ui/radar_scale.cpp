@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace ui::radar {
@@ -16,6 +17,7 @@ constexpr char kRangeMiKey[] = "range_mi";
 constexpr char kDistUnitKey[] = "dist_unit";
 constexpr char kDistMiKey[] = "dist_mi";
 constexpr char kRoseKey[] = "rose_en";
+constexpr char kFacingKey[] = "facing_deg";
 
 constexpr char kLegacyScaleKey[] = "rangeIdx";
 constexpr char kLegacyScaleSlotKey[] = "scale_slot";
@@ -24,11 +26,27 @@ constexpr char kLegacyRoseKey[] = "showCard";
 
 constexpr uint8_t kDefaultRangeMiles = 8;
 constexpr uint8_t kLegacyMilesFromIndex[] = {2, 6, 6, 8};
+constexpr uint16_t kFacingStepDeg = 5;
 
 uint8_t s_active_miles = kDefaultRangeMiles;
 ScaleBand s_active_band{};
 DistanceUnit s_distance_unit = DistanceUnit::Km;
 bool s_compass_rose = true;
+uint16_t s_facing_deg = 0;
+
+uint16_t normalizeFacingDeg(int deg) {
+  int d = deg % 360;
+  if (d < 0) {
+    d += 360;
+  }
+  // Snap to nearest 5° step.
+  d = ((d + static_cast<int>(kFacingStepDeg) / 2) / static_cast<int>(kFacingStepDeg)) *
+      static_cast<int>(kFacingStepDeg);
+  if (d >= 360) {
+    d = 0;
+  }
+  return static_cast<uint16_t>(d);
+}
 
 bool formCheckboxOn(const char* value) {
   if (value == nullptr || value[0] == '\0') {
@@ -151,6 +169,8 @@ void scaleBootLoad() {
   } else {
     s_compass_rose = prefs.getBool(kLegacyRoseKey, true);
   }
+
+  s_facing_deg = normalizeFacingDeg(static_cast<int>(prefs.getUShort(kFacingKey, 0)));
 
   prefs.end();
   recomputeActiveBand();
@@ -315,6 +335,70 @@ void saveCompassRoseFromForm(const char* checkbox_value) {
     prefs.end();
   }
   Serial.printf("Compass rose: %s\n", s_compass_rose ? "on" : "off");
+}
+
+uint16_t facingDeg() { return s_facing_deg; }
+
+void applyFacingDeg(uint16_t deg) { s_facing_deg = normalizeFacingDeg(static_cast<int>(deg)); }
+
+void facingStep(int8_t delta) {
+  if (delta == 0) {
+    return;
+  }
+  // Negate so dial CW decreases facing (radar rose turns with the dial).
+  // Keep the sum signed through normalize — casting a negative angle to
+  // uint16_t wraps (e.g. -5 → 65531 → snaps to 10°) and stalls CW at 0–10°.
+  const int step = -static_cast<int>(delta) * static_cast<int>(kFacingStepDeg);
+  s_facing_deg = normalizeFacingDeg(static_cast<int>(s_facing_deg) + step);
+}
+
+void persistFacingDeg() {
+  Preferences prefs;
+  if (prefs.begin(kStoreNs, false)) {
+    prefs.putUShort(kFacingKey, s_facing_deg);
+    prefs.end();
+  }
+  Serial.printf("Radar facing: %u deg\n", static_cast<unsigned>(s_facing_deg));
+}
+
+void setFacingDeg(uint16_t deg) {
+  applyFacingDeg(deg);
+  persistFacingDeg();
+}
+
+void saveFacingDegFromForm(const char* degrees_str) {
+  if (degrees_str == nullptr || degrees_str[0] == '\0') {
+    return;
+  }
+  char* end = nullptr;
+  const long v = strtol(degrees_str, &end, 10);
+  if (end == degrees_str) {
+    return;
+  }
+  setFacingDeg(static_cast<uint16_t>(v));
+}
+
+void facingLabel(char* out, size_t out_len) {
+  if (out == nullptr || out_len == 0) {
+    return;
+  }
+  switch (s_facing_deg) {
+    case 0:
+      snprintf(out, out_len, "N");
+      break;
+    case 90:
+      snprintf(out, out_len, "E");
+      break;
+    case 180:
+      snprintf(out, out_len, "S");
+      break;
+    case 270:
+      snprintf(out, out_len, "W");
+      break;
+    default:
+      snprintf(out, out_len, "%u°", static_cast<unsigned>(s_facing_deg));
+      break;
+  }
 }
 
 void formatScaleTag(char* buf, size_t len, float label_km, DistanceUnit unit) {

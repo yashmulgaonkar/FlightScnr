@@ -51,6 +51,20 @@ bool showCompassRose();
 void toggleCompassRose();
 void saveCompassRoseFromForm(const char* checkbox_value);
 
+/** Geographic direction at the top of the radar (0=N, 90=E, 180=S, 270=W). */
+uint16_t facingDeg();
+/** Update RAM facing (snapped to 5°); does not write NVS. */
+void applyFacingDeg(uint16_t deg);
+/** Step facing by ±5° in RAM (wraps 0–355). */
+void facingStep(int8_t delta);
+/** Persist current facingDeg() to NVS. */
+void persistFacingDeg();
+/** Apply + persist (web / direct set). */
+void setFacingDeg(uint16_t deg);
+void saveFacingDegFromForm(const char* degrees_str);
+/** Label for settings UI: "N"/"E"/"S"/"W" or "180°". */
+void facingLabel(char* out, size_t out_len);
+
 void formatScaleTag(char* buf, size_t len, float label_km, DistanceUnit unit);
 void formatActiveScaleTag(char* buf, size_t len);
 void formatAltitudeDisplay(const char* alt_ft_tag, char* out, size_t out_len);

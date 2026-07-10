@@ -53,6 +53,7 @@ enum class AppScreen : uint8_t {
   Clock,
   ClockSettings,
   Weather,
+  Orientation,
 };
 
 AppScreen g_screen = AppScreen::Radar;
@@ -78,6 +79,7 @@ unsigned long g_loop_max_ms = 0;
 bool g_radar_full_draw_pending = false;
 unsigned long g_radar_full_draw_pending_since_ms = 0;
 bool g_flight_detail_draw_pending = false;
+uint16_t g_facing_saved_deg = 0;
 
 bool g_off_hours_active = false;
 unsigned long g_off_hours_last_check_ms = 0;
@@ -127,6 +129,8 @@ const char* screenName(AppScreen screen) {
       return "clock_set";
     case AppScreen::Weather:
       return "weather";
+    case AppScreen::Orientation:
+      return "orient";
     default:
       return "?";
   }
@@ -647,6 +651,9 @@ void applySettingsLive() {
     case AppScreen::Weather:
       showWeather();
       break;
+    case AppScreen::Orientation:
+      ui::radarDisplayDrawOrientationPreview();
+      break;
   }
   Serial.println("[settings] applied live");
 }
@@ -721,6 +728,44 @@ void openSettingsFromRadar() {
   showSettings();
   Serial.println("Screen: settings (1/3)");
   logNavContext("settings_p1");
+}
+
+void showOrientationPreview() {
+  g_radar_visible = false;
+  ui::radarDisplayDrawOrientationPreview();
+}
+
+void openOrientationAdjust(int8_t first_delta) {
+  g_facing_saved_deg = ui::radar::facingDeg();
+  if (first_delta != 0) {
+    ui::radar::facingStep(first_delta);
+  }
+  g_screen = AppScreen::Orientation;
+  noteSecondaryActivity();
+  showOrientationPreview();
+  Serial.printf("Screen: orientation (facing %u)\n",
+                static_cast<unsigned>(ui::radar::facingDeg()));
+  logNavContext("orient");
+}
+
+void saveOrientationAdjust() {
+  ui::radar::persistFacingDeg();
+  ui::infoScreenSetPage(ui::InfoSettingsPage::Display);
+  g_screen = AppScreen::Settings;
+  noteSecondaryActivity();
+  showSettings();
+  Serial.println("Screen: settings (2/3) facing saved");
+  logNavContext("orient_save");
+}
+
+void cancelOrientationAdjust() {
+  ui::radar::applyFacingDeg(g_facing_saved_deg);
+  ui::infoScreenSetPage(ui::InfoSettingsPage::Display);
+  g_screen = AppScreen::Settings;
+  noteSecondaryActivity();
+  showSettings();
+  Serial.println("Screen: settings (2/3) facing cancelled");
+  logNavContext("orient_cancel");
 }
 
 void openClockFromRadar() {
@@ -919,6 +964,9 @@ void handleNavigation() {
   } else if (swipe == SwipeRight && g_screen == AppScreen::FlightDetail) {
     returnToRadar(false, true);
     navigated = true;
+  } else if (swipe == SwipeRight && g_screen == AppScreen::Orientation) {
+    cancelOrientationAdjust();
+    navigated = true;
   } else if (swipe == SwipeRight && g_screen == AppScreen::Settings &&
              ui::infoScreenPage() == ui::InfoSettingsPage::Colors) {
     ui::infoScreenSetPage(ui::InfoSettingsPage::Display);
@@ -985,6 +1033,10 @@ void tickSecondaryScreenTimeout() {
         openClockFromIdleRadar();
       }
     }
+    return;
+  }
+  if (g_screen == AppScreen::Orientation) {
+    // Stay on adjust screen until tap-save or swipe-cancel.
     return;
   }
   if (g_screen == AppScreen::FlightDetail) {
@@ -1055,7 +1107,8 @@ void tickAutoIdleClock() {
     return;
   }
   if (g_screen == AppScreen::FlightDetail || g_screen == AppScreen::Settings ||
-      g_screen == AppScreen::Details || g_screen == AppScreen::ClockSettings) {
+      g_screen == AppScreen::Details || g_screen == AppScreen::ClockSettings ||
+      g_screen == AppScreen::Orientation) {
     return;
   }
 
@@ -1213,7 +1266,35 @@ void handleInput() {
     const int8_t enc = inputConsumeEncoderDelta();
     if (enc != 0) {
       noteSecondaryActivity();
+      if (ui::infoScreenFacingFocused()) {
+        openOrientationAdjust(enc);
+        hardware::buzzerClick();
+        return;
+      }
       ui::infoScreenHandleKnob(enc);
+      hardware::buzzerClick();
+    }
+    return;
+  }
+
+  if (g_screen == AppScreen::Orientation) {
+    if (inputConsumeScreenTap(nullptr, nullptr)) {
+      noteSecondaryActivity();
+      hardware::buzzerClick();
+      saveOrientationAdjust();
+      return;
+    }
+    if (inputConsumeKnobTap()) {
+      noteSecondaryActivity();
+      hardware::buzzerClick();
+      saveOrientationAdjust();
+      return;
+    }
+    const int8_t enc = inputConsumeEncoderDelta();
+    if (enc != 0) {
+      noteSecondaryActivity();
+      ui::radar::facingStep(enc);
+      showOrientationPreview();
       hardware::buzzerClick();
     }
     return;
