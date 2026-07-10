@@ -9,6 +9,7 @@ on:
     paths:
       - "docs/**"
       - ".github/workflows/pages.yml"
+      - ".github/scripts/bundle-webflasher-firmware.sh"
   workflow_dispatch:
 
 permissions:
@@ -34,31 +35,11 @@ jobs:
         env:
           MERGED_ASSET: FlightScnr-tencoder-pro-merged.bin
           APP_ASSET: FlightScnr-tencoder-pro-app.bin
+          ARCHIVE_COUNT: "12"
         run: |
           set -euo pipefail
-          mkdir -p docs/firmware
-          for asset in "${MERGED_ASSET}" "${APP_ASSET}"; do
-            URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${asset}"
-            curl -fsSL -L -o "docs/firmware/${asset}" "${URL}"
-          done
-          MERGED_SIZE="$(stat -c%s "docs/firmware/${MERGED_ASSET}")"
-          APP_SIZE="$(stat -c%s "docs/firmware/${APP_ASSET}")"
-          RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest")"
-          RELEASE_NAME="$(echo "${RELEASE_JSON}" | jq -r .name)"
-          RELEASE_TAG="$(echo "${RELEASE_JSON}" | jq -r .tag_name)"
-          jq -n \
-            --arg name "${RELEASE_NAME}" \
-            --arg version "${RELEASE_TAG}" \
-            --arg merged "${MERGED_ASSET}" \
-            --arg app "${APP_ASSET}" \
-            --argjson merged_size "${MERGED_SIZE}" \
-            --argjson app_size "${APP_SIZE}" \
-            '{name: $name, version: $version, size: $merged_size, builds: [{chipFamily: "ESP32-S3", parts: [
-              {path: $merged, offset: 0, role: "full", size: $merged_size},
-              {path: $app, offset: 65536, role: "app", size: $app_size}
-            ]}]}' \
-            > docs/firmware/manifest.json
-          echo "Bundled ${RELEASE_NAME} (merged ${MERGED_SIZE} bytes, app ${APP_SIZE} bytes)"
+          chmod +x .github/scripts/bundle-webflasher-firmware.sh
+          .github/scripts/bundle-webflasher-firmware.sh
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

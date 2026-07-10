@@ -6,8 +6,7 @@ const FULL_FLASH_OFFSET = 0;
 const APP_FLASH_OFFSET = 0x10000;
 const FIRMWARE_BASE = "./firmware";
 const MANIFEST_URL = `${FIRMWARE_BASE}/manifest.json`;
-const RELEASES_API_URL =
-  "https://api.github.com/repos/yashmulgaonkar/FlightScnr/releases?per_page=20";
+const ARCHIVE_INDEX_URL = `${FIRMWARE_BASE}/archive-index.json`;
 const BUNDLED_RELEASE_ID = "__bundled_latest__";
 
 const els = {
@@ -210,7 +209,6 @@ function buildBundledRelease(manifest) {
       offset: fullPart.offset ?? FULL_FLASH_OFFSET,
       size: fullPart.size ?? manifest.size ?? null,
       label: fullPart.path,
-      headers: null,
     },
     appPart: appPart?.path
       ? {
@@ -218,65 +216,41 @@ function buildBundledRelease(manifest) {
           offset: appPart.offset ?? APP_FLASH_OFFSET,
           size: appPart.size ?? null,
           label: appPart.path,
-          headers: null,
         }
       : null,
   };
 }
 
-function buildGitHubRelease(release) {
-  const assets = Array.isArray(release.assets) ? release.assets : [];
-  const fullAsset =
-    assets.find((asset) => asset.name === MERGED_ASSET) ??
-    assets.find((asset) => /merged/i.test(asset.name ?? ""));
-  if (!fullAsset) {
+/** Historical builds must be same-origin; GitHub release CDN blocks browser CORS. */
+function buildArchivedRelease(entry) {
+  if (!entry?.version || !entry?.merged) {
     return null;
   }
-  const appAsset =
-    assets.find((asset) => asset.name === APP_ASSET) ??
-    assets.find((asset) => /app/i.test(asset.name ?? ""));
   return {
-    id: `release:${release.tag_name}`,
-    source: "github",
-    name: release.name || release.tag_name,
-    version: release.tag_name,
-    publishedAt: release.published_at || release.created_at || null,
+    id: `archive:${entry.version}`,
+    source: "archive",
+    name: entry.version,
+    version: entry.version,
+    publishedAt: entry.published_at || null,
     allowAppOnly: false,
     fullPart: {
-      url: fullAsset.url,
+      url: `${FIRMWARE_BASE}/${entry.merged}`,
       offset: FULL_FLASH_OFFSET,
-      size: fullAsset.size ?? null,
-      label: fullAsset.name,
-      headers: { Accept: "application/octet-stream" },
+      size: entry.merged_size ?? null,
+      label: MERGED_ASSET,
     },
-    appPart: appAsset
-      ? {
-          url: appAsset.url,
-          offset: APP_FLASH_OFFSET,
-          size: appAsset.size ?? null,
-          label: appAsset.name,
-          headers: { Accept: "application/octet-stream" },
-        }
-      : null,
+    appPart: null,
   };
 }
 
-async function loadGitHubReleases() {
-  const resp = await fetch(RELEASES_API_URL, {
-    cache: "no-store",
-    headers: { Accept: "application/vnd.github+json" },
-  });
+async function loadArchiveIndex() {
+  const resp = await fetch(ARCHIVE_INDEX_URL, { cache: "no-store" });
   if (!resp.ok) {
-    throw new Error(`Release list unavailable (HTTP ${resp.status})`);
+    throw new Error(`Archive index unavailable (HTTP ${resp.status})`);
   }
-  const releases = await resp.json();
-  if (!Array.isArray(releases)) {
-    throw new Error("Release list response was not an array");
-  }
-  return releases
-    .filter((release) => !release.draft && !release.prerelease)
-    .map(buildGitHubRelease)
-    .filter(Boolean);
+  const index = await resp.json();
+  const releases = Array.isArray(index?.releases) ? index.releases : [];
+  return releases.map(buildArchivedRelease).filter(Boolean);
 }
 
 function populateReleaseSelect() {
@@ -306,7 +280,7 @@ function populateReleaseSelect() {
 
 async function loadReleaseOptions() {
   let bundled = null;
-  let ghReleases = [];
+  let archived = [];
 
   try {
     const manifest = await loadFirmwareManifest();
@@ -316,44 +290,23 @@ async function loadReleaseOptions() {
   }
 
   try {
-    ghReleases = await loadGitHubReleases();
+    archived = await loadArchiveIndex();
     releaseLoadWarning = "";
   } catch (err) {
     releaseLoadWarning =
-      "Older GitHub releases are unavailable right now.";
-    console.warn("GitHub releases unavailable:", err);
+      "Older releases are unavailable until the WebFlasher site is redeployed.";
+    console.warn("Firmware archive index unavailable:", err);
   }
 
   const choices = [];
-  const newestGh = ghReleases[0] ?? null;
-
-  if (bundled && newestGh && newestGh.version !== bundled.version) {
-    newestGh.source = "latest";
-    newestGh.allowAppOnly = true;
-    choices.push(newestGh);
-    if (bundled.version) {
-      choices.push(bundled);
-    }
-    for (const release of ghReleases.slice(1)) {
-      if (release.version === bundled.version) {
-        continue;
-      }
-      choices.push(release);
-    }
-  } else if (bundled) {
+  if (bundled) {
     choices.push(bundled);
-    for (const release of ghReleases) {
-      if (release.version === bundled.version) {
-        continue;
-      }
-      choices.push(release);
+  }
+  for (const release of archived) {
+    if (bundled && release.version === bundled.version) {
+      continue;
     }
-  } else {
-    if (newestGh) {
-      newestGh.source = "latest";
-      newestGh.allowAppOnly = true;
-    }
-    choices.push(...ghReleases);
+    choices.push(release);
   }
 
   if (choices.length === 0) {
@@ -384,10 +337,7 @@ async function fetchFirmwareForInstall(mode) {
   log(
     `Downloading ${releaseLabel} (${mode === "app" ? "app-only" : "full install"})…`,
   );
-  const resp = await fetch(part.url, {
-    cache: "no-store",
-    headers: part.headers ?? undefined,
-  });
+  const resp = await fetch(part.url, { cache: "no-store" });
   if (!resp.ok) {
     throw new Error(`Download failed (HTTP ${resp.status})`);
   }
