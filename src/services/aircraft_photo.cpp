@@ -34,6 +34,8 @@ constexpr unsigned long kMetaNegativeTtlMs = 10UL * 60UL * 1000UL;
 constexpr unsigned long kFetchRetryCooldownMs = 15000UL;
 /** Heap/TLS busy — retry soon; do not apply the hard 15s cooldown. */
 constexpr unsigned long kFetchSoftRetryMs = 600UL;
+/** Heap still tight after a drain — back off longer to avoid log/CPU spam. */
+constexpr unsigned long kFetchHeapRetryMs = 1800UL;
 
 struct MetaEntry {
   char hex[7] = {};
@@ -86,12 +88,9 @@ struct JpegDrawCtx {
   int h;
 };
 
-void* psramAlloc(size_t bytes) {
-  void* p = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (p == nullptr) {
-    p = heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
-  }
-  return p;
+/** Large photo/JPEG buffers must stay in PSRAM — never carve internal heap. */
+void* psramAllocOnly(size_t bytes) {
+  return heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
 void psramFree(void* p) {
@@ -106,6 +105,7 @@ void clearDecoded() {
     s_decoded.pixels = nullptr;
   }
   s_decoded = {};
+  // Do not touch s_jpeg_ctx — an in-flight decode owns that buffer and frees it.
 }
 
 bool selectionMatches(const char* callsign, uint32_t generation) {
@@ -197,10 +197,8 @@ struct PsramPayload {
     if (next > kMaxJpegBytes + 4096) {
       next = want;
     }
+    // JPEG payloads are large — PSRAM only so TLS/UI keep internal DRAM.
     void* p = heap_caps_realloc(data, next, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (p == nullptr) {
-      p = heap_caps_realloc(data, next, MALLOC_CAP_8BIT);
-    }
     if (p == nullptr) {
       return false;
     }
@@ -331,8 +329,9 @@ bool decodeJpegToFrame(uint8_t* jpeg, size_t jpeg_len, const char* callsign,
   Serial.printf("[photo] jpeg decode %dx%d\n", w, h);
 
   const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
-  s_jpeg_ctx.pixels = static_cast<uint16_t*>(psramAlloc(pixels * sizeof(uint16_t)));
+  s_jpeg_ctx.pixels = static_cast<uint16_t*>(psramAllocOnly(pixels * sizeof(uint16_t)));
   if (s_jpeg_ctx.pixels == nullptr) {
+    Serial.println("[photo] frame alloc failed (PSRAM)");
     s_jpeg.close();
     return false;
   }
@@ -513,7 +512,7 @@ bool fetchJpeg(const char* url, PsramPayload* out) {
   return ok && selectionMatches(s_job_callsign, s_job_generation);
 }
 
-enum class JobEnd : uint8_t { Ok, SoftFail, HardFail };
+enum class JobEnd : uint8_t { Ok, SoftFail, HardFail, HeapFail };
 
 void finishJob(JobEnd end) {
   s_job_running = false;
@@ -522,15 +521,20 @@ void finishJob(JobEnd end) {
   // Only back off while this selection is still current. Scrollaway must not
   // punish the next aircraft with a 15s photo cooldown.
   if (end != JobEnd::Ok && still) {
-    s_retry_after_ms =
-        millis() + (end == JobEnd::SoftFail ? kFetchSoftRetryMs : kFetchRetryCooldownMs);
+    unsigned long delay_ms = kFetchSoftRetryMs;
+    if (end == JobEnd::HardFail) {
+      delay_ms = kFetchRetryCooldownMs;
+    } else if (end == JobEnd::HeapFail) {
+      delay_ms = kFetchHeapRetryMs;
+    }
+    s_retry_after_ms = millis() + delay_ms;
   }
   if (!still) {
     clearDecoded();
     s_ready = false;
     return;
   }
-  if (end == JobEnd::SoftFail) {
+  if (end == JobEnd::SoftFail || end == JobEnd::HeapFail) {
     // Stay pending so tickDebounce requeues after the short cooldown.
     s_ready = false;
     return;
@@ -549,17 +553,22 @@ void photoJob() {
     return;
   }
 
-  if (!services::https::heapReadyForRouteApi()) {
+  if (!services::https::heapReadyForPhoto()) {
     // Route enrich often holds TLS right when detail opens — wait briefly.
     services::https::drainTlsHeapAfterSession(700);
     if (!selectionMatches(s_job_callsign, s_job_generation)) {
       finishJob(JobEnd::SoftFail);
       return;
     }
-    if (!services::https::heapReadyForRouteApi()) {
-      Serial.printf("[photo] defer: heap low free=%u max_blk=%u\n", ESP.getFreeHeap(),
-                    ESP.getMaxAllocHeap());
-      finishJob(JobEnd::SoftFail);
+    if (!services::https::heapReadyForPhoto()) {
+      static unsigned long s_last_heap_log_ms = 0;
+      const unsigned long now = millis();
+      if (static_cast<long>(now - s_last_heap_log_ms) >= 2000) {
+        s_last_heap_log_ms = now;
+        Serial.printf("[photo] defer: heap low free=%u max_blk=%u\n", ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+      }
+      finishJob(JobEnd::HeapFail);
       return;
     }
   }
@@ -801,6 +810,11 @@ bool draw(PlaneGfx& gfx, const char* callsign, int16_t center_x, int16_t y) {
   return true;
 }
 
-void releaseBuffers() { clearDecoded(); }
+void releaseBuffers() {
+  clearDecoded();
+  s_ready = false;
+  s_ready_ok = false;
+  s_ready_callsign[0] = '\0';
+}
 
 }  // namespace services::photo

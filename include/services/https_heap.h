@@ -19,6 +19,12 @@ inline bool heapReadyForRouteApi() {
          ESP.getMaxAllocHeap() >= config::kMinContiguousHeapForRouteTls;
 }
 
+/** Planespotters photo fetch (meta + JPEG). Slightly looser than route APIs. */
+inline bool heapReadyForPhoto() {
+  return ESP.getFreeHeap() >= config::kMinFreeHeapForPhotoHttps &&
+         ESP.getMaxAllocHeap() >= config::kMinContiguousHeapForPhotoTls;
+}
+
 /** Let the prior TLS session release buffers before opening another connection. */
 inline void drainTlsHeapAfterSession(uint32_t timeout_ms = 800) {
   vTaskDelay(pdMS_TO_TICKS(150));

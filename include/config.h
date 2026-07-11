@@ -176,6 +176,10 @@ constexpr uint32_t kMinContiguousHeapForAdsbTls = 10000;
 constexpr uint32_t kMinFreeHeapForRouteHttps = 24000;
 /** Route API TLS + JSON — PSRAM-backed like ADS-B. */
 constexpr uint32_t kMinContiguousHeapForRouteTls = 10000;
+/** Planespotters photo TLS — JPEG body lives in PSRAM; match ADS-B bar so photos
+ *  are not stuck forever just under the stricter route 24KB free gate. */
+constexpr uint32_t kMinFreeHeapForPhotoHttps = 22000;
+constexpr uint32_t kMinContiguousHeapForPhotoTls = 10000;
 /** Target max_blk before opening another TLS session (after prior session ends). */
 constexpr uint32_t kMinContiguousHeapForTlsReconnect = 20000;
 

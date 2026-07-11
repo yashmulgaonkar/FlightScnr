@@ -87,7 +87,9 @@ void releaseDetailSprite() {
     s_detail_sprite_ready = false;
   }
   services::airline::releaseLogoBuffer();
-  // Keep Planespotters frame across detail-sprite TLS releases; cancel() frees it.
+  // Drop Planespotters RGB565 frame with the sprite so TLS/heap reclaim is real;
+  // meta cache remains and tickDebounce will re-fetch if still on this aircraft.
+  services::photo::releaseBuffers();
   s_last_draw_callsign[0] = '\0';
   s_last_draw_ms = 0;
   s_last_draw_had_fetching = false;
