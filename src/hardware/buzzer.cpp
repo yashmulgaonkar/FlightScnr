@@ -205,6 +205,9 @@ void buzzerPoll() {
 }
 
 void buzzerAlert() {
+  if (!s_enabled) {
+    return;
+  }
   s_alert_beeps_remaining = kAlertBeepCount;
   s_alert_next_ms = 0;
 }

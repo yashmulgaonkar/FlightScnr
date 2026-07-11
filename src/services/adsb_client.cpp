@@ -496,13 +496,20 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   char flight_id[sizeof(ac->callsign)];
   flight_id[0] = '\0';
   copyJsonStringTrimmed(plane, "flight", flight_id, sizeof(flight_id));
+  copyJsonStringTrimmed(plane, "hex", ac->hex, sizeof(ac->hex));
+  for (size_t i = 0; ac->hex[i] != '\0'; ++i) {
+    ac->hex[i] = static_cast<char>(toupper(static_cast<unsigned char>(ac->hex[i])));
+  }
 
   const bool has_flight = flight_id[0] != '\0';
   if (has_flight) {
     strncpy(ac->callsign, flight_id, sizeof(ac->callsign) - 1);
     ac->callsign[sizeof(ac->callsign) - 1] = '\0';
+  } else if (ac->hex[0] != '\0') {
+    strncpy(ac->callsign, ac->hex, sizeof(ac->callsign) - 1);
+    ac->callsign[sizeof(ac->callsign) - 1] = '\0';
   } else {
-    copyJsonStringTrimmed(plane, "hex", ac->callsign, sizeof(ac->callsign));
+    ac->callsign[0] = '\0';
   }
 
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));

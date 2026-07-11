@@ -68,6 +68,9 @@ color:var(--text);line-height:1.45;padding-bottom:5.5rem;}
 background:radial-gradient(circle at 50% 50%,#0c2,#063 70%,#021 100%);}
 h1{font-size:1.3rem;margin:0;}
 .subtitle{color:var(--muted);font-size:.85rem;margin:.15rem 0 1.1rem;}
+.banner{background:#143d22;border:1px solid #1a9c3c;color:#d8ffe4;border-radius:10px;
+padding:.7rem .85rem;margin:0 0 1rem;font-size:.9rem;}
+.banner b{color:#fff;}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;margin:0 0 .9rem;overflow:hidden;}
 .card>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:.6rem;
 padding:.85rem 1rem;font-weight:600;font-size:.98rem;user-select:none;}
@@ -165,25 +168,15 @@ void appendInlineToggle(char* page, size_t len, size_t* used, const char* id, bo
   }
 }
 
-void sendSavedPage() {
-  char page[896];
-  snprintf(page, sizeof(page),
-           "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-           "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-           "<title>Saved</title></head>"
-           "<body style=\"font-family:system-ui,sans-serif;text-align:center;padding:2rem;"
-           "background:#000;color:#ececec\">"
-           "<h1>Saved</h1><p>Settings applied.</p>"
-           "<a href=\"/\" style=\"display:inline-block;margin-top:1rem;padding:.75rem 2.5rem;"
-           "font-size:1rem;font-weight:700;text-decoration:none;border:none;border-radius:11px;"
-           "background:#1a9c3c;color:#fff;box-shadow:0 6px 20px rgba(26,156,60,.35)\">"
-           "Back to settings</a>"
-           "<p style=\"margin-top:1.5rem;font-size:.9rem\">"
-           "<a href=\"%s\" style=\"color:#cfcfcf\" target=\"_blank\" rel=\"noopener\">"
-           "github.com/yashmulgaonkar/FlightScnr</a></p>"
-           "</body></html>",
-           config::kGithubRepoUrl);
-  s_server->send(200, "text/html; charset=utf-8", page);
+void redirectToSettings(const char* query) {
+  char loc[32];
+  if (query != nullptr && query[0] != '\0') {
+    snprintf(loc, sizeof(loc), "/?%s", query);
+  } else {
+    snprintf(loc, sizeof(loc), "/");
+  }
+  s_server->sendHeader("Location", loc, true);
+  s_server->send(303, "text/plain", "");
 }
 
 void sendLocationErrorPage() {
@@ -244,6 +237,12 @@ void handleSettingsPage() {
   const int head_n = snprintf(page, kSettingsPageCap, "%s", kPageHead);
   if (head_n > 0) {
     used = static_cast<size_t>(head_n);
+  }
+
+  if (s_server->hasArg("saved")) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<div class=\"banner\"><b>Saved.</b> Settings applied — radar will refresh."
+              "</div>");
   }
 
   // ---------- Radar card ----------
@@ -764,7 +763,7 @@ void handleSave() {
     }
   }
 
-  sendSavedPage();
+  redirectToSettings("saved=1");
   s_server->client().flush();
   settingsNotifySaved();
 }

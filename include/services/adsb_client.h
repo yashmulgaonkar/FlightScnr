@@ -32,6 +32,8 @@ struct Aircraft {
   float track_deg;
   float gs_knots;
   char callsign[9];
+  /** Mode S / ICAO 24-bit address (6 hex chars), always from ADS-B when present. */
+  char hex[7];
   /** Airline + route ICAO codes (from adsb.fi feed and/or route API waterfall). */
   char airline[28];
   char airline_icao[4];  /** 3-letter ICAO operator code for logo lookup. */

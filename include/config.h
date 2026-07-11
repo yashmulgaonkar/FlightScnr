@@ -181,6 +181,14 @@ constexpr uint32_t kMinContiguousHeapForTlsReconnect = 20000;
 
 /** Route detail API connect/read timeout (ms). Keep short for fast scroll cancel. */
 constexpr uint32_t kDetailApiTimeoutMs = 4000;
+/** Planespotters photo API + JPEG download timeout (ms). */
+constexpr uint32_t kAircraftPhotoTimeoutMs = 5000;
+/** Debounce before starting a photo fetch after encoder settle (ms). */
+constexpr unsigned long kAircraftPhotoDebounceMs = 450UL;
+/** Descriptive User-Agent required by Planespotters Photo API. */
+constexpr char kPlanespottersUserAgent[] =
+    "FlightScnr/" FLIGHTSCNR_FIRMWARE_VERSION
+    " (+https://github.com/yashmulgaonkar/FlightScnr)";
 /** Restart route worker if stuck on a stale callsign (ms). */
 constexpr unsigned long kDetailWorkerStallMs = 12000UL;
 /** Faster recovery when the worker is enriching a callsign you scrolled past. */

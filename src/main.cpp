@@ -24,6 +24,7 @@
 #include "services/tz_lookup.h"
 #include "services/map_center.h"
 #include "services/route_lookup.h"
+#include "services/aircraft_photo.h"
 #include "services/settings_web.h"
 #include "services/weather.h"
 #include "services/weather_icon.h"
@@ -356,6 +357,7 @@ void releaseHttpsPressureMemory() {
   ui::flightDetailReleaseSprite();
   services::route::cancelDetailEnrichment();
   services::route::tickDetailSpriteRelease();
+  services::photo::cancel();
 }
 
 /** Drop radar PSRAM sprites and drain TLS when max_blk is still tight after detail. */
@@ -523,13 +525,15 @@ void showFlightDetail() {
 
 void requestFlightDetailRouteEnrich(const bool immediate) {
   const char* callsign = ui::flightDetailSelectedCallsign();
+  const char* hex = ui::flightDetailSelectedHex();
   if (config::kSerialTraceDebug) {
-    Serial.printf("[detail] enrich request %s immediate=%d\n",
+    Serial.printf("[detail] enrich request %s hex=%s immediate=%d\n",
                   callsign != nullptr ? callsign : "(none)",
-                  immediate ? 1 : 0);
+                  hex != nullptr ? hex : "(none)", immediate ? 1 : 0);
   }
   if (callsign != nullptr) {
     services::route::onFlightDetailSelected(callsign, immediate);
+    services::photo::onFlightDetailSelected(callsign, hex, immediate);
   }
 }
 
@@ -543,12 +547,27 @@ void tickFlightDetailRouteEnrich() {
   services::route::tickDetailSpriteRelease();
   services::route::tickDetailEnrichDebounce(now);
   services::route::tickDetailWorkerWatchdog(now);
+  services::photo::tickDebounce(now);
 
   const char* ui_callsign = ui::flightDetailSelectedCallsign();
   const char* route_callsign = services::route::detailSelectionCallsign();
   if (ui_callsign != nullptr && route_callsign != nullptr &&
       strcmp(ui_callsign, route_callsign) != 0) {
     services::route::onFlightDetailSelected(ui_callsign, false);
+    services::photo::onFlightDetailSelected(ui_callsign, ui::flightDetailSelectedHex(),
+                                            false);
+  }
+
+  if (services::photo::ready()) {
+    bool needs_redraw = true;
+    if (services::photo::consume(&needs_redraw) && needs_redraw) {
+      if (config::kSerialTraceDebug) {
+        const char* cs = ui::flightDetailSelectedCallsign();
+        Serial.printf("[detail] photo ready -> redraw %s\n",
+                      cs != nullptr ? cs : "(none)");
+      }
+      showFlightDetail();
+    }
   }
 
   if (services::route::detailEnrichmentReady()) {
@@ -620,6 +639,7 @@ void showDetails(bool boot_splash = false) {
 
 void applySettingsLive() {
   services::route::cancelDetailEnrichment();
+  services::photo::cancel();
   ui::flightDetailReleaseSprite();
   hardware::displayApplyBrightness();
   g_last_adsb_fetch_ms = 0;
@@ -693,6 +713,7 @@ void returnToRadar(bool from_idle_timeout = false, bool manual_navigation = fals
     reclaimHeapAfterFlightDetail();
   } else {
     services::route::cancelDetailEnrichment();
+    services::photo::cancel();
   }
   if (from_idle_timeout) {
     ui::infoScreenResetToMain();

@@ -29,6 +29,9 @@ bool flightDetailCycle(int delta);
 /** Callsign of the aircraft currently selected on this screen (nullptr if none). */
 const char* flightDetailSelectedCallsign();
 
+/** Mode-S hex of the selected aircraft (nullptr if unknown). */
+const char* flightDetailSelectedHex();
+
 /** Free the off-screen canvas (~300KB PSRAM) when leaving flight detail. */
 void flightDetailReleaseSprite();
 
