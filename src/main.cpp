@@ -360,6 +360,11 @@ void releaseHttpsPressureMemory() {
   services::photo::cancel();
 }
 
+/** After leaving flight detail: drop route worker stack (16KB internal) so max_blk recovers. */
+void releaseDetailWorkerForHeap() {
+  services::route::shutdownDetailWorker();
+}
+
 /** Drop radar PSRAM sprites and drain TLS when max_blk is still tight after detail. */
 void recoverRadarHeapPressure(const char* reason, uint32_t drain_ms = 1200) {
   const uint32_t blk_now = ESP.getMaxAllocHeap();
@@ -413,6 +418,7 @@ void reclaimHeapAfterFlightDetail() {
   const uint32_t blk_before = ESP.getMaxAllocHeap();
 
   releaseHttpsPressureMemory();
+  releaseDetailWorkerForHeap();
   services::https::drainTlsHeapAfterSession(2500);
   recoverRadarHeapPressure("detail_resume");
 
@@ -1635,20 +1641,40 @@ void tickAdsbFetch() {
       s_last_heap_recover_ms = now;
       releaseHttpsPressureMemory();
       ++s_heap_recover_attempts;
-      if (s_heap_recover_attempts >= 3 && (on_radar || on_detail)) {
+
+      // Prefer reclaiming the 16KB route_detail stack over WiFi recycle.
+      if (!on_detail) {
+        const uint32_t free_before = ESP.getFreeHeap();
+        const uint32_t blk_before = ESP.getMaxAllocHeap();
+        releaseDetailWorkerForHeap();
+        services::https::drainTlsHeapAfterSession(400);
+        if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+          Serial.printf("[fetch] route_worker_release free=%u->%u max_blk=%u->%u\n", free_before,
+                        ESP.getFreeHeap(), blk_before, ESP.getMaxAllocHeap());
+        }
+        if (services::https::heapReadyForAdsb()) {
+          s_heap_recover_attempts = 0;
+          s_stuck_recycles = 0;
+        }
+      }
+
+      if (!services::https::heapReadyForAdsb() && s_heap_recover_attempts >= 3 &&
+          (on_radar || on_detail)) {
         ui::radarDisplayReleasePressureSprites();
         Serial.printf("[fetch] sprite_release free=%u max_blk=%u\n", ESP.getFreeHeap(),
                       ESP.getMaxAllocHeap());
       }
-      if (s_heap_recover_attempts >= 5 && canRecycleWifiForTlsMemory(now)) {
+      if (!services::https::heapReadyForAdsb() && s_heap_recover_attempts >= 5 &&
+          canRecycleWifiForTlsMemory(now)) {
         // Last resort: recycling WiFi can only reclaim TLS/TCP memory. If the
         // fragmentation is held by something else (e.g. a stray long-lived
         // allocation splitting the heap), repeated recycles change nothing and
         // the device sits frozen forever — reboot instead; recovery takes ~15s.
         ++s_stuck_recycles;
         if (s_stuck_recycles >= 3) {
-          Serial.printf("[fetch] heap unrecoverable after %u recycles free=%u max_blk=%u — restart\n",
-                        s_stuck_recycles, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+          Serial.printf(
+              "[fetch] heap unrecoverable after %u recycles free=%u max_blk=%u — restart\n",
+              s_stuck_recycles, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
           delay(200);
           esp_restart();
         }

@@ -65,6 +65,20 @@ void unlock() {
   }
 }
 
+void forceUnlock() {
+  ensureMutex();
+  if (s_mutex == nullptr) {
+    return;
+  }
+  // Mutex may already be free; Give on an untaken mutex is undefined on some
+  // ports — only Give when Take(0) fails (still held by a dead task).
+  if (xSemaphoreTake(s_mutex, 0) == pdTRUE) {
+    xSemaphoreGive(s_mutex);
+    return;
+  }
+  xSemaphoreGive(s_mutex);
+}
+
 bool busy() {
   ensureMutex();
   if (s_mutex == nullptr) {

@@ -244,8 +244,10 @@ bool beyondRingEdgeDotFromLatLon(float lat, float lon, int* out_x, int* out_y) {
   return true;
 }
 
-void drawBeyondRingMarker(int x, int y, float heading_deg) {
-  aircraft_symbol::drawCompact(*s_draw, x, y, heading_deg, radar::kColorAircraft);
+void drawBeyondRingMarker(int x, int y, float heading_deg,
+                          const services::adsb::Aircraft* aircraft) {
+  aircraft_symbol::drawCompact(*s_draw, x, y, heading_deg, radar::kColorAircraft,
+                               aircraft);
 }
 
 void applyTagStyle() { displayFontApply(*s_draw, s_tag_style); }
@@ -443,7 +445,8 @@ void drawAircraft() {
   sortBeyondDotsFarFirst(dots, dot_count);
   for (size_t d = 0; d < dot_count; ++d) {
     const size_t i = dots[d].index;
-    drawBeyondRingMarker(dots[d].x, dots[d].y, displayTrackDeg(planes[i].track_deg));
+    drawBeyondRingMarker(dots[d].x, dots[d].y, displayTrackDeg(planes[i].track_deg),
+                         &planes[i]);
   }
 
   const bool pulse_on = services::alert::pulsePhase();
@@ -460,7 +463,7 @@ void drawAircraft() {
       }
     }
     aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, displayTrackDeg(planes[i].track_deg),
-                          color);
+                          color, &planes[i]);
   }
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;
@@ -910,7 +913,8 @@ void drawAircraftInRect(const IntRect& dirty) {
   sortBeyondDotsFarFirst(dots, dot_count);
   for (size_t d = 0; d < dot_count; ++d) {
     const size_t i = dots[d].index;
-    drawBeyondRingMarker(dots[d].x, dots[d].y, displayTrackDeg(planes[i].track_deg));
+    drawBeyondRingMarker(dots[d].x, dots[d].y, displayTrackDeg(planes[i].track_deg),
+                         &planes[i]);
   }
 
   const bool pulse_on2 = services::alert::pulsePhase();
@@ -927,7 +931,7 @@ void drawAircraftInRect(const IntRect& dirty) {
       }
     }
     aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, displayTrackDeg(planes[i].track_deg),
-                          color);
+                          color, &planes[i]);
   }
   for (size_t d = 0; d < draw_count; ++d) {
     const size_t i = items[d].index;

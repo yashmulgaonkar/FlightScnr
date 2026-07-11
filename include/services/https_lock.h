@@ -15,6 +15,12 @@ void unlock();
 /** True when another task holds the global HTTPS mutex. */
 bool busy();
 
+/**
+ * Release the HTTPS mutex after a holder was killed (e.g. route worker
+ * vTaskDelete mid-request). Safe no-op if the mutex is already free.
+ */
+void forceUnlock();
+
 /** RAII guard — releases the lock on destruction if acquire succeeded. */
 class ScopedLock {
  public:

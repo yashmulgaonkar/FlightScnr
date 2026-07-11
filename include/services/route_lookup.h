@@ -43,6 +43,13 @@ void tickDetailWorkerWatchdog(unsigned long now_ms);
 /** Clear detail enrichment state when leaving flight detail. */
 void cancelDetailEnrichment();
 
+/**
+ * Tear down the route_detail FreeRTOS task (16KB internal stack) when idle.
+ * Call when leaving flight detail or during heap recovery while not on detail —
+ * next enrich recreates the worker via ensureDetailWorker().
+ */
+void shutdownDetailWorker();
+
 /** Route worker step name for resume diagnostics. */
 const char* detailWorkerDebugStepTag();
 

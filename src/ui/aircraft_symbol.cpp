@@ -3,11 +3,15 @@
 #include <cmath>
 
 #include "hardware/plane_gfx.h"
+#include "services/adsb_client.h"
+#include "ui/aircraft_icon.h"
 
 namespace ui::aircraft_symbol {
 namespace {
 
 constexpr float kDegToRad = 0.01745329252f;
+constexpr int kFullSidePx = 28;
+constexpr int kCompactSidePx = 16;
 
 /** Local +y = aft, -y = nose. Same basis as radar sweep / noseTip. */
 void mapLocal(int lx, int ly, int cx, int cy, float heading_deg, int* ox, int* oy) {
@@ -35,7 +39,7 @@ void fillTri(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color, i
 }
 
 void lineLocal(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color,
-                 float half_width, int x0, int y0, int x1, int y1) {
+               float half_width, int x0, int y0, int x1, int y1) {
   int sx0 = 0;
   int sy0 = 0;
   int sx1 = 0;
@@ -65,31 +69,39 @@ void drawPlaneIcon(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t co
   const int ty = s.tail_y;
   const int fin = s.tail_fin_y;
 
-  // Fuselage (centerline).
   lineLocal(gfx, cx, cy, heading_deg, color, 1.4f, 0, ny, 0, ty);
-
-  // Wings (open chevron — forward point of V is the nose).
   lineLocal(gfx, cx, cy, heading_deg, color, 1.3f, -wx, wy, 0, ny);
   lineLocal(gfx, cx, cy, heading_deg, color, 1.3f, wx, wy, 0, ny);
-
-  // Nose cap (small filled triangle).
   fillTri(gfx, cx, cy, heading_deg, color, 0, ny, -2, ny + 2, 2, ny + 2);
-
-  // Short tail bar (subtle, not confused with nose).
   lineLocal(gfx, cx, cy, heading_deg, color, 1.0f, -2, fin, 2, fin);
   fillTri(gfx, cx, cy, heading_deg, color, 0, fin, -2, ty, 2, ty);
 }
 
-}  // namespace
-
-int radiusPx() { return 12; }
-
-void draw(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color) {
-  drawPlaneIcon(gfx, cx, cy, heading_deg, color, kFull);
+void drawWithOptionalIcon(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color,
+                          const services::adsb::Aircraft* aircraft, int base_side,
+                          const IconScale& fallback) {
+  if (aircraft != nullptr) {
+    const uint8_t cat = aircraft_icon::resolveCategory(*aircraft);
+    if (aircraft_icon::draw(gfx, cx, cy, heading_deg, color, cat, base_side)) {
+      return;
+    }
+  }
+  drawPlaneIcon(gfx, cx, cy, heading_deg, color, fallback);
 }
 
-void drawCompact(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color) {
-  drawPlaneIcon(gfx, cx, cy, heading_deg, color, kCompact);
+}  // namespace
+
+int radiusPx() { return 15; }
+
+void draw(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color,
+          const services::adsb::Aircraft* aircraft) {
+  drawWithOptionalIcon(gfx, cx, cy, heading_deg, color, aircraft, kFullSidePx, kFull);
+}
+
+void drawCompact(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color,
+                 const services::adsb::Aircraft* aircraft) {
+  drawWithOptionalIcon(gfx, cx, cy, heading_deg, color, aircraft, kCompactSidePx,
+                       kCompact);
 }
 
 }  // namespace ui::aircraft_symbol

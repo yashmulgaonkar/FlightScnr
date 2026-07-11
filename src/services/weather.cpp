@@ -7,6 +7,8 @@
 
 #include <ArduinoJson.h>
 
+#include <esp_heap_caps.h>
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -30,6 +32,10 @@ constexpr char kNs[] = "flightscnr";
 constexpr char kImperialKey[] = "wx_imp";
 constexpr uint32_t kTimeoutSec = config::kWeatherApiTimeoutMs / 1000UL;
 constexpr time_t kMinValidEpoch = 1600000000;
+/** Weather JSON must not live in internal DRAM — a full 1h+1d dump is ~30KB and
+ *  truncates the Arduino String under heap pressure (IncompleteInput), then
+ *  starves ADS-B (min free heap hundreds of bytes). */
+constexpr size_t kWeatherMaxPayloadBytes = 96 * 1024;
 
 bool s_imperial = config::kWeatherUseImperialDefault;
 
@@ -107,10 +113,69 @@ int64_t iso8601ToEpoch(const char* s) {
   return days * 86400 + hour * 3600 + min * 60 + sec;
 }
 
-void readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
+struct PsramPayload {
+  char* data = nullptr;
+  size_t len = 0;
+  size_t cap = 0;
+
+  ~PsramPayload() {
+    if (data != nullptr) {
+      heap_caps_free(data);
+    }
+  }
+
+  bool reserve(size_t want) {
+    if (want <= cap) {
+      return true;
+    }
+    if (want > kWeatherMaxPayloadBytes) {
+      return false;
+    }
+    void* p = heap_caps_realloc(data, want, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == nullptr) {
+      return false;
+    }
+    data = static_cast<char*>(p);
+    cap = want;
+    return true;
+  }
+
+  bool append(const uint8_t* src, size_t n) {
+    if (len + n + 1 > cap) {
+      size_t grow = cap < 4096 ? 4096 : cap * 2;
+      if (grow < len + n + 1) {
+        grow = len + n + 1;
+      }
+      if (!reserve(grow)) {
+        return false;
+      }
+    }
+    memcpy(data + len, src, n);
+    len += n;
+    data[len] = '\0';
+    return true;
+  }
+};
+
+struct WeatherJsonAllocator : ArduinoJson::Allocator {
+  void* allocate(size_t size) override {
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+  void deallocate(void* ptr) override {
+    if (ptr != nullptr) {
+      heap_caps_free(ptr);
+    }
+  }
+  void* reallocate(void* ptr, size_t new_size) override {
+    return heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  }
+};
+
+WeatherJsonAllocator s_weather_json_allocator;
+
+void readHttpPayload(HTTPClient& http, PsramPayload* payload, uint32_t timeout_ms) {
   WiFiClient* stream = http.getStreamPtr();
-  payload->clear();
-  if (stream == nullptr) {
+  if (stream == nullptr || payload == nullptr) {
     return;
   }
   const int content_len = http.getSize();
@@ -120,8 +185,9 @@ void readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
   // starts with a hex size like "79d7\r\n" and JSON parsing reads that as a bare
   // number and silently stops.
   const bool chunked = content_len < 0;
-  if (content_len > 0) {
-    payload->reserve(static_cast<unsigned>(content_len));
+  if (content_len > 0 && !payload->reserve(static_cast<size_t>(content_len) + 1)) {
+    Serial.printf("[weather] payload alloc failed (%d bytes)\n", content_len);
+    return;
   }
   const unsigned long deadline_ms = millis() + timeout_ms;
   uint8_t buf[512];
@@ -143,7 +209,10 @@ void readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
         workerYield();
         continue;
       }
-      payload->concat(reinterpret_cast<const char*>(buf), got);
+      if (!payload->append(buf, got)) {
+        Serial.println("[weather] payload alloc failed (grow)");
+        return;
+      }
     }
     return;
   }
@@ -170,17 +239,19 @@ void readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
 
   for (;;) {
     // Read the chunk-size line (hex, possibly with ";extensions"); CRLF-terminated.
-    String size_line;
+    char size_line[16] = {};
+    size_t size_len = 0;
     uint8_t c = 0;
     while (readByte(&c)) {
       if (c == '\n') {
         break;
       }
-      if (c != '\r') {
-        size_line += static_cast<char>(c);
+      if (c != '\r' && size_len + 1 < sizeof(size_line)) {
+        size_line[size_len++] = static_cast<char>(c);
       }
     }
-    const long chunk_size = strtol(size_line.c_str(), nullptr, 16);
+    size_line[size_len] = '\0';
+    const long chunk_size = strtol(size_line, nullptr, 16);
     if (chunk_size <= 0) {
       break;  // 0-size chunk terminates the body
     }
@@ -204,7 +275,10 @@ void readHttpPayload(HTTPClient& http, String* payload, uint32_t timeout_ms) {
         workerYield();
         continue;
       }
-      payload->concat(reinterpret_cast<const char*>(buf), got);
+      if (!payload->append(buf, got)) {
+        Serial.println("[weather] payload alloc failed (chunk grow)");
+        return;
+      }
       remaining -= static_cast<long>(got);
     }
     // Consume the CRLF that follows the chunk data.
@@ -242,33 +316,33 @@ bool httpPostJson(HTTPClient& http, WiFiClientSecure& client, const String& url,
     Serial.printf("[weather] HTTP %d\n", code);
     // On an error status the body usually carries a JSON {"code":..,"message":..}
     // explaining why (bad key, bad field, quota). Dump it so failures aren't silent.
-    String err_body;
+    PsramPayload err_body;
     readHttpPayload(http, &err_body, 2000U);
-    if (err_body.length() > 0) {
-      Serial.printf("[weather] body: %.300s\n", err_body.c_str());
+    if (err_body.len > 0) {
+      Serial.printf("[weather] body: %.300s\n", err_body.data);
     }
     http.end();
     return false;
   }
 
-  String payload;
+  PsramPayload payload;
   readHttpPayload(http, &payload, config::kWeatherApiTimeoutMs + 4000U);
   http.end();
   workerYield();
 
-  Serial.printf("[weather] HTTP %d len=%u\n", code,
-                static_cast<unsigned>(payload.length()));
-  if (payload.length() == 0) {
+  Serial.printf("[weather] HTTP %d len=%u\n", code, static_cast<unsigned>(payload.len));
+  if (payload.len == 0 || payload.data == nullptr) {
     Serial.println("[weather] empty response body");
     return false;
   }
   const DeserializationError err =
       filter != nullptr
-          ? deserializeJson(*doc, payload, DeserializationOption::Filter(*filter))
-          : deserializeJson(*doc, payload);
+          ? deserializeJson(*doc, payload.data, payload.len,
+                            DeserializationOption::Filter(*filter))
+          : deserializeJson(*doc, payload.data, payload.len);
   if (err) {
     Serial.printf("[weather] JSON parse error: %s\n", err.c_str());
-    Serial.printf("[weather] body: %.300s\n", payload.c_str());
+    Serial.printf("[weather] body: %.300s\n", payload.data);
     return false;
   }
   return true;
@@ -283,12 +357,9 @@ String locationParam(double lat, double lon) {
   return loc;
 }
 
-// One POST to /v4/timelines requesting hourly + daily timelines. The response is
-// the array form `data.timelines[]`, each entry being {timestep, intervals[]} —
-// same shape the reference plane-tracker-rgb-pi project parses. A single request
-// covers both the current conditions (first 1h interval) and the daily forecast,
-// which matters on this heap-starved board (a second TLS handshake fails the
-// mbedTLS SHA alloc) and halves free-tier quota usage.
+// One POST to /v4/timelines requesting current + daily. Avoid unbounded 1h
+// timelines — those return ~30KB of hourly intervals, which used to truncate in
+// an internal-heap String and yield IncompleteInput while nuking free RAM.
 bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, double lon,
                     const char* key, WeatherData* out, int* out_code) {
   String url = "https://";
@@ -301,11 +372,12 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
   body += "\",\"units\":\"";
   body += unitsParam();
   body +=
-      "\",\"timesteps\":[\"1h\",\"1d\"],\"fields\":[\"temperature\",\"humidity\","
+      "\",\"timesteps\":[\"current\",\"1d\"],\"startTime\":\"now\",\"endTime\":\"nowPlus3d\","
+      "\"fields\":[\"temperature\",\"humidity\","
       "\"weatherCode\",\"temperatureMin\",\"temperatureMax\",\"weatherCodeMax\","
       "\"precipitationProbability\",\"sunriseTime\",\"sunsetTime\"]}";
 
-  JsonDocument filter;
+  JsonDocument filter(&s_weather_json_allocator);
   JsonObject tl = filter["data"]["timelines"][0].to<JsonObject>();
   tl["timestep"] = true;
   JsonObject iv = tl["intervals"][0].to<JsonObject>();
@@ -321,7 +393,7 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
   av["sunriseTime"] = true;
   av["sunsetTime"] = true;
 
-  JsonDocument doc;
+  JsonDocument doc(&s_weather_json_allocator);
   if (!httpPostJson(http, client, url, body, &doc, &filter, out_code)) {
     return false;
   }
@@ -341,7 +413,7 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
     if (step == nullptr || intervals.isNull() || intervals.size() == 0) {
       continue;
     }
-    if (strcmp(step, "1h") == 0) {
+    if (strcmp(step, "current") == 0 || strcmp(step, "1h") == 0) {
       JsonObject v = intervals[0]["values"].as<JsonObject>();
       if (!v.isNull()) {
         out->current_temp = v["temperature"].as<float>();

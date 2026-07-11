@@ -164,9 +164,9 @@ constexpr uint32_t kMinContiguousHeapForPanelSpi = 10000;
  *  parsed JsonDocument all live in PSRAM now, so a fetch only needs internal RAM
  *  for lwIP socket buffers and small client structs (~2-4KB observed). Sized so
  *  the post-flight-detail steady state keeps polling: the lazily created
- *  route_detail worker task permanently carves its 16KB stack out of internal
- *  heap, settling free at ~26KB / max_blk ~12KB. The old 32000/18000 gates could
- *  never pass after that, deadlocking ADS-B ("[fetch] defer: heap low" forever). */
+ *  route_detail worker task carves 16KB of internal stack while flight detail is
+ *  active; shutdownDetailWorker() returns that block when leaving detail. Heap
+ *  gates must still work while the worker is alive (~12KB max_blk ceiling). */
 constexpr uint32_t kMinFreeHeapForAdsbHttps = 22000;
 /** ADS-B TLS needs only small internal blocks now; panel SPI has its own guard. */
 constexpr uint32_t kMinContiguousHeapForAdsbTls = 10000;

@@ -1860,10 +1860,8 @@ void ensureDetailWorker() {
   if (s_detail_task != nullptr) {
     return;
   }
-  // NOTE: this task stack is 16KB of *internal* RAM, allocated on first
-  // flight-detail open and never freed. It typically splits the largest free
-  // block, dropping max_blk from ~27KB to ~12KB for the rest of the session —
-  // every heap gate in config.h must stay satisfiable below that ceiling.
+  // 16KB internal stack — created lazily on first detail enrich. Prefer
+  // shutdownDetailWorker() when leaving detail so max_blk can recover.
   xTaskCreatePinnedToCore(detailWorkerTask, "route_detail", 16384, nullptr, 1,
                           &s_detail_task, config::kCoreNetwork);
 }
@@ -2040,6 +2038,40 @@ void cancelDetailEnrichmentImpl() {
   detailWorkerCancelWork();
 }
 
+void shutdownDetailWorkerImpl() {
+  cancelDetailEnrichmentImpl();
+  if (s_detail_task == nullptr) {
+    return;
+  }
+
+  // cancelDetailEnrichment clears busy/step flags even while httpGetJson still
+  // holds the HTTPS ScopedLock on the worker stack. Wait for the lock itself —
+  // otherwise vTaskDelete leaks the mutex and ADS-B stays on "https busy".
+  const unsigned long deadline = millis() + 5000UL;
+  while (services::https::busy() && static_cast<long>(deadline - millis()) > 0) {
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+  detailWorkerCancelWork();
+
+  const bool lock_still_held = services::https::busy();
+  TaskHandle_t task = s_detail_task;
+  s_detail_task = nullptr;
+  if (task != nullptr) {
+    vTaskDelete(task);
+  }
+  if (lock_still_held || services::https::busy()) {
+    services::https::forceUnlock();
+    if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+      Serial.println("[detail] worker shutdown force-unlocked HTTPS");
+    }
+  }
+  if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
+    Serial.printf("[detail] worker shutdown free=%u max_blk=%u https_busy=%d\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+                  services::https::busy() ? 1 : 0);
+  }
+}
+
 bool detailEnrichmentReadyImpl() { return s_detail_ready; }
 
 bool detailEnrichmentConsumeImpl(bool* needs_redraw) {
@@ -2198,6 +2230,8 @@ void tickDetailWorkerWatchdog(unsigned long now_ms) {
 }
 
 void cancelDetailEnrichment() { cancelDetailEnrichmentImpl(); }
+
+void shutdownDetailWorker() { shutdownDetailWorkerImpl(); }
 
 bool detailEnrichmentReady() { return detailEnrichmentReadyImpl(); }
 

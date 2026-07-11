@@ -11,6 +11,9 @@ compile_commands.json
 # Local reference clones (not part of this project)
 _ref/
 
+# Large Pi source silhouettes (generated header is committed)
+assets/aircraft_icons/*.png
+
 # Python
 __pycache__/
 *.pyc
