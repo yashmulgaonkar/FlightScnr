@@ -33,7 +33,6 @@ constexpr int kBezelInsetPx = 10;
 constexpr int kTextPadPx = 6;
 constexpr int kTitleGap = 4;
 constexpr int kLogoGap = 3;
-constexpr int kLogoBelowGap = 20;
 constexpr int kLogoTopMarginPx = 2;
 constexpr int kPhotoCreditGap = 2;
 constexpr int kPhotoBelowGap = 10;
@@ -763,6 +762,21 @@ int layoutBottomY(int block_h) {
   return y;
 }
 
+int layoutCenterY(int block_h) {
+  int y = kCenterY - block_h / 2;
+  if (y < kBezelInsetPx) {
+    y = kBezelInsetPx;
+  }
+  const int bottom_limit = kCenterY + kCircleRadius - kBezelInsetPx;
+  if (y + block_h > bottom_limit) {
+    y = bottom_limit - block_h;
+    if (y < kBezelInsetPx) {
+      y = kBezelInsetPx;
+    }
+  }
+  return y;
+}
+
 void computeFlightDetailLayout(const FlightDetailStrings& s, int logo_h, int photo_h,
                                int photo_credit_h, EnrichFieldPlaceholder route_placeholder,
                                bool alternate_no_apis_route, FlightDetailLayout* layout) {
@@ -773,81 +787,71 @@ void computeFlightDetailLayout(const FlightDetailStrings& s, int logo_h, int pho
   const int footer_h = kFooterGap + detail_h;
   const int top = kCenterY - kCircleRadius + kLogoTopMarginPx;
 
-  // Text is bottom-anchored and grows upward. Art (photo/logo) sits above it.
-  // Pass 1: estimate route/type height near the bottom for circle chord width.
-  int y_est = layoutBottomY(callsign_h + kLineGap + body_h + kSectionGap + body_h +
-                            kLineGap + detail_h + kLineGap + metrics_h + footer_h);
-  int route_y = y_est + callsign_h + kLineGap + body_h + kSectionGap;
-  int route_lines =
-      (route_placeholder != EnrichFieldPlaceholder::None || alternate_no_apis_route)
-          ? 1
-          : routeDisplayLines(s.route_origin, s.route_dest, route_y, body_h);
-  int route_block_h = route_lines * (body_h + kLineGap);
-  int pre_type_h =
-      callsign_h + kLineGap + body_h + kSectionGap + route_block_h;
-  int type_y = y_est + pre_type_h;
-  int type_lines =
-      wrappedLineCount(s.type, displayFontDetail(), type_y, detail_h, kTypeMaxLines);
-  int type_block_h =
-      type_lines * detail_h + (type_lines > 1 ? (type_lines - 1) * kLineGap : 0);
-  int text_h = pre_type_h + type_block_h + kLineGap + metrics_h + footer_h;
-
-  int y_start = layoutBottomY(text_h);
+  auto refineTextMetrics = [&](int y_text, int* out_pre_type_h, int* out_type_block_h,
+                               int* out_text_h) {
+    const int route_y = y_text + callsign_h + kLineGap + body_h + kSectionGap;
+    const int route_lines =
+        (route_placeholder != EnrichFieldPlaceholder::None || alternate_no_apis_route)
+            ? 1
+            : routeDisplayLines(s.route_origin, s.route_dest, route_y, body_h);
+    const int route_block_h = route_lines * (body_h + kLineGap);
+    const int pre_type_h = callsign_h + kLineGap + body_h + kSectionGap + route_block_h;
+    const int type_y = y_text + pre_type_h;
+    const int type_lines =
+        wrappedLineCount(s.type, displayFontDetail(), type_y, detail_h, kTypeMaxLines);
+    const int type_block_h =
+        type_lines * detail_h + (type_lines > 1 ? (type_lines - 1) * kLineGap : 0);
+    *out_pre_type_h = pre_type_h;
+    *out_type_block_h = type_block_h;
+    *out_text_h = pre_type_h + type_block_h + kLineGap + metrics_h + footer_h;
+  };
 
   layout->logo_h = 0;
   layout->photo_h = 0;
   layout->photo_credit_h = 0;
-  layout->y_photo = y_start;
-  layout->y_photo_credit = y_start;
-  layout->y_logo = y_start;
+  layout->y_photo = top;
+  layout->y_photo_credit = top;
+  layout->y_logo = top;
+
+  int pre_type_h = 0;
+  int type_block_h = 0;
+  int text_h = 0;
+  int y_start = 0;
 
   if (photo_h > 0) {
+    // Photo present: pin image at top, text at bottom (grows upward).
     layout->photo_h = photo_h;
     layout->photo_credit_h = photo_credit_h;
     const int art_h =
         photo_h + (photo_credit_h > 0 ? kPhotoCreditGap + photo_credit_h : 0);
     layout->y_photo = top;
     layout->y_photo_credit = layout->y_photo + photo_h + kPhotoCreditGap;
-    const int min_text_y = layout->y_photo + art_h + kPhotoBelowGap;
-    if (y_start < min_text_y) {
-      y_start = min_text_y;
-    }
-  } else if (logo_h > 0) {
-    layout->logo_h = logo_h;
-    layout->y_logo = top;
-    const int min_text_y = layout->y_logo + logo_h + kLogoBelowGap;
-    if (y_start < min_text_y) {
-      y_start = min_text_y;
-    }
-  }
 
-  // Pass 2: refine wrap counts with the final text origin (chord width changes).
-  route_y = y_start + callsign_h + kLineGap + body_h + kSectionGap;
-  route_lines =
-      (route_placeholder != EnrichFieldPlaceholder::None || alternate_no_apis_route)
-          ? 1
-          : routeDisplayLines(s.route_origin, s.route_dest, route_y, body_h);
-  route_block_h = route_lines * (body_h + kLineGap);
-  pre_type_h = callsign_h + kLineGap + body_h + kSectionGap + route_block_h;
-  type_y = y_start + pre_type_h;
-  type_lines =
-      wrappedLineCount(s.type, displayFontDetail(), type_y, detail_h, kTypeMaxLines);
-  type_block_h =
-      type_lines * detail_h + (type_lines > 1 ? (type_lines - 1) * kLineGap : 0);
-  text_h = pre_type_h + type_block_h + kLineGap + metrics_h + footer_h;
-
-  // Re-anchor to bottom if art still leaves room; otherwise keep stacked below art.
-  int y_bottom = layoutBottomY(text_h);
-  if (photo_h > 0) {
-    const int art_h =
-        photo_h + (photo_credit_h > 0 ? kPhotoCreditGap + photo_credit_h : 0);
+    y_start = layoutBottomY(callsign_h + kLineGap + body_h + kSectionGap + body_h +
+                            kLineGap + detail_h + kLineGap + metrics_h + footer_h);
+    refineTextMetrics(y_start, &pre_type_h, &type_block_h, &text_h);
+    const int y_bottom = layoutBottomY(text_h);
     const int min_text_y = top + art_h + kPhotoBelowGap;
     y_start = y_bottom < min_text_y ? min_text_y : y_bottom;
-  } else if (logo_h > 0) {
-    const int min_text_y = top + logo_h + kLogoBelowGap;
-    y_start = y_bottom < min_text_y ? min_text_y : y_bottom;
+    refineTextMetrics(y_start, &pre_type_h, &type_block_h, &text_h);
   } else {
-    y_start = y_bottom;
+    // No photo yet: keep logo + text as one centered block (no empty mid gap).
+    const int art_h = logo_h > 0 ? logo_h + kLogoGap : 0;
+    int y_block = layoutCenterY(art_h + callsign_h + kLineGap + body_h + kSectionGap +
+                                body_h + kLineGap + detail_h + kLineGap + metrics_h +
+                                footer_h);
+    y_start = y_block + art_h;
+    refineTextMetrics(y_start, &pre_type_h, &type_block_h, &text_h);
+    const int total_h = art_h + text_h;
+    y_block = layoutCenterY(total_h);
+    if (logo_h > 0) {
+      layout->logo_h = logo_h;
+      layout->y_logo = y_block;
+      y_start = y_block + logo_h + kLogoGap;
+    } else {
+      y_start = y_block;
+    }
+    refineTextMetrics(y_start, &pre_type_h, &type_block_h, &text_h);
   }
 
   layout->y_start = y_start;
