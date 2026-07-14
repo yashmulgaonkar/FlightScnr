@@ -56,6 +56,8 @@ constexpr int kDisplayHeight = 390;
 
 /** Flight detail / device settings return to radar; clock settings return to clock (ms). */
 constexpr unsigned long kSecondaryScreenTimeoutMs = 10000;
+/** Wall-clock wait on flight detail before showing enrich failsafe (no auto-return). */
+constexpr unsigned long kFlightDetailEnrichFailsafeMs = 30000;
 /** Minimum time radar stays visible before idle-clock can reclaim (ms).
  *  Gives ADS-B a chance to deliver aircraft data after screen opens. */
 constexpr unsigned long kRadarMinVisibleMs = 5000;

@@ -47,4 +47,18 @@ bool flightDetailRecentlyRedrawn(const char* callsign, unsigned long window_ms);
 /** True if callsign was drawn with route/airline shown (not "Fetching…") within window_ms. */
 bool flightDetailRecentlyShowedRoute(const char* callsign, unsigned long window_ms);
 
+/** Show/hide the 30s enrich failsafe banner on the detail screen. */
+void flightDetailSetEnrichFailsafe(bool shown);
+
+/** True when the enrich failsafe banner should be drawn. */
+bool flightDetailEnrichFailsafe();
+
+/**
+ * Idle auto-return countdown ring on the screen rim.
+ * active=false or timeout_ms==0 hides the ring (Manual / waiting to settle).
+ * Ring is full at started_ms and empties CCW from top (erases leftward).
+ */
+void flightDetailSetIdleCountdown(bool active, unsigned long started_ms,
+                                  unsigned long timeout_ms);
+
 }  // namespace ui

@@ -30,6 +30,13 @@ bool consume(bool* needs_redraw = nullptr);
 /** True while a photo fetch is pending/running for this callsign. */
 bool inFlight(const char* callsign);
 
+/**
+ * True when the photo attempt for this selection has finished hard:
+ * no hex / nothing to fetch, image shown, known no-photo, or hard failure.
+ * Soft retry / debounce / job running → false.
+ */
+bool settled(const char* callsign);
+
 /** Decoded image height for layout (0 if none for callsign). */
 int imageHeight(const char* callsign);
 

@@ -514,6 +514,9 @@ bool fetchJpeg(const char* url, PsramPayload* out) {
 
 enum class JobEnd : uint8_t { Ok, SoftFail, HardFail, HeapFail };
 
+// Latched when a job ends HardFail for the current generation (survives consume()).
+uint32_t s_hard_done_generation = 0;
+
 void finishJob(JobEnd end) {
   s_job_running = false;
   s_job_queued = false;
@@ -524,6 +527,7 @@ void finishJob(JobEnd end) {
     unsigned long delay_ms = kFetchSoftRetryMs;
     if (end == JobEnd::HardFail) {
       delay_ms = kFetchRetryCooldownMs;
+      s_hard_done_generation = s_job_generation;
     } else if (end == JobEnd::HeapFail) {
       delay_ms = kFetchHeapRetryMs;
     }
@@ -689,6 +693,7 @@ void onFlightDetailSelected(const char* callsign, const char* hex, bool immediat
     s_ready_ok = false;
     s_ready_callsign[0] = '\0';
     s_retry_after_ms = 0;
+    s_hard_done_generation = 0;
     // Drop pixels for a different aircraft so scrollaway never shows a stale frame.
     if (!(s_decoded.valid && callsign != nullptr &&
           strcmp(s_decoded.callsign, callsign) == 0)) {
@@ -751,9 +756,12 @@ void cancel() {
   s_wanted_callsign[0] = '\0';
   s_wanted_hex[0] = '\0';
   s_debounce_pending = false;
+  s_job_queued = false;
+  s_retry_after_ms = 0;
   s_ready = false;
   s_ready_ok = false;
   s_ready_callsign[0] = '\0';
+  s_hard_done_generation = 0;
   clearDecoded();
 }
 
@@ -781,6 +789,34 @@ bool inFlight(const char* callsign) {
     return false;
   }
   return s_debounce_pending || s_job_queued || s_job_running;
+}
+
+bool settled(const char* callsign) {
+  if (callsign == nullptr || callsign[0] == '\0') {
+    return true;
+  }
+  if (strcmp(callsign, s_wanted_callsign) != 0) {
+    return false;
+  }
+  // Empty hex: nothing to fetch.
+  if (s_wanted_hex[0] == '\0') {
+    return true;
+  }
+  if (s_debounce_pending || s_job_queued || s_job_running) {
+    return false;
+  }
+  if (s_decoded.valid && strcmp(s_decoded.callsign, callsign) == 0) {
+    return true;
+  }
+  MetaEntry* meta = findMeta(s_wanted_hex);
+  if (meta != nullptr && meta->resolved && !meta->has_photo) {
+    return true;
+  }
+  if (s_hard_done_generation == s_generation && s_hard_done_generation != 0) {
+    return true;
+  }
+  // Soft/heap retry cooldown still pending, or never finished a terminal outcome.
+  return false;
 }
 
 int imageHeight(const char* callsign) {

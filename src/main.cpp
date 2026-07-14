@@ -69,6 +69,9 @@ unsigned long g_radar_visible_since_ms = 0;
 unsigned long g_last_sweep_done_ms = 0;
 unsigned long g_secondary_activity_ms = 0;
 unsigned long g_clock_weather_activity_ms = 0;
+unsigned long g_detail_page_started_ms = 0;
+bool g_detail_page_settled = false;
+bool g_detail_enrich_failsafe_shown = false;
 bool g_auto_idle_clock = false;
 bool g_hold_empty_radar = false;
 bool g_manual_radar_timed_visit = false;
@@ -351,6 +354,23 @@ void noteSecondaryActivity() {
   }
 }
 
+void resetFlightDetailPageSettle() {
+  g_detail_page_settled = false;
+  g_detail_enrich_failsafe_shown = false;
+  g_detail_page_started_ms = millis();
+  ui::flightDetailSetEnrichFailsafe(false);
+  ui::flightDetailSetIdleCountdown(false, 0, 0);
+}
+
+/** Drop detail session UI/state after reclaiming sprite/photo/route worker heap. */
+void clearFlightDetailSessionAfterLeave() {
+  g_detail_page_settled = false;
+  g_detail_enrich_failsafe_shown = false;
+  g_detail_page_started_ms = 0;
+  ui::flightDetailSetEnrichFailsafe(false);
+  ui::flightDetailSetIdleCountdown(false, 0, 0);
+}
+
 void noteClockWeatherActivity() { g_clock_weather_activity_ms = millis(); }
 
 void releaseHttpsPressureMemory() {
@@ -593,7 +613,6 @@ void tickFlightDetailRouteEnrich() {
         Serial.printf("[detail] enrich skip redraw %s (already on screen)\n",
                       cs != nullptr ? cs : "(none)");
       }
-      return;
     }
   }
 
@@ -603,6 +622,49 @@ void tickFlightDetailRouteEnrich() {
   if (in_flight != s_detail_enrich_in_flight) {
     s_detail_enrich_in_flight = in_flight;
     // Opening flight detail already drew the screen; completion redraws via consume().
+  }
+
+  if (!g_detail_page_settled) {
+    const bool route_photo_done =
+        callsign == nullptr ||
+        (!services::route::detailEnrichmentInFlight(callsign) &&
+         services::photo::settled(callsign));
+    if (route_photo_done) {
+      g_detail_page_settled = true;
+      const unsigned long timeout_ms = ui::displayPrefsFlightDetailTimeoutMs();
+      // Arm 10s/20s idle only once route+photo have settled; 30s stays wall-clock.
+      if (timeout_ms == 10000UL || timeout_ms == 20000UL) {
+        g_secondary_activity_ms = now;
+      }
+      if (config::kSerialTraceDebug) {
+        Serial.printf("[detail] page settled %s (arm timeout=%lu)\n",
+                      callsign != nullptr ? callsign : "(none)", timeout_ms);
+      }
+    }
+  }
+
+  // Enrich failsafe (Manual / 10s / 20s / 30s): wall-clock from page open/selection.
+  // Message only — never auto-returns. Auto-return rules are in tickSecondaryScreenTimeout.
+  if (!g_detail_page_settled && !g_detail_enrich_failsafe_shown &&
+      static_cast<long>(now - g_detail_page_started_ms) >=
+          static_cast<long>(config::kFlightDetailEnrichFailsafeMs)) {
+    g_detail_enrich_failsafe_shown = true;
+    ui::flightDetailSetEnrichFailsafe(true);
+    if (config::kSerialTraceDebug) {
+      Serial.println("[detail] enrich failsafe message");
+    }
+    showFlightDetail();
+  }
+
+  {
+    const unsigned long timeout_ms = ui::displayPrefsFlightDetailTimeoutMs();
+    bool countdown_active = false;
+    if (timeout_ms == 30000UL) {
+      countdown_active = true;
+    } else if ((timeout_ms == 10000UL || timeout_ms == 20000UL) && g_detail_page_settled) {
+      countdown_active = true;
+    }
+    ui::flightDetailSetIdleCountdown(countdown_active, g_secondary_activity_ms, timeout_ms);
   }
 
   ui::flightDetailTick(now);
@@ -717,6 +779,7 @@ void returnToRadar(bool from_idle_timeout = false, bool manual_navigation = fals
   }
   if (g_screen == AppScreen::FlightDetail) {
     reclaimHeapAfterFlightDetail();
+    clearFlightDetailSessionAfterLeave();
   } else {
     services::route::cancelDetailEnrichment();
     services::photo::cancel();
@@ -847,6 +910,7 @@ void openFlightDetailFromRadar(int16_t tap_x, int16_t tap_y, bool from_screen_ta
   }
   g_screen = AppScreen::FlightDetail;
   noteSecondaryActivity();
+  resetFlightDetailPageSettle();
   inputDiscardPendingInteractions();
   requestFlightDetailRouteEnrich(true);
   showFlightDetail();
@@ -873,6 +937,7 @@ void onFlightDetailStep(int8_t delta) {
     Serial.printf("[detail] encoder step %+d\n", static_cast<int>(delta));
   }
   if (ui::flightDetailCycle(delta)) {
+    resetFlightDetailPageSettle();
     requestFlightDetailRouteEnrich(false);
     showFlightDetail();
   }
@@ -1069,9 +1134,18 @@ void tickSecondaryScreenTimeout() {
   if (g_screen == AppScreen::FlightDetail) {
     const unsigned long timeout_ms = ui::displayPrefsFlightDetailTimeoutMs();
     if (timeout_ms == 0) {
+      // Manual: no auto-return (30s enrich failsafe still runs in enrich tick).
       return;
     }
-    if (millis() - g_secondary_activity_ms >= timeout_ms) {
+    if (timeout_ms == 30000UL) {
+      // Keep wall-clock idle from open/activity (30s enrich failsafe still runs if not settled).
+      if (millis() - g_secondary_activity_ms >= timeout_ms) {
+        returnToRadar(true);
+      }
+      return;
+    }
+    // 10s / 20s: idle only after settle; 30s enrich failsafe still runs while waiting.
+    if (g_detail_page_settled && millis() - g_secondary_activity_ms >= timeout_ms) {
       returnToRadar(true);
     }
     return;

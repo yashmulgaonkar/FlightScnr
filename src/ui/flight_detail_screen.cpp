@@ -22,6 +22,7 @@
 #include "services/aircraft_photo.h"
 #include "ui/radar_scale.h"
 #include "ui/radar_theme.h"
+#include "ui/radar_accent.h"
 
 namespace ui {
 
@@ -48,6 +49,13 @@ bool s_detail_sprite_ready = false;
 char s_last_draw_callsign[16] = "";
 unsigned long s_last_draw_ms = 0;
 bool s_last_draw_had_fetching = false;
+bool s_enrich_failsafe = false;
+
+bool s_idle_countdown_active = false;
+unsigned long s_idle_countdown_started_ms = 0;
+unsigned long s_idle_countdown_timeout_ms = 0;
+bool s_idle_ring_drawn_active = false;
+int s_idle_ring_drawn_deg = 0;  // remaining degrees last painted (0..360)
 
 bool ensureDetailSprite() {
   if (s_detail_sprite_ready) {
@@ -93,11 +101,206 @@ void releaseDetailSprite() {
   s_last_draw_callsign[0] = '\0';
   s_last_draw_ms = 0;
   s_last_draw_had_fetching = false;
+  s_enrich_failsafe = false;
+  s_idle_countdown_active = false;
+  s_idle_countdown_started_ms = 0;
+  s_idle_countdown_timeout_ms = 0;
+  s_idle_ring_drawn_active = false;
+  s_idle_ring_drawn_deg = 0;
 }
 
 const int kCenterX = config::kDisplayWidth / 2;
 const int kCenterY = config::kDisplayHeight / 2;
 const int kCircleRadius = kCenterX - kBezelInsetPx;
+/** Idle timeout ring sits on the physical display rim. */
+constexpr int kIdleRingRadiusPx = kCenterX - 2;
+constexpr float kIdleRingHalfWidth = 1.5f;
+constexpr float kIdleRingDegStep = 2.0f;
+constexpr float kDegToRad = 0.01745329252f;
+
+void idleRingPoint(float deg_cw_from_top, int* x, int* y) {
+  const float rad = deg_cw_from_top * kDegToRad;
+  *x = kCenterX + static_cast<int>(lroundf(sinf(rad) * static_cast<float>(kIdleRingRadiusPx)));
+  *y = kCenterY - static_cast<int>(lroundf(cosf(rad) * static_cast<float>(kIdleRingRadiusPx)));
+}
+
+uint16_t idleRingAccentColor() {
+  uint8_t r = 0;
+  uint8_t g = 0;
+  uint8_t b = 0;
+  radar::accentHighlightRgb(&r, &g, &b);
+  return tft.color565(r, g, b);
+}
+
+void drawIdleRingArc(float start_deg, float end_deg, uint16_t color) {
+  if (!s_detail_sprite_ready || end_deg <= start_deg + 0.05f) {
+    return;
+  }
+  float a = start_deg;
+  int px = 0;
+  int py = 0;
+  idleRingPoint(a, &px, &py);
+  for (float b = start_deg + kIdleRingDegStep; b < end_deg; b += kIdleRingDegStep) {
+    int nx = 0;
+    int ny = 0;
+    idleRingPoint(b, &nx, &ny);
+    detailGfx().drawWideLine(static_cast<int16_t>(px), static_cast<int16_t>(py),
+                             static_cast<int16_t>(nx), static_cast<int16_t>(ny),
+                             kIdleRingHalfWidth, color);
+    px = nx;
+    py = ny;
+  }
+  int nx = 0;
+  int ny = 0;
+  idleRingPoint(end_deg, &nx, &ny);
+  detailGfx().drawWideLine(static_cast<int16_t>(px), static_cast<int16_t>(py),
+                           static_cast<int16_t>(nx), static_cast<int16_t>(ny),
+                           kIdleRingHalfWidth, color);
+}
+
+void expandIdleRingDirty(float start_deg, float end_deg, int* min_x, int* min_y, int* max_x,
+                         int* max_y) {
+  const int pad = 4;
+  for (float a = start_deg; a <= end_deg; a += kIdleRingDegStep) {
+    int x = 0;
+    int y = 0;
+    idleRingPoint(a, &x, &y);
+    if (x - pad < *min_x) {
+      *min_x = x - pad;
+    }
+    if (y - pad < *min_y) {
+      *min_y = y - pad;
+    }
+    if (x + pad > *max_x) {
+      *max_x = x + pad;
+    }
+    if (y + pad > *max_y) {
+      *max_y = y + pad;
+    }
+  }
+  int x = 0;
+  int y = 0;
+  idleRingPoint(end_deg, &x, &y);
+  if (x - pad < *min_x) {
+    *min_x = x - pad;
+  }
+  if (y - pad < *min_y) {
+    *min_y = y - pad;
+  }
+  if (x + pad > *max_x) {
+    *max_x = x + pad;
+  }
+  if (y + pad > *max_y) {
+    *max_y = y + pad;
+  }
+}
+
+void blitIdleRingDirty(float start_deg, float end_deg) {
+  if (end_deg <= start_deg) {
+    return;
+  }
+  int min_x = config::kDisplayWidth;
+  int min_y = config::kDisplayHeight;
+  int max_x = 0;
+  int max_y = 0;
+  expandIdleRingDirty(start_deg, end_deg, &min_x, &min_y, &max_x, &max_y);
+  if (min_x < 0) {
+    min_x = 0;
+  }
+  if (min_y < 0) {
+    min_y = 0;
+  }
+  if (max_x >= config::kDisplayWidth) {
+    max_x = config::kDisplayWidth - 1;
+  }
+  if (max_y >= config::kDisplayHeight) {
+    max_y = config::kDisplayHeight - 1;
+  }
+  blitDetailRegion(static_cast<int16_t>(min_x), static_cast<int16_t>(min_y),
+                   static_cast<int16_t>(max_x - min_x + 1),
+                   static_cast<int16_t>(max_y - min_y + 1));
+}
+
+int idleCountdownRemainingDeg(unsigned long now_ms) {
+  if (!s_idle_countdown_active || s_idle_countdown_timeout_ms == 0) {
+    return 0;
+  }
+  const unsigned long elapsed = now_ms - s_idle_countdown_started_ms;
+  if (elapsed >= s_idle_countdown_timeout_ms) {
+    return 0;
+  }
+  const float remaining =
+      1.0f - static_cast<float>(elapsed) / static_cast<float>(s_idle_countdown_timeout_ms);
+  int deg = static_cast<int>(lroundf(remaining * 360.0f));
+  if (deg < 0) {
+    deg = 0;
+  }
+  if (deg > 360) {
+    deg = 360;
+  }
+  return deg;
+}
+
+/** Paint current remaining ring into the sprite (no panel blit). */
+void paintIdleCountdownRingSprite(unsigned long now_ms) {
+  if (!s_detail_sprite_ready) {
+    return;
+  }
+  // Caller has just painted content on a cleared canvas; rim is empty.
+  const int rem = idleCountdownRemainingDeg(now_ms);
+  if (s_idle_countdown_active && rem > 0) {
+    drawIdleRingArc(0.0f, static_cast<float>(rem), idleRingAccentColor());
+    s_idle_ring_drawn_active = true;
+    s_idle_ring_drawn_deg = rem;
+  } else {
+    s_idle_ring_drawn_active = false;
+    s_idle_ring_drawn_deg = 0;
+  }
+}
+
+/** Incremental rim update + panel blit (for tick animation). */
+void tickIdleCountdownRing(unsigned long now_ms) {
+  if (!s_detail_sprite_ready) {
+    return;
+  }
+  const int rem = idleCountdownRemainingDeg(now_ms);
+  const bool want = s_idle_countdown_active && rem > 0;
+  const uint16_t bg = tft.color565(0, 0, 0);
+  const uint16_t accent = idleRingAccentColor();
+
+  if (!want) {
+    if (s_idle_ring_drawn_active && s_idle_ring_drawn_deg > 0) {
+      drawIdleRingArc(0.0f, static_cast<float>(s_idle_ring_drawn_deg), bg);
+      blitIdleRingDirty(0.0f, static_cast<float>(s_idle_ring_drawn_deg));
+    }
+    s_idle_ring_drawn_active = false;
+    s_idle_ring_drawn_deg = 0;
+    return;
+  }
+
+  if (!s_idle_ring_drawn_active) {
+    drawIdleRingArc(0.0f, static_cast<float>(rem), accent);
+    blitIdleRingDirty(0.0f, static_cast<float>(rem));
+    s_idle_ring_drawn_active = true;
+    s_idle_ring_drawn_deg = rem;
+    return;
+  }
+
+  if (rem == s_idle_ring_drawn_deg) {
+    return;
+  }
+
+  if (rem < s_idle_ring_drawn_deg) {
+    // Erase from the left: shorten remaining CW arc from the CCW tip.
+    drawIdleRingArc(static_cast<float>(rem), static_cast<float>(s_idle_ring_drawn_deg), bg);
+    blitIdleRingDirty(static_cast<float>(rem), static_cast<float>(s_idle_ring_drawn_deg));
+  } else {
+    // Timer restarted: restore accent on the newly-full tip.
+    drawIdleRingArc(static_cast<float>(s_idle_ring_drawn_deg), static_cast<float>(rem), accent);
+    blitIdleRingDirty(static_cast<float>(s_idle_ring_drawn_deg), static_cast<float>(rem));
+  }
+  s_idle_ring_drawn_deg = rem;
+}
 
 uint8_t s_order[services::adsb::kMaxAircraft];
 size_t s_order_count = 0;
@@ -603,7 +806,10 @@ void formatTypeLine(const services::adsb::Aircraft& ac, char* out, size_t out_le
 }
 
 constexpr int kTypeMaxLines = 4;
+constexpr int kFailsafeMaxLines = 3;
 constexpr char kFetchingDetails[] = "Fetching Details";
+constexpr char kEnrichFailsafeMsg[] =
+    "Data fetch took too long, please try again in a few seconds";
 constexpr char kNoApisEnabled[] = "No APIs Enabled";
 constexpr char kAirlineUnknown[] = "Airline unknown";
 constexpr char kRouteUnknown[] = "Route unknown";
@@ -1078,6 +1284,7 @@ void flightDetailDraw() {
     drawCenterLine("Swipe right", &y, displayFontDetail(), hint_fg, bg);
     drawCenterLine("for radar", &y, displayFontDetail(), hint_fg, bg);
     detailGfx().setTextDatum(TextDatum::TopLeft);
+    paintIdleCountdownRingSprite(millis());
     pushDetailToPanel();
     if (config::kSerialTraceDebug) {
       Serial.printf("[detail] draw empty (%lums)\n", millis() - draw_start_ms);
@@ -1131,6 +1338,11 @@ void flightDetailDraw() {
 
   int y = layout.y_start;
   drawCenterLine(s.callsign, &y, displayFontBody(), fg, bg);
+  if (s_enrich_failsafe) {
+    drawCenterWrapped(kEnrichFailsafeMsg, &y, displayFontDetail(), fetchingDetailColor(), bg,
+                      kFailsafeMaxLines);
+    y += kSectionGap - kLineGap;
+  }
   if (airline_placeholder == EnrichFieldPlaceholder::Fetching) {
     drawEnrichPlaceholder(kFetchingDetails, &y, displayFontBody(), airline_placeholder, bg);
   } else if (alternate_airline) {
@@ -1173,6 +1385,7 @@ void flightDetailDraw() {
   }
   saveSnapshot(s, layout, airline_placeholder, route_placeholder, alternate_airline,
                  alternate_route, alt_phase);
+  paintIdleCountdownRingSprite(now_ms);
   pushDetailToPanel();
   strncpy(s_last_draw_callsign, s.callsign, sizeof(s_last_draw_callsign) - 1);
   s_last_draw_callsign[sizeof(s_last_draw_callsign) - 1] = '\0';
@@ -1299,7 +1512,10 @@ void flightDetailRefresh() {
   }
 }
 
-void flightDetailTick(unsigned long now_ms) { tickNoApisAlternateLabels(now_ms); }
+void flightDetailTick(unsigned long now_ms) {
+  tickNoApisAlternateLabels(now_ms);
+  tickIdleCountdownRing(now_ms);
+}
 
 void flightDetailReleaseSprite() {
   s_recent_enrich_redraw_callsign[0] = '\0';
@@ -1344,6 +1560,17 @@ bool flightDetailRecentlyShowedRoute(const char* callsign, unsigned long window_
     return true;
   }
   return strcmp(callsign, s_last_draw_callsign) == 0;
+}
+
+void flightDetailSetEnrichFailsafe(bool shown) { s_enrich_failsafe = shown; }
+
+bool flightDetailEnrichFailsafe() { return s_enrich_failsafe; }
+
+void flightDetailSetIdleCountdown(bool active, unsigned long started_ms,
+                                  unsigned long timeout_ms) {
+  s_idle_countdown_active = active && timeout_ms > 0;
+  s_idle_countdown_started_ms = started_ms;
+  s_idle_countdown_timeout_ms = timeout_ms;
 }
 
 }  // namespace ui
