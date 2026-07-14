@@ -114,8 +114,11 @@ const int kCenterY = config::kDisplayHeight / 2;
 const int kCircleRadius = kCenterX - kBezelInsetPx;
 /** Idle timeout ring sits on the physical display rim. */
 constexpr int kIdleRingRadiusPx = kCenterX - 2;
-constexpr float kIdleRingHalfWidth = 1.5f;
-constexpr float kIdleRingDegStep = 2.0f;
+/** Draw stroke; erase uses a wider stroke so overwrite covers every painted pixel. */
+constexpr float kIdleRingDrawHalfWidth = 1.5f;
+constexpr float kIdleRingEraseHalfWidth = 3.0f;
+/** Keep draw/erase on the same degree lattice so chords coincide. */
+constexpr int kIdleRingDegStep = 2;
 constexpr float kDegToRad = 0.01745329252f;
 
 void idleRingPoint(float deg_cw_from_top, int* x, int* y) {
@@ -132,21 +135,22 @@ uint16_t idleRingAccentColor() {
   return tft.color565(r, g, b);
 }
 
-void drawIdleRingArc(float start_deg, float end_deg, uint16_t color) {
+void drawIdleRingArc(float start_deg, float end_deg, uint16_t color, float half_width) {
   if (!s_detail_sprite_ready || end_deg <= start_deg + 0.05f) {
     return;
   }
+  const float step = static_cast<float>(kIdleRingDegStep);
   float a = start_deg;
   int px = 0;
   int py = 0;
   idleRingPoint(a, &px, &py);
-  for (float b = start_deg + kIdleRingDegStep; b < end_deg; b += kIdleRingDegStep) {
+  for (float b = start_deg + step; b < end_deg; b += step) {
     int nx = 0;
     int ny = 0;
     idleRingPoint(b, &nx, &ny);
     detailGfx().drawWideLine(static_cast<int16_t>(px), static_cast<int16_t>(py),
-                             static_cast<int16_t>(nx), static_cast<int16_t>(ny),
-                             kIdleRingHalfWidth, color);
+                             static_cast<int16_t>(nx), static_cast<int16_t>(ny), half_width,
+                             color);
     px = nx;
     py = ny;
   }
@@ -154,14 +158,15 @@ void drawIdleRingArc(float start_deg, float end_deg, uint16_t color) {
   int ny = 0;
   idleRingPoint(end_deg, &nx, &ny);
   detailGfx().drawWideLine(static_cast<int16_t>(px), static_cast<int16_t>(py),
-                           static_cast<int16_t>(nx), static_cast<int16_t>(ny),
-                           kIdleRingHalfWidth, color);
+                           static_cast<int16_t>(nx), static_cast<int16_t>(ny), half_width,
+                           color);
 }
 
 void expandIdleRingDirty(float start_deg, float end_deg, int* min_x, int* min_y, int* max_x,
                          int* max_y) {
-  const int pad = 4;
-  for (float a = start_deg; a <= end_deg; a += kIdleRingDegStep) {
+  const int pad = 6;
+  const float step = static_cast<float>(kIdleRingDegStep);
+  for (float a = start_deg; a <= end_deg; a += step) {
     int x = 0;
     int y = 0;
     idleRingPoint(a, &x, &y);
@@ -238,6 +243,8 @@ int idleCountdownRemainingDeg(unsigned long now_ms) {
   if (deg > 360) {
     deg = 360;
   }
+  // Snap to the draw lattice so erase chords hit the same pixels as paint.
+  deg = (deg / kIdleRingDegStep) * kIdleRingDegStep;
   return deg;
 }
 
@@ -249,7 +256,8 @@ void paintIdleCountdownRingSprite(unsigned long now_ms) {
   // Caller has just painted content on a cleared canvas; rim is empty.
   const int rem = idleCountdownRemainingDeg(now_ms);
   if (s_idle_countdown_active && rem > 0) {
-    drawIdleRingArc(0.0f, static_cast<float>(rem), idleRingAccentColor());
+    drawIdleRingArc(0.0f, static_cast<float>(rem), idleRingAccentColor(),
+                    kIdleRingDrawHalfWidth);
     s_idle_ring_drawn_active = true;
     s_idle_ring_drawn_deg = rem;
   } else {
@@ -270,7 +278,8 @@ void tickIdleCountdownRing(unsigned long now_ms) {
 
   if (!want) {
     if (s_idle_ring_drawn_active && s_idle_ring_drawn_deg > 0) {
-      drawIdleRingArc(0.0f, static_cast<float>(s_idle_ring_drawn_deg), bg);
+      drawIdleRingArc(0.0f, static_cast<float>(s_idle_ring_drawn_deg), bg,
+                      kIdleRingEraseHalfWidth);
       blitIdleRingDirty(0.0f, static_cast<float>(s_idle_ring_drawn_deg));
     }
     s_idle_ring_drawn_active = false;
@@ -279,7 +288,7 @@ void tickIdleCountdownRing(unsigned long now_ms) {
   }
 
   if (!s_idle_ring_drawn_active) {
-    drawIdleRingArc(0.0f, static_cast<float>(rem), accent);
+    drawIdleRingArc(0.0f, static_cast<float>(rem), accent, kIdleRingDrawHalfWidth);
     blitIdleRingDirty(0.0f, static_cast<float>(rem));
     s_idle_ring_drawn_active = true;
     s_idle_ring_drawn_deg = rem;
@@ -291,12 +300,20 @@ void tickIdleCountdownRing(unsigned long now_ms) {
   }
 
   if (rem < s_idle_ring_drawn_deg) {
-    // Erase from the left: shorten remaining CW arc from the CCW tip.
-    drawIdleRingArc(static_cast<float>(rem), static_cast<float>(s_idle_ring_drawn_deg), bg);
-    blitIdleRingDirty(static_cast<float>(rem), static_cast<float>(s_idle_ring_drawn_deg));
+    // Overwrite the depleted tip with a thicker black stroke than the original draw,
+    // starting one lattice step earlier so joint "ears" from drawWideLine are covered.
+    // Then restore the still-visible tip in accent.
+    const float erase_start =
+        static_cast<float>(std::max(0, rem - kIdleRingDegStep));
+    drawIdleRingArc(erase_start, static_cast<float>(s_idle_ring_drawn_deg), bg,
+                    kIdleRingEraseHalfWidth);
+    if (rem > 0) {
+      drawIdleRingArc(erase_start, static_cast<float>(rem), accent, kIdleRingDrawHalfWidth);
+    }
+    blitIdleRingDirty(erase_start, static_cast<float>(s_idle_ring_drawn_deg));
   } else {
-    // Timer restarted: restore accent on the newly-full tip.
-    drawIdleRingArc(static_cast<float>(s_idle_ring_drawn_deg), static_cast<float>(rem), accent);
+    drawIdleRingArc(static_cast<float>(s_idle_ring_drawn_deg), static_cast<float>(rem), accent,
+                    kIdleRingDrawHalfWidth);
     blitIdleRingDirty(static_cast<float>(s_idle_ring_drawn_deg), static_cast<float>(rem));
   }
   s_idle_ring_drawn_deg = rem;
