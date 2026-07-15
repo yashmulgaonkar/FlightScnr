@@ -91,11 +91,13 @@ bool lookupPrefixType(const char* type, uint8_t* out_category) {
 bool isHelicopterType(const char* type) {
   uint8_t cat = 0;
   if (lookupExactType(type, &cat) &&
-      cat == static_cast<uint8_t>(data::aircraft_icons::Category::helicopter)) {
+      (cat == static_cast<uint8_t>(data::aircraft_icons::Category::helicopter) ||
+       cat == static_cast<uint8_t>(data::aircraft_icons::Category::military_helicopter))) {
     return true;
   }
   static constexpr const char* kPrefixes[] = {"EC", "AS", "AW", "R4", "R6", "MI",
-                                              "KA", "BK", "MD5"};
+                                              "KA", "BK", "MD5", "UH", "AH", "CH",
+                                              "MH", "OH", "TH", "NH"};
   for (const char* p : kPrefixes) {
     if (strncmp(type, p, strlen(p)) == 0) {
       return true;
@@ -172,6 +174,9 @@ uint8_t resolveCategory(const services::adsb::Aircraft& aircraft) {
     return mapped;
   }
   if (type[0] != '\0' && isHelicopterType(type)) {
+    if (aircraft.isMilitary()) {
+      return static_cast<uint8_t>(data::aircraft_icons::Category::military_helicopter);
+    }
     return static_cast<uint8_t>(data::aircraft_icons::Category::helicopter);
   }
   if (aircraft.isMilitary()) {
@@ -208,6 +213,7 @@ bool draw(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color,
   const int radius = (side + 1) / 2 + 1;
 
   // Destination-space sample: every screen pixel is filled (no sparse upscale holes).
+  // Max of nearest 4 source cells keeps thin rotor strokes from sparkling under rotate.
   for (int dy = -radius; dy <= radius; ++dy) {
     for (int dx = -radius; dx <= radius; ++dx) {
       // Inverse of mapLocal (screen offset → icon-local).
@@ -215,15 +221,25 @@ bool draw(PlaneGfx& gfx, int cx, int cy, float heading_deg, uint16_t color,
       const float ly = -static_cast<float>(dx) * sin_h + static_cast<float>(dy) * cos_h;
       const float ix_f = lx * inv_scale + src_half;
       const float iy_f = ly * inv_scale + src_half;
-      const int ix = static_cast<int>(lroundf(ix_f));
-      const int iy = static_cast<int>(lroundf(iy_f));
-      if (ix < 0 || iy < 0 || ix >= data::aircraft_icons::kIconSide ||
-          iy >= data::aircraft_icons::kIconSide) {
-        continue;
+      const int ix0 = static_cast<int>(floorf(ix_f));
+      const int iy0 = static_cast<int>(floorf(iy_f));
+      uint8_t a = 0;
+      for (int oy = 0; oy <= 1; ++oy) {
+        for (int ox = 0; ox <= 1; ++ox) {
+          const int ix = ix0 + ox;
+          const int iy = iy0 + oy;
+          if (ix < 0 || iy < 0 || ix >= data::aircraft_icons::kIconSide ||
+              iy >= data::aircraft_icons::kIconSide) {
+            continue;
+          }
+          const uint8_t s = pgm_read_byte(
+              &alpha[static_cast<size_t>(iy) * data::aircraft_icons::kIconSide +
+                     static_cast<size_t>(ix)]);
+          if (s > a) {
+            a = s;
+          }
+        }
       }
-      const uint8_t a = pgm_read_byte(
-          &alpha[static_cast<size_t>(iy) * data::aircraft_icons::kIconSide +
-                 static_cast<size_t>(ix)]);
       if (a < data::aircraft_icons::kAlphaFloor) {
         continue;
       }
