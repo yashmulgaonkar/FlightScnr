@@ -43,6 +43,7 @@ CATEGORY_ORDER = [
     "small-prop-single",
     "small-prop-twin",
     "helicopter",
+    "military-helicopter",
     "military-fighter",
     "military-transport",
     "cargo",
@@ -59,11 +60,11 @@ CATEGORY_ORDER = [
 # Pi boosts helicopter because its PNG has empty padding; we crop to content
 # before resize, so that boost only upscales a 32² mask into blocky pixels.
 CATEGORY_SCALE_X100 = {
-    "drone": 50,
+    "drone": 100,
     "military-drone": 50,
-    "balloon": 50,
+    "balloon": 100,
     "airship": 50,
-    "glider": 50,
+    "glider": 150,
 }
 
 DEFAULT_CATEGORY = "large-jet-2"
@@ -78,27 +79,105 @@ def alpha_sym(category: str) -> str:
     return f"kIcon_{cat_ident(category)}_alpha"
 
 
-def to_alpha_mask(image: Image.Image, side: int) -> bytes:
-    rgba = image.convert("RGBA")
-    # Crop to non-transparent bounds so sparse art fills the square better.
-    alpha = rgba.getchannel("A")
-    bbox = alpha.getbbox()
-    if bbox is not None:
-        rgba = rgba.crop(bbox)
-    rgba = rgba.resize((side, side), Image.Resampling.LANCZOS)
+def coverage_alpha(rgba: Image.Image) -> Image.Image:
+    """8-bit coverage from alpha.
+
+    Prefer the alpha channel whenever the image actually uses transparency.
+    Only fall back to inverted luminance for fully-opaque black-on-canvas art
+    (no transparent pixels) — otherwise gray RGB under alpha=0 falsely floods
+    the mask (common in exported Pi silhouettes).
+    """
+    out = Image.new("L", rgba.size, 0)
+    px = out.load()
+    src = rgba.load()
+    w, h = rgba.size
+
+    has_transparency = False
+    for y in range(0, h, max(1, h // 64)):
+        for x in range(0, w, max(1, w // 64)):
+            if src[x, y][3] < ALPHA_FLOOR:
+                has_transparency = True
+                break
+        if has_transparency:
+            break
+
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = src[x, y]
+            if has_transparency:
+                px[x, y] = a if a >= ALPHA_FLOOR else 0
+                continue
+            if a >= ALPHA_FLOOR:
+                px[x, y] = a
+            elif (r + g + b) < 40:
+                px[x, y] = 0
+            else:
+                lum = (r + g + b) // 3
+                px[x, y] = 255 - lum if lum < 220 else 0
+    return out
+
+
+def paste_scaled_into_square(coverage: Image.Image, side: int, margin_frac: float = 0.06) -> bytes:
+    """Fit coverage into a side×side mask, preserving aspect, with margin."""
+    bbox = coverage.point(lambda v: 255 if v >= ALPHA_FLOOR else 0).getbbox()
+    if bbox is None:
+        return bytes(side * side)
+    coverage = coverage.crop(bbox)
+    w, h = coverage.size
+    if w <= 0 or h <= 0:
+        return bytes(side * side)
+
+    inner = max(1, int(round(side * (1.0 - 2.0 * margin_frac))))
+    scale = min(inner / float(w), inner / float(h))
+    nw = max(1, int(round(w * scale)))
+    nh = max(1, int(round(h * scale)))
+    scaled = coverage.resize((nw, nh), Image.Resampling.LANCZOS)
+
+    canvas = Image.new("L", (side, side), 0)
+    canvas.paste(scaled, ((side - nw) // 2, (side - nh) // 2))
+
     out = bytearray(side * side)
+    px = canvas.load()
     for y in range(side):
         for x in range(side):
-            r, g, b, a = rgba.getpixel((x, y))
-            # Prefer alpha; fall back to inverted luminance for opaque black art.
-            if a < ALPHA_FLOOR and (r + g + b) < 40:
-                a = 0
-            elif a < ALPHA_FLOOR:
-                # Solid black on opaque canvas → treat darkness as coverage.
-                lum = (r + g + b) // 3
-                a = 255 - lum if lum < 220 else 0
-            out[y * side + x] = a
+            out[y * side + x] = px[x, y]
     return bytes(out)
+
+
+def to_alpha_mask(image: Image.Image, side: int) -> bytes:
+    from PIL import ImageFilter
+
+    rgba = image.convert("RGBA")
+    coverage = coverage_alpha(rgba)
+    bbox = coverage.point(lambda v: 255 if v >= ALPHA_FLOOR else 0).getbbox()
+    if bbox is not None:
+        coverage = coverage.crop(bbox)
+
+    w, h = coverage.size
+    if w <= 0 or h <= 0:
+        return bytes(side * side)
+
+    # Normalize to a mid-resolution working size so dilate is independent of
+    # 241 vs 1024 source art, then thicken thin strokes by a few working pixels.
+    work_max = 96
+    work_scale = min(1.0, work_max / float(max(w, h)))
+    ww = max(1, int(round(w * work_scale)))
+    wh = max(1, int(round(h * work_scale)))
+    work = coverage.resize((ww, wh), Image.Resampling.LANCZOS)
+
+    solid = sum(1 for v in work.get_flattened_data() if v >= ALPHA_FLOOR)
+    fill = solid / float(ww * wh)
+    # Keep silhouettes recognizable: thicken wireframes, not flood-fill them.
+    if fill < 0.12:
+        dilate = 5
+    elif fill < 0.25:
+        dilate = 3
+    else:
+        dilate = 0
+    if dilate >= 3:
+        work = work.filter(ImageFilter.MaxFilter(dilate))
+
+    return paste_scaled_into_square(work, side)
 
 
 def emit_u8_array(name: str, data: bytes) -> str:
@@ -149,7 +228,7 @@ def main() -> int:
     if missing:
         print(f"WARNING: missing PNGs for: {', '.join(missing)}")
 
-    # ICAO type → category id (first wins; helicopter kept over later dupes).
+    # ICAO type → category id (first wins; heli categories kept over later dupes).
     type_to_cat: dict[str, str] = {}
     for category, codes in type_map.items():
         if category.startswith("_") or category not in masks:
@@ -158,7 +237,8 @@ def main() -> int:
             key = normalize_type(code)
             if not key:
                 continue
-            if key in type_to_cat and type_to_cat[key] == "helicopter":
+            existing = type_to_cat.get(key)
+            if existing in ("helicopter", "military-helicopter"):
                 continue
             type_to_cat[key] = category
 
