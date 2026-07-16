@@ -741,7 +741,7 @@ void handleSettingsPage() {
     const int add_n = snprintf(
         page + used, kSettingsPageCap - used,
         "<div class=\"wifi-add\"><form method=\"POST\" action=\"/wifi/add\">"
-        "<label for=\"wifi_ssid\">Add network (%u/%u)</label>"
+        "<label for=\"wifi_ssid\">Add network (%u of %u used)</label>"
         "<input id=\"wifi_ssid\" name=\"s\" maxlength=\"32\" required "
         "placeholder=\"SSID\">"
         "<label for=\"wifi_pass\">Password</label>"
