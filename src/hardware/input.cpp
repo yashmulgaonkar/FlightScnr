@@ -13,6 +13,7 @@
 #include "hardware/pin_config.h"
 #include "services/wifi_setup.h"
 #include "touch_chip/Arduino_CST816x.h"
+#include "ui/boot_screens.h"
 
 namespace {
 
@@ -33,7 +34,9 @@ volatile int16_t s_tap_y = -1;
 volatile SwipeGesture s_swipe_pending = SwipeNone;
 volatile bool s_knob_is_down = false;
 volatile unsigned long s_knob_down_ms = 0;
+volatile bool s_wifi_reset_ui_shown = false;
 bool s_long_press_handled = false;
+bool s_wifi_reset_ui_cancelled_pending = false;
 bool s_knob_interrupt_attached = false;
 
 uint8_t s_knob_previous = 0;
@@ -65,7 +68,9 @@ void IRAM_ATTR onKnobButtonIsr() {
     s_knob_down_ms = now;
   } else if (s_knob_is_down) {
     const unsigned long held = now - s_knob_down_ms;
-    if (held >= config::kKnobTapMinMs && held < config::kKnobResetHoldMs) {
+    // Suppress tap if the Wi-Fi reset countdown UI was shown (user aborting wipe).
+    if (held >= config::kKnobTapMinMs && held < config::kKnobResetHoldMs &&
+        !s_wifi_reset_ui_shown) {
       s_knob_tap_pending = true;
     }
     s_knob_is_down = false;
@@ -367,19 +372,44 @@ void inputPollLongPress() {
     if (!s_knob_is_down) {
       s_knob_is_down = true;
       s_knob_down_ms = millis();
+      s_wifi_reset_ui_shown = false;
     }
     const unsigned long down_ms = s_knob_down_ms;
     portEXIT_CRITICAL(&s_input_mux);
 
-    if (!s_long_press_handled && millis() - down_ms >= config::kKnobResetHoldMs) {
+    const unsigned long held = millis() - down_ms;
+    if (!s_long_press_handled && held >= config::kKnobResetCountdownStartMs &&
+        held < config::kKnobResetHoldMs) {
+      bootScreenWifiResetCountdownTick(held, config::kKnobResetHoldMs);
+      if (bootScreenWifiResetCountdownActive()) {
+        portENTER_CRITICAL(&s_input_mux);
+        s_wifi_reset_ui_shown = true;
+        portEXIT_CRITICAL(&s_input_mux);
+      }
+    }
+
+    if (!s_long_press_handled && held >= config::kKnobResetHoldMs) {
       s_long_press_handled = true;
+      bootScreenWifiResetCountdownCancel();
       Serial.println("Knob held, resetting Wi-Fi");
       wifiResetCredentialsAndReboot();
     }
   } else {
+    const bool was_showing = bootScreenWifiResetCountdownActive() || s_wifi_reset_ui_shown;
     portENTER_CRITICAL(&s_input_mux);
     s_knob_is_down = false;
+    s_wifi_reset_ui_shown = false;
     portEXIT_CRITICAL(&s_input_mux);
     s_long_press_handled = false;
+    if (was_showing) {
+      bootScreenWifiResetCountdownCancel();
+      s_wifi_reset_ui_cancelled_pending = true;
+    }
   }
+}
+
+bool inputConsumeWifiResetUiCancelled() {
+  const bool pending = s_wifi_reset_ui_cancelled_pending;
+  s_wifi_reset_ui_cancelled_pending = false;
+  return pending;
 }

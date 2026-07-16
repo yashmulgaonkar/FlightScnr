@@ -25,6 +25,7 @@
 #include "services/weather.h"
 #include "services/aircraft_alert.h"
 #include "services/off_hours.h"
+#include "services/wifi_setup.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
 #include "ui/radar_scale.h"
@@ -40,7 +41,7 @@ bool s_active = false;
  *  overload copies the whole page into an internal-heap String, which under a
  *  ~26 KB post-detail heap starved lwIP (min free 5 KB), stalled loop() for
  *  ~12 s, and left max_blk permanently fragmented below the panel/TLS gates. */
-constexpr size_t kSettingsPageCap = 24576;
+constexpr size_t kSettingsPageCap = 28672;
 char* s_settings_page = nullptr;
 
 char* settingsPageBuffer() {
@@ -117,7 +118,18 @@ background:linear-gradient(180deg,rgba(10,10,10,0),rgba(10,10,10,.92) 30%,#0a0a0
 button.save{width:100%;padding:.85rem;font-size:1.02rem;font-weight:700;border:none;
 border-radius:11px;background:var(--accent);color:#fff;cursor:pointer;box-shadow:0 6px 20px rgba(26,156,60,.35);}
 button.save:hover{background:var(--accent2);}
-.wifi-note{font-size:.78rem;color:#8a8a8a;text-align:center;margin-top:.6rem;}
+.wifi-note{font-size:.78rem;color:#8a8a8a;margin-top:.55rem;}
+.net-row{border:1px solid var(--line);border-radius:10px;padding:.65rem .75rem;margin:.55rem 0;
+background:var(--card2);}
+.net-row .top{display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap;}
+.net-row .ord{font-weight:700;color:#fff;}
+.net-row .ssid{font-weight:600;}
+.net-row .skip{font-size:.72rem;color:#c9a227;margin-left:.15rem;}
+.net-actions{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem;}
+button.sm,a.sm{font-size:.78rem;padding:.4rem .55rem;border-radius:8px;border:1px solid var(--fline);
+background:#262626;color:#eee;cursor:pointer;text-decoration:none;display:inline-block;}
+button.sm.danger{border-color:#633;background:#2a1515;color:#fcc;}
+.wifi-add{margin-top:.75rem;padding-top:.65rem;border-top:1px solid var(--line);}
 .foot{text-align:center;font-size:.8rem;color:var(--muted);margin:1.2rem 0 .2rem;}
 .foot a{color:var(--link);}
 </style></head><body>
@@ -242,6 +254,16 @@ void handleSettingsPage() {
   if (s_server->hasArg("saved")) {
     appendRaw(page, kSettingsPageCap, &used,
               "<div class=\"banner\"><b>Saved.</b> Settings applied — radar will refresh."
+              "</div>");
+  }
+  if (s_server->hasArg("wifi_ok")) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<div class=\"banner\"><b>Wi&#8209;Fi updated.</b></div>");
+  }
+  if (s_server->hasArg("wifi_err")) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
+              "<b>Wi&#8209;Fi change failed.</b> Check SSID/password and free slots (max 3)."
               "</div>");
   }
 
@@ -656,14 +678,9 @@ void handleSettingsPage() {
             "<a class=\"dl\" href=\"/route_cache.csv\" download=\"route_cache.csv\">"
             "&#8681;&nbsp; Download route_cache.csv</a></div></details>");
 
-  // ---------- Footer + sticky save bar ----------
-  const int tail_n = snprintf(
+  // Close main settings form (Wi-Fi uses its own POST endpoints).
+  const int savebar_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<p class=\"wifi-note\">Wi&#8209;Fi credentials are set in the setup portal "
-      "(hold the knob 3&nbsp;s to reset).</p>"
-      "<p class=\"foot\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
-      "github.com/yashmulgaonkar/FlightScnr</a></p>"
-      "</div>"
       "<input type=\"hidden\" name=\"alert_watch\" id=\"alert_watch_post\" value=\"%s\">"
       "<script>"
       "document.querySelector('form[action=\"/save\"]').addEventListener('submit',function(){"
@@ -673,11 +690,111 @@ void handleSettingsPage() {
       "</script>"
       "<div class=\"savebar\"><div class=\"inner\">"
       "<button class=\"save\" type=\"submit\">Save</button></div></div>"
-      "</form></body></html>",
-      config::kGithubRepoUrl, watch_buf);
-  if (tail_n > 0) {
+      "</div></form><div class=\"wrap\">",
+      watch_buf);
+  if (savebar_n > 0) {
+    used += static_cast<size_t>(savebar_n);
+  }
+
+  // ---------- Wi-Fi networks card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\" open><summary><span class=\"ico\">W</span>"
+            "Wi&#8209;Fi networks<span class=\"sum\">up to 3</span>"
+            "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
+            "<p class=\"note\">Tried in preference order (#1 first). After repeated failures a "
+            "network is temporarily skipped this session until you remove or edit it.</p>");
+
+  const uint8_t net_n = wifiNetsCount();
+  if (net_n == 0) {
+    appendRaw(page, kSettingsPageCap, &used, "<p class=\"note\">No saved networks.</p>");
+  }
+  for (uint8_t i = 0; i < net_n; ++i) {
+    char ssid[33] = "";
+    wifiNetsGetSsid(i, ssid, sizeof(ssid));
+    char esc[96];
+    size_t eo = 0;
+    for (size_t c = 0; ssid[c] != '\0' && eo + 6 < sizeof(esc); ++c) {
+      if (ssid[c] == '&') {
+        memcpy(esc + eo, "&amp;", 5);
+        eo += 5;
+      } else if (ssid[c] == '<') {
+        memcpy(esc + eo, "&lt;", 4);
+        eo += 4;
+      } else if (ssid[c] == '"') {
+        memcpy(esc + eo, "&quot;", 6);
+        eo += 6;
+      } else {
+        esc[eo++] = ssid[c];
+      }
+    }
+    esc[eo] = '\0';
+
+    const int row_n = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<div class=\"net-row\"><div class=\"top\"><span class=\"ord\">#%u</span>"
+        "<span class=\"ssid\">%s</span>%s</div>"
+        "<div class=\"net-actions\">"
+        "<form method=\"POST\" action=\"/wifi/up\" style=\"display:inline\">"
+        "<input type=\"hidden\" name=\"i\" value=\"%u\">"
+        "<button class=\"sm\" type=\"submit\"%s>Move up</button></form>"
+        "<form method=\"POST\" action=\"/wifi/down\" style=\"display:inline\">"
+        "<input type=\"hidden\" name=\"i\" value=\"%u\">"
+        "<button class=\"sm\" type=\"submit\"%s>Move down</button></form>"
+        "<form method=\"POST\" action=\"/wifi/remove\" style=\"display:inline\" "
+        "onsubmit=\"return confirm('Remove this network?');\">"
+        "<input type=\"hidden\" name=\"i\" value=\"%u\">"
+        "<button class=\"sm danger\" type=\"submit\">Remove</button></form>"
+        "</div>"
+        "<form method=\"POST\" action=\"/wifi/pass\" style=\"margin-top:.55rem\">"
+        "<input type=\"hidden\" name=\"i\" value=\"%u\">"
+        "<label for=\"pass%u\">Update password</label>"
+        "<div class=\"row2\"><input id=\"pass%u\" name=\"p\" type=\"password\" "
+        "autocomplete=\"new-password\" placeholder=\"new password\">"
+        "<button class=\"sm\" type=\"submit\">Update</button></div></form></div>",
+        static_cast<unsigned>(i + 1), esc,
+        wifiNetsIsDemoted(i) ? " <span class=\"skip\">temporarily skipped</span>" : "",
+        static_cast<unsigned>(i), i == 0 ? " disabled" : "",
+        static_cast<unsigned>(i), (i + 1 >= net_n) ? " disabled" : "",
+        static_cast<unsigned>(i), static_cast<unsigned>(i), static_cast<unsigned>(i),
+        static_cast<unsigned>(i));
+    if (row_n > 0) {
+      used += static_cast<size_t>(row_n);
+    }
+  }
+
+  if (net_n < config::kWifiMaxNetworks) {
+    const int add_n = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<div class=\"wifi-add\"><form method=\"POST\" action=\"/wifi/add\">"
+        "<label for=\"wifi_ssid\">Add network (%u/%u)</label>"
+        "<input id=\"wifi_ssid\" name=\"s\" maxlength=\"32\" required "
+        "placeholder=\"SSID\">"
+        "<label for=\"wifi_pass\">Password</label>"
+        "<input id=\"wifi_pass\" name=\"p\" type=\"password\" maxlength=\"63\" "
+        "autocomplete=\"new-password\" placeholder=\"password\">"
+        "<p style=\"margin-top:.6rem\"><button class=\"sm\" type=\"submit\">"
+        "Add network</button></p></form></div>",
+        static_cast<unsigned>(net_n), static_cast<unsigned>(config::kWifiMaxNetworks));
+    if (add_n > 0) {
+      used += static_cast<size_t>(add_n);
+    }
+  } else {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<p class=\"note\">Store full (3/3). Remove one before adding another.</p>");
+  }
+
+  const int wifi_tail_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<p class=\"wifi-note\">Hold knob 5&nbsp;s clears all networks and opens the setup "
+      "portal.</p></div></details>"
+      "<p class=\"foot\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
+      "github.com/yashmulgaonkar/FlightScnr</a></p>"
+      "</div></body></html>",
+      config::kGithubRepoUrl);
+  if (wifi_tail_n > 0) {
     const size_t space = kSettingsPageCap - used;
-    used += static_cast<size_t>(tail_n) < space ? static_cast<size_t>(tail_n) : space - 1;
+    used += static_cast<size_t>(wifi_tail_n) < space ? static_cast<size_t>(wifi_tail_n)
+                                                     : space - 1;
   }
   if (used >= kSettingsPageCap) {
     used = kSettingsPageCap - 1;
@@ -772,6 +889,55 @@ void handleRouteCacheDownload() {
   services::route_cache::sendDownload(s_server);
 }
 
+void handleWifiAdd() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  char err[96];
+  const bool ok =
+      wifiNetsAddOrUpdate(s_server->arg("s").c_str(), s_server->arg("p").c_str(), err,
+                          sizeof(err));
+  redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
+}
+
+void handleWifiRemove() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  const bool ok = wifiNetsRemove(static_cast<uint8_t>(s_server->arg("i").toInt()));
+  redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
+}
+
+void handleWifiUp() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  wifiNetsMoveUp(static_cast<uint8_t>(s_server->arg("i").toInt()));
+  redirectToSettings("wifi_ok=1");
+}
+
+void handleWifiDown() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  wifiNetsMoveDown(static_cast<uint8_t>(s_server->arg("i").toInt()));
+  redirectToSettings("wifi_ok=1");
+}
+
+void handleWifiPass() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  const bool ok = wifiNetsUpdatePassword(static_cast<uint8_t>(s_server->arg("i").toInt()),
+                                         s_server->arg("p").c_str());
+  redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
+}
+
 void handleNotFound() {
   s_server->sendHeader("Location", "/", true);
   s_server->send(302, "text/plain", "");
@@ -782,6 +948,11 @@ void registerRoutes() {
   s_server->on("/settings", HTTP_GET, handleSettingsPage);
   s_server->on("/save", HTTP_POST, handleSave);
   s_server->on("/route_cache.csv", HTTP_GET, handleRouteCacheDownload);
+  s_server->on("/wifi/add", HTTP_POST, handleWifiAdd);
+  s_server->on("/wifi/remove", HTTP_POST, handleWifiRemove);
+  s_server->on("/wifi/up", HTTP_POST, handleWifiUp);
+  s_server->on("/wifi/down", HTTP_POST, handleWifiDown);
+  s_server->on("/wifi/pass", HTTP_POST, handleWifiPass);
   s_server->onNotFound(handleNotFound);
 }
 

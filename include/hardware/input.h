@@ -39,5 +39,11 @@ SwipeGesture inputConsumeSwipe();
 /** Poll for knob long-press (Wi-Fi reset). May reboot the device. */
 void inputPollLongPress();
 
+/**
+ * True once when the user released the knob after the Wi-Fi reset countdown UI
+ * was shown (abort). Caller should redraw the active screen.
+ */
+bool inputConsumeWifiResetUiCancelled();
+
 /** Drop queued knob/encoder/touch events (e.g. after idle timeout to radar). */
 void inputDiscardPendingInteractions();

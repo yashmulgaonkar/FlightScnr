@@ -36,6 +36,7 @@
 #include "ui/clock_settings_screen.h"
 #include "ui/details_screen.h"
 #include "ui/display_prefs.h"
+#include "ui/boot_screens.h"
 #include "ui/flight_detail_screen.h"
 #include "ui/info_screen.h"
 #include "ui/radar_accent.h"
@@ -1309,6 +1310,9 @@ void tickWeather() {
 void handleInput() {
   inputPoll();
   inputPollLongPress();
+  if (inputConsumeWifiResetUiCancelled()) {
+    applySettingsLive();
+  }
   handleNavigation();
 
   if (g_screen == AppScreen::Radar) {
@@ -1863,12 +1867,17 @@ void loop() {
     }
   }
   tickBootDetailsSplash();
+  handleInput();
+  if (bootScreenWifiResetCountdownActive()) {
+    settingsWebPoll();
+    tickDiagLog();
+    return;
+  }
   tickSecondaryScreenTimeout();
   tickAutoIdleClock();
   tickClockDisplay();
   tickWeather();
   services::tzlookup::tick();
-  handleInput();
   settingsWebPoll();
   services::route::tickCacheFlush(millis());
   tickFlightDetailRouteEnrich();

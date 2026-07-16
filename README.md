@@ -41,18 +41,24 @@ Screen timeouts (configurable on web or device page 2): flight detail 10/20/30s 
 
 **From flight detail / settings / about:** swipe right (or timeout) → back
 
-**Everywhere:** hold knob **3 s** = Wi‑Fi reset (setup portal). Do **not** hold the screen at power-on - that is BOOT/download mode.
+**Everywhere:** hold knob **5 s** = clear all Wi‑Fi networks and open the setup portal. Do **not** hold the screen at power-on - that is BOOT/download mode.
 
 On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle clock. Page 3 = radar color, beep on/off, tone A–E.
 
 ## Setup
 
 1. Power on → join **FlightScnr-AP** if prompted.
-2. Open [http://4.3.2.1](http://4.3.2.1) or [http://flightscnr.local](http://flightscnr.local) → enter Wi‑Fi credentials. Reboot the unit.
+2. Open [http://4.3.2.1](http://4.3.2.1) or [http://flightscnr.local](http://flightscnr.local) → enter Wi‑Fi credentials (or manage **Saved networks**). Reboot the unit.
 3. After connect: boot splash (~5 s) → radar.
 4. Set radar center, weather key, and optional route APIs at [http://flightscnr.local/](http://flightscnr.local/) (or device IP shown on settings page 1).
 
-To change settings later: same URL, **Save**. To reset Wi‑Fi only: hold knob 3s 
+You can save up to **3** Wi‑Fi networks. Preference order is slot order (#1 tried first). Manage them from the setup portal (**Saved networks**) or the online settings page (**Wi‑Fi networks** card: add, remove, reorder, update password).
+
+If a network fails repeatedly, it is **temporarily skipped** for the rest of that boot/session — credentials stay until you delete or edit them. The connecting screen shows whichever SSID is being tried.
+
+If Wi‑Fi stays down through several reconnect attempts, the setup portal opens again (networks are **not** wiped) so you can add or fix a network.
+
+To change other settings later: same URL, **Save**. To wipe all Wi‑Fi networks and reopen the portal: hold knob 5s. 
 
 ## Screenshots
 

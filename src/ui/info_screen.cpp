@@ -14,6 +14,7 @@
 #include "services/adsb_client.h"
 #include "services/api_keys.h"
 #include "services/map_center.h"
+#include "services/wifi_setup.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
 #include "ui/radar_scale.h"
@@ -157,8 +158,9 @@ void buildApiStatusStrings(char* airlabs_line, size_t airlabs_len, char* fa_line
 }
 
 void buildMainStrings(char* ip_line, size_t ip_len, char* wifi_line, size_t wifi_len,
-                      char* lat_line, size_t lat_len, char* lon_line, size_t lon_len,
-                      char* alt_line, size_t alt_len, char* web_line, size_t web_len) {
+                      char* saved_line, size_t saved_len, char* lat_line, size_t lat_len,
+                      char* lon_line, size_t lon_len, char* alt_line, size_t alt_len,
+                      char* web_line, size_t web_len) {
   if (WiFi.status() == WL_CONNECTED) {
     snprintf(ip_line, ip_len, "IP: %s", WiFi.localIP().toString().c_str());
     snprintf(wifi_line, wifi_len, "Wi-Fi: %s", WiFi.SSID().c_str());
@@ -166,6 +168,9 @@ void buildMainStrings(char* ip_line, size_t ip_len, char* wifi_line, size_t wifi
     snprintf(ip_line, ip_len, "IP: Not connected");
     snprintf(wifi_line, wifi_len, "Wi-Fi: —");
   }
+  snprintf(saved_line, saved_len, "Saved: %u/%u",
+           static_cast<unsigned>(wifiNetsCount()),
+           static_cast<unsigned>(config::kWifiMaxNetworks));
 
   snprintf(lat_line, lat_len, "Lat: %.5f", services::map_center::latitude());
   snprintf(lon_line, lon_len, "Lon: %.5f", services::map_center::longitude());
@@ -224,6 +229,7 @@ void buildColorsStrings(char* sweep_line, size_t sweep_len, char* detail_line,
 void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg) {
   char ip_line[40];
   char wifi_line[40];
+  char saved_line[24];
   char lat_line[24];
   char lon_line[24];
   char alt_line[24];
@@ -232,9 +238,9 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
   char fa_line[28];
   char fr24_line[20];
 
-  buildMainStrings(ip_line, sizeof(ip_line), wifi_line, sizeof(wifi_line), lat_line,
-                   sizeof(lat_line), lon_line, sizeof(lon_line), alt_line,
-                   sizeof(alt_line), web_line, sizeof(web_line));
+  buildMainStrings(ip_line, sizeof(ip_line), wifi_line, sizeof(wifi_line), saved_line,
+                   sizeof(saved_line), lat_line, sizeof(lat_line), lon_line, sizeof(lon_line),
+                   alt_line, sizeof(alt_line), web_line, sizeof(web_line));
   buildApiStatusStrings(airlabs_line, sizeof(airlabs_line), fa_line, sizeof(fa_line),
                         fr24_line, sizeof(fr24_line));
 
@@ -242,6 +248,7 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
   const InfoLine main_lines[] = {
       {ip_line, displayFontBody(), fg},
       {wifi_line, displayFontBody(), fg},
+      {saved_line, displayFontDetail(), label_fg},
       {lat_line, displayFontDetail(), label_fg},
       {lon_line, displayFontDetail(), label_fg},
       {alt_line, displayFontDetail(), label_fg},

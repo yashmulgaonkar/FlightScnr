@@ -27,7 +27,7 @@ constexpr char kPortalIp[] = "4.3.2.1";
 constexpr char kPortalHostname[] = "flightscnr";
 constexpr char kPortalHostUrl[] = "flightscnr.local";
 
-/** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times. */
+/** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times per SSID. */
 constexpr unsigned long kWifiConnectAttemptMs = 15000;
 constexpr uint8_t kWifiConnectAttempts = 3;
 constexpr unsigned long kWifiPortalTimeoutSec = 0;  // 0 = no timeout while configuring
@@ -37,9 +37,21 @@ constexpr unsigned long kWifiDownGraceMs = 4000;
 /** Minimum interval between background reconnect tries. */
 constexpr unsigned long kWifiReconnectIntervalMs = 15000;
 
+/** Multi-SSID store: up to this many SSID+password pairs (preference = slot order). */
+constexpr uint8_t kWifiMaxNetworks = 3;
+/** Consecutive failed connects against one SSID before session demotion. */
+constexpr uint8_t kWifiDemoteAfterFails = 3;
+/**
+ * After this many full silent-reconnect rounds where every saved SSID failed,
+ * open the setup portal (without wiping) so the user can add/fix a network.
+ */
+constexpr uint8_t kWifiPortalAfterReconnectFails = 3;
+
 // --- Knob button (GPIO 0, active LOW) ---
 constexpr gpio_num_t kKnobKeyPin = GPIO_NUM_0;
-constexpr unsigned long kKnobResetHoldMs = 3000UL;
+constexpr unsigned long kKnobResetHoldMs = 5000UL;
+/** Show Wi-Fi reset countdown UI after this hold (avoids flash on short presses). */
+constexpr unsigned long kKnobResetCountdownStartMs = 250UL;
 /** Ignore knob taps shorter than this (debounce). */
 constexpr unsigned long kKnobTapMinMs = 40UL;
 /** Ignore swipe gestures briefly after a screen change (prevents one gesture
