@@ -194,12 +194,26 @@ bool fetchTimezoneBlocking(double lat, double lon) {
   // getString() de-chunks transfer-encoded responses; timeapi.io serves this
   // body chunked, so reading the raw socket would leave hex size prefixes that
   // make ArduinoJson report InvalidInput.
+  constexpr int kMaxTzPayloadBytes = 8192;
+  const int content_len = http.getSize();
+  if (content_len > kMaxTzPayloadBytes) {
+    Serial.printf("[tz] response too large (Content-Length %d)\n", content_len);
+    http.end();
+    client.stop();
+    services::https::drainTlsHeapAfterSession();
+    return false;
+  }
   String payload = http.getString();
   http.end();
   client.stop();
   services::https::drainTlsHeapAfterSession();
   if (payload.isEmpty()) {
     Serial.println("[tz] empty response");
+    return false;
+  }
+  if (static_cast<int>(payload.length()) > kMaxTzPayloadBytes) {
+    Serial.printf("[tz] response too large (%u bytes)\n",
+                  static_cast<unsigned>(payload.length()));
     return false;
   }
 

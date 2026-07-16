@@ -402,6 +402,13 @@ bool fetchJsonMeta(const char* hex, MetaEntry* out) {
 
   // Planespotters serves Transfer-Encoding: chunked. Raw stream reads leave hex
   // chunk sizes in the body (ArduinoJson -> InvalidInput). getString() de-chunks.
+  constexpr int kMaxMetaPayloadBytes = 16384;
+  const int content_len = http.getSize();
+  if (content_len > kMaxMetaPayloadBytes) {
+    Serial.printf("[photo] meta too large for %s (Content-Length %d)\n", hex, content_len);
+    http.end();
+    return false;
+  }
   const String payload = http.getString();
   http.end();
 
@@ -410,6 +417,11 @@ bool fetchJsonMeta(const char* hex, MetaEntry* out) {
   }
   if (payload.isEmpty()) {
     Serial.println("[photo] meta empty body");
+    return false;
+  }
+  if (static_cast<int>(payload.length()) > kMaxMetaPayloadBytes) {
+    Serial.printf("[photo] meta too large for %s (%u bytes)\n", hex,
+                  static_cast<unsigned>(payload.length()));
     return false;
   }
 

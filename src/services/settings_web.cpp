@@ -133,7 +133,7 @@ button.sm.danger{border-color:#633;background:#2a1515;color:#fcc;}
 .foot{text-align:center;font-size:.8rem;color:var(--muted);margin:1.2rem 0 .2rem;}
 .foot a{color:var(--link);}
 </style></head><body>
-<form method="POST" action="/save">
+<form id="fs-save" method="POST" action="/save">
 <div class="wrap">
 <div class="app-head"><div class="logo"></div><h1>FlightScnr</h1></div>
 <p class="subtitle">Changes save to flash. Radar refreshes when you tap <strong>Save</strong>.</p>
@@ -144,7 +144,7 @@ void formatUsdMicro(uint32_t micro, char* out, size_t len, int decimals) {
 }
 
 void appendRaw(char* page, size_t len, size_t* used, const char* html) {
-  if (*used >= len) {
+  if (page == nullptr || used == nullptr || html == nullptr || *used >= len) {
     return;
   }
   const int n = snprintf(page + *used, len - *used, "%s", html);
@@ -154,30 +154,40 @@ void appendRaw(char* page, size_t len, size_t* used, const char* html) {
   }
 }
 
+void appendClamped(char* page, size_t len, size_t* used, int n) {
+  if (used == nullptr || n <= 0 || *used >= len) {
+    return;
+  }
+  const size_t space = len - *used;
+  *used += static_cast<size_t>(n) < space ? static_cast<size_t>(n) : space - 1;
+}
+
 // Emits a labelled on/off toggle row (label left, switch right). id is reused as name.
 void appendToggle(char* page, size_t len, size_t* used, const char* id, const char* label_html,
                   bool checked) {
+  if (page == nullptr || used == nullptr || *used >= len) {
+    return;
+  }
   const int n = snprintf(
       page + *used, len - *used,
       "<div class=\"chk\"><label for=\"%s\">%s</label>"
       "<span class=\"switch\"><input id=\"%s\" name=\"%s\" type=\"checkbox\" value=\"T\"%s>"
       "<span class=\"track\"></span></span></div>",
       id, label_html, id, id, checked ? " checked" : "");
-  if (n > 0) {
-    *used += static_cast<size_t>(n);
-  }
+  appendClamped(page, len, used, n);
 }
 
 // Emits an inline toggle switch (no row chrome) for use inside an API header.
 void appendInlineToggle(char* page, size_t len, size_t* used, const char* id, bool checked) {
+  if (page == nullptr || used == nullptr || *used >= len) {
+    return;
+  }
   const int n = snprintf(
       page + *used, len - *used,
       "<span class=\"switch\"><input id=\"%s\" name=\"%s\" type=\"checkbox\" value=\"T\"%s>"
       "<span class=\"track\"></span></span>",
       id, id, checked ? " checked" : "");
-  if (n > 0) {
-    *used += static_cast<size_t>(n);
-  }
+  appendClamped(page, len, used, n);
 }
 
 void redirectToSettings(const char* query) {
@@ -218,9 +228,7 @@ void appendAccentOptions(char* buf, size_t len, size_t* used) {
     const int n = snprintf(buf + *used, len - *used, "<option value=\"%u\"%s>%s</option>",
                            static_cast<unsigned>(i), (i == current) ? " selected" : "",
                            ui::radar::accentColorNameAt(i));
-    if (n > 0) {
-      *used += static_cast<size_t>(n);
-    }
+    appendClamped(buf, len, used, n);
   }
 }
 
@@ -229,7 +237,7 @@ void appendRangeMileHint(char* buf, size_t len, size_t* used) {
                          "<p class=\"hint\">Number with optional unit (mi, km, nm; default mi). "
                          "Snaps to nearest preset: 2, 3, 6, 8, 10, 20, or 30 mi.</p>");
   if (n > 0) {
-    *used += static_cast<size_t>(n);
+    appendClamped(buf, len, used, n);
   }
 }
 
@@ -248,7 +256,9 @@ void handleSettingsPage() {
 
   const int head_n = snprintf(page, kSettingsPageCap, "%s", kPageHead);
   if (head_n > 0) {
-    used = static_cast<size_t>(head_n);
+    used = static_cast<size_t>(head_n) < kSettingsPageCap
+               ? static_cast<size_t>(head_n)
+               : kSettingsPageCap - 1;
   }
 
   if (s_server->hasArg("saved")) {
@@ -282,9 +292,7 @@ void handleSettingsPage() {
       "<input id=\"radar_center\" name=\"radar_center\" type=\"text\" required "
       "autocomplete=\"off\" placeholder=\"37.636422, -122.365968\" value=\"%s\">",
       center_value);
-  if (center_n > 0) {
-    used += static_cast<size_t>(center_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, center_n);
 
   const ui::radar::DistanceUnit unit = ui::radar::distanceUnit();
   const int range_units_n = snprintf(
@@ -304,9 +312,7 @@ void handleSettingsPage() {
       unit == ui::radar::DistanceUnit::Km ? " selected" : "",
       unit == ui::radar::DistanceUnit::StatuteMile ? " selected" : "",
       unit == ui::radar::DistanceUnit::NauticalMile ? " selected" : "");
-  if (range_units_n > 0) {
-    used += static_cast<size_t>(range_units_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, range_units_n);
   appendRangeMileHint(page, kSettingsPageCap, &used);
 
   const int min_n = snprintf(
@@ -315,9 +321,7 @@ void handleSettingsPage() {
       "<input id=\"min_height\" name=\"min_height\" type=\"number\" min=\"0\" step=\"100\" "
       "value=\"%d\">",
       services::adsb::altitudeFloorFt());
-  if (min_n > 0) {
-    used += static_cast<size_t>(min_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, min_n);
 
   appendRaw(page, kSettingsPageCap, &used,
             "<label for=\"radar_accent\">Color theme</label>"
@@ -337,7 +341,7 @@ void handleSettingsPage() {
         "On the device: Settings &rarr; Display &rarr; Facing, then turn the dial.</p>",
         static_cast<unsigned>(ui::radar::facingDeg()));
     if (facing_n > 0) {
-      used += static_cast<size_t>(facing_n);
+      appendClamped(page, kSettingsPageCap, &used, facing_n);
     }
   }
   appendToggle(page, kSettingsPageCap, &used, "show_sweep", "Show radar sweep line",
@@ -365,9 +369,7 @@ void handleSettingsPage() {
       bright == 20 ? " selected" : "", bright == 40 ? " selected" : "",
       bright == 60 ? " selected" : "", bright == 80 ? " selected" : "",
       bright == 100 ? " selected" : "");
-  if (bright_n > 0) {
-    used += static_cast<size_t>(bright_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, bright_n);
 
   const unsigned long detail_sec = ui::displayPrefsFlightDetailTimeoutMs() / 1000UL;
   const unsigned long clock_sec = ui::displayPrefsClockWeatherTimeoutMs() / 1000UL;
@@ -392,9 +394,7 @@ void handleSettingsPage() {
       detail_sec == 20 ? " selected" : "", detail_sec == 30 ? " selected" : "",
       clock_sec == 0 ? " selected" : "", clock_sec == 5 ? " selected" : "",
       clock_sec == 10 ? " selected" : "", clock_sec == 15 ? " selected" : "");
-  if (timeouts_n > 0) {
-    used += static_cast<size_t>(timeouts_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, timeouts_n);
 
   appendToggle(page, kSettingsPageCap, &used, "idle_clock",
                "Return to clock when no aircraft visible",
@@ -426,7 +426,7 @@ void handleSettingsPage() {
         "</select>",
         night_mode == services::offhours::Mode::Dim ? " selected" : "",
         night_mode == services::offhours::Mode::DisplayOff ? " selected" : "");
-    if (nm > 0) used += static_cast<size_t>(nm);
+    if (nm > 0) appendClamped(page, kSettingsPageCap, &used, nm);
   }
   {
     const uint16_t start = services::offhours::startMinute();
@@ -440,7 +440,7 @@ void handleSettingsPage() {
         "<input type=\"time\" id=\"night_end\" name=\"night_end\" value=\"%02u:%02u\"></div>"
         "</div>",
         start / 60, start % 60, end / 60, end % 60);
-    if (nt > 0) used += static_cast<size_t>(nt);
+    if (nt > 0) appendClamped(page, kSettingsPageCap, &used, nt);
   }
   appendRaw(page, kSettingsPageCap, &used,
             "<p class=\"note\">During off-hours the device shows a dim clock or turns off the "
@@ -468,9 +468,7 @@ void handleSettingsPage() {
       beep_tone == 'A' ? " selected" : "", beep_tone == 'B' ? " selected" : "",
       beep_tone == 'C' ? " selected" : "", beep_tone == 'D' ? " selected" : "",
       beep_tone == 'E' ? " selected" : "");
-  if (beep_n > 0) {
-    used += static_cast<size_t>(beep_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, beep_n);
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
   // ---------- Alerts card ----------
@@ -493,9 +491,7 @@ void handleSettingsPage() {
       "autocomplete=\"off\" placeholder=\"ACA739, UAL123\" value=\"%s\">",
       watch_buf);
 
-  if (watch_n > 0) {
-    used += static_cast<size_t>(watch_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, watch_n);
   if (watch_count == 0) {
     appendRaw(page, kSettingsPageCap, &used,
               "<p class=\"usage\">No flight numbers tracked.</p>");
@@ -504,7 +500,7 @@ void handleSettingsPage() {
                                    "<p class=\"usage\"><b>Tracking %u:</b> %s</p>",
                                    static_cast<unsigned>(watch_count), watch_buf);
     if (tracked_n > 0) {
-      used += static_cast<size_t>(tracked_n);
+      appendClamped(page, kSettingsPageCap, &used, tracked_n);
     }
   }
   appendRaw(page, kSettingsPageCap, &used,
@@ -563,9 +559,7 @@ void handleSettingsPage() {
       "<p class=\"hint\">AeroAPI GET /flights/{ident}; default $0.005 per result set.</p>"
       "<p class=\"usage\">%s</p></div>",
       masked, fa_budget, fa_cost, fa_used_note);
-  if (fa_n > 0) {
-    used += static_cast<size_t>(fa_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, fa_n);
 
   // AirLabs (2nd priority)
   appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
@@ -595,9 +589,7 @@ void handleSettingsPage() {
       "step=\"1\" value=\"%u\">"
       "<p class=\"usage\">%s</p></div>",
       masked, static_cast<unsigned>(services::apikeys::airLabsMaxCalls()), al_used_note);
-  if (al_n > 0) {
-    used += static_cast<size_t>(al_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, al_n);
 
   // FlightRadar24 (3rd priority)
   appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
@@ -636,9 +628,7 @@ void handleSettingsPage() {
       "</div></div>"
       "<p class=\"usage\">%s</p></div>",
       masked, fr_budget, fr_cost, fr_used_note);
-  if (fr_n > 0) {
-    used += static_cast<size_t>(fr_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, fr_n);
 
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
@@ -664,41 +654,26 @@ void handleSettingsPage() {
       "forecast.</p></div></details>",
       masked, services::weather::useImperial() ? "" : " selected",
       services::weather::useImperial() ? " selected" : "");
-  if (wx_n > 0) {
-    used += static_cast<size_t>(wx_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, wx_n);
 
-  // ---------- Route cache card ----------
-  appendRaw(page, kSettingsPageCap, &used,
-            "<details class=\"card\"><summary><span class=\"ico\">&#8681;</span>Route cache"
-            "<span class=\"sum\">export</span><span class=\"chev\">&#9656;</span>"
-            "</summary><div class=\"body\">"
-            "<p class=\"note\">Airline/route lookups are cached on flash (written about every "
-            "10&nbsp;min) so repeat callsigns don't re-bill an API.</p>"
-            "<a class=\"dl\" href=\"/route_cache.csv\" download=\"route_cache.csv\">"
-            "&#8681;&nbsp; Download route_cache.csv</a></div></details>");
-
-  // Close main settings form (Wi-Fi uses its own POST endpoints).
-  const int savebar_n = snprintf(
+  // Close the settings form but keep .wrap open so Wi-Fi / route-cache cards
+  // share the same column spacing (nested forms cannot live inside /save).
+  const int form_close_n = snprintf(
       page + used, kSettingsPageCap - used,
       "<input type=\"hidden\" name=\"alert_watch\" id=\"alert_watch_post\" value=\"%s\">"
       "<script>"
-      "document.querySelector('form[action=\"/save\"]').addEventListener('submit',function(){"
+      "document.getElementById('fs-save').addEventListener('submit',function(){"
       "var v=document.getElementById('alert_watch'),h=document.getElementById('alert_watch_post');"
       "if(v&&h){h.value=v.value;}"
       "});"
       "</script>"
-      "<div class=\"savebar\"><div class=\"inner\">"
-      "<button class=\"save\" type=\"submit\">Save</button></div></div>"
-      "</div></form><div class=\"wrap\">",
+      "</form>",
       watch_buf);
-  if (savebar_n > 0) {
-    used += static_cast<size_t>(savebar_n);
-  }
+  appendClamped(page, kSettingsPageCap, &used, form_close_n);
 
-  // ---------- Wi-Fi networks card ----------
+  // ---------- Wi-Fi networks card (above route cache) ----------
   appendRaw(page, kSettingsPageCap, &used,
-            "<details class=\"card\" open><summary><span class=\"ico\">W</span>"
+            "<details class=\"card\"><summary><span class=\"ico\">W</span>"
             "Wi&#8209;Fi networks<span class=\"sum\">up to 3</span>"
             "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
             "<p class=\"note\">Tried in preference order (#1 first). After repeated failures a "
@@ -758,7 +733,7 @@ void handleSettingsPage() {
         static_cast<unsigned>(i), static_cast<unsigned>(i), static_cast<unsigned>(i),
         static_cast<unsigned>(i));
     if (row_n > 0) {
-      used += static_cast<size_t>(row_n);
+      appendClamped(page, kSettingsPageCap, &used, row_n);
     }
   }
 
@@ -776,25 +751,39 @@ void handleSettingsPage() {
         "Add network</button></p></form></div>",
         static_cast<unsigned>(net_n), static_cast<unsigned>(config::kWifiMaxNetworks));
     if (add_n > 0) {
-      used += static_cast<size_t>(add_n);
+      appendClamped(page, kSettingsPageCap, &used, add_n);
     }
   } else {
     appendRaw(page, kSettingsPageCap, &used,
               "<p class=\"note\">Store full (3/3). Remove one before adding another.</p>");
   }
 
-  const int wifi_tail_n = snprintf(
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"wifi-note\">Hold knob 5&nbsp;s clears all networks and opens the setup "
+            "portal.</p></div></details>");
+
+  // ---------- Route cache card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#8681;</span>Route cache"
+            "<span class=\"sum\">export</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">"
+            "<p class=\"note\">Airline/route lookups are cached on flash (written about every "
+            "10&nbsp;min) so repeat callsigns don't re-bill an API.</p>"
+            "<a class=\"dl\" href=\"/route_cache.csv\" download=\"route_cache.csv\">"
+            "&#8681;&nbsp; Download route_cache.csv</a></div></details>");
+
+  const int tail_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<p class=\"wifi-note\">Hold knob 5&nbsp;s clears all networks and opens the setup "
-      "portal.</p></div></details>"
       "<p class=\"foot\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
       "github.com/yashmulgaonkar/FlightScnr</a></p>"
-      "</div></body></html>",
+      "</div>"
+      "<div class=\"savebar\"><div class=\"inner\">"
+      "<button class=\"save\" type=\"submit\" form=\"fs-save\">Save</button></div></div>"
+      "</body></html>",
       config::kGithubRepoUrl);
-  if (wifi_tail_n > 0) {
+  if (tail_n > 0) {
     const size_t space = kSettingsPageCap - used;
-    used += static_cast<size_t>(wifi_tail_n) < space ? static_cast<size_t>(wifi_tail_n)
-                                                     : space - 1;
+    used += static_cast<size_t>(tail_n) < space ? static_cast<size_t>(tail_n) : space - 1;
   }
   if (used >= kSettingsPageCap) {
     used = kSettingsPageCap - 1;
@@ -997,6 +986,10 @@ void settingsWebStop() {
     s_server->stop();
     delete s_server;
     s_server = nullptr;
+  }
+  if (s_settings_page != nullptr) {
+    heap_caps_free(s_settings_page);
+    s_settings_page = nullptr;
   }
   s_active = false;
 #ifdef WM_MDNS

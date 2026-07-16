@@ -993,8 +993,11 @@ void fetchWatchdog(unsigned long now_ms) {
   Serial.printf("[adsb] fetch stall recovery (%lums busy)\n",
                 now_ms - s_fetch_busy_since_ms);
   if (s_fetch_task != nullptr) {
+    // Worker may hold the HTTPS mutex / stack C++ clients; force-unlock so
+    // other HTTPS users are not stuck on "https busy" after the kill.
     vTaskDelete(s_fetch_task);
     s_fetch_task = nullptr;
+    services::https::forceUnlock();
   }
   s_fetch_requested = false;
   s_fetch_busy = false;

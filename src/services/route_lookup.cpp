@@ -796,6 +796,16 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
   }
   // getString() decodes chunked transfer bodies; raw stream reads leave chunk
   // size prefixes that make ArduinoJson report InvalidInput (see tz_lookup).
+  const int content_len = http.getSize();
+  if (content_len > static_cast<int>(kMaxHttpPayloadBytes)) {
+    if ((config::kSerialTraceDebug || config::kRadarResumeDebug) && worker_callsign != nullptr) {
+      Serial.printf("[detail] http too large %s (Content-Length %d)\n", worker_callsign,
+                    content_len);
+    }
+    http.end();
+    client.stop();
+    return false;
+  }
   String payload = http.getString();
   http.end();
   client.stop();

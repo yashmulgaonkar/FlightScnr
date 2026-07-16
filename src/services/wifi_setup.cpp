@@ -1056,6 +1056,10 @@ bool openConfigPortal(WiFiManager& wm) {
   }
 
   s_active_wm = nullptr;
+  if (s_portal_page != nullptr) {
+    heap_caps_free(s_portal_page);
+    s_portal_page = nullptr;
+  }
   return waitForStaAfterPortal() && wifiLinkUp();
 }
 
