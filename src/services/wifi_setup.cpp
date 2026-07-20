@@ -18,7 +18,6 @@
 #include "config.h"
 #include "hardware/input.h"
 #include "services/adsb_client.h"
-#include "services/reboot.h"
 #include "services/settings_web.h"
 #include "ui/boot_screens.h"
 #include "ui/flight_detail_screen.h"
@@ -1077,7 +1076,7 @@ bool runConfigPortalFlow() {
   onStaLinkReady();
   Serial.println("WiFi configured — rebooting");
   delay(400);
-  services::hardReboot();  // full chip reset (soft reset hangs USB-CDC boot with no host)
+  esp_restart();
   return false;
 }
 
@@ -1237,7 +1236,7 @@ void wifiResetCredentialsAndReboot() {
   resetWifiCredentials();
   bootScreenShowWifiCleared();
   delay(800);
-  services::hardReboot();  // full chip reset (soft reset hangs USB-CDC boot with no host)
+  esp_restart();
 }
 
 bool wifiReconnect() {

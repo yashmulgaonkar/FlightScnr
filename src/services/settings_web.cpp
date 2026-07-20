@@ -16,7 +16,6 @@
 
 #include "config.h"
 #include "services/firmware_image.h"
-#include "services/reboot.h"
 #include "hardware/buzzer.h"
 #include "hardware/display_brightness.h"
 #include "services/adsb_client.h"
@@ -808,8 +807,9 @@ void handleSettingsPage() {
             "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
             "<b>Warning.</b> Upload only the <b>app image</b> "
             "(<code>firmware.bin</code>, the WebFlasher &ldquo;App only&rdquo; file) &mdash; "
-            "<b>not</b> <code>firmware-merged.bin</code>. The device reboots into the new "
-            "firmware. Do not disconnect power during the update.</div>"
+            "<b>not</b> <code>firmware-merged.bin</code>. Do not disconnect power during "
+            "the update. After it installs, press the device&rsquo;s <b>reset button</b> "
+            "(or unplug/replug power) to start the new firmware.</div>"
             "<input id=\"fw_file\" type=\"file\" accept=\".bin\">"
             "<p style=\"margin-top:.6rem\">"
             "<button id=\"fw_btn\" class=\"sm\" type=\"button\">Upload &amp; flash</button></p>"
@@ -824,8 +824,8 @@ void handleSettingsPage() {
             "fill=document.getElementById('fw_fill');"
             "b.addEventListener('click',function(){"
             "if(!f.files||!f.files[0]){m.textContent='Choose a firmware.bin file first.';return;}"
-            "if(!confirm('Flash this firmware and reboot the device? Do not upload the "
-            "merged image, and keep power connected.'))return;"
+            "if(!confirm('Flash this firmware? Do not upload the merged image, and keep "
+            "power connected. You will need to reset the device afterwards.'))return;"
             "var fd=new FormData();fd.append('firmware',f.files[0]);"
             "var x=new XMLHttpRequest();x.open('POST','/update');"
             "b.disabled=true;f.disabled=true;bar.style.display='block';"
@@ -833,8 +833,8 @@ void handleSettingsPage() {
             "var p=Math.round(e.loaded/e.total*100);fill.style.width=p+'%';"
             "m.textContent='Uploading '+p+'%';}};"
             "x.onload=function(){if(x.status==200){fill.style.width='100%';"
-            "m.textContent='Update OK \\u2014 rebooting\\u2026 this page reloads in ~10 s.';"
-            "setTimeout(function(){location.href='/';},10000);}"
+            "m.textContent='Update installed \\u2014 press the device\\u2019s reset button "
+            "to boot the new firmware.';}"
             "else{m.textContent='Failed: '+(x.responseText||('HTTP '+x.status));"
             "b.disabled=false;f.disabled=false;}};"
             "x.onerror=function(){m.textContent='Upload error (connection lost).';"
@@ -1011,12 +1011,12 @@ void handleWifiPass() {
 // The upload streams into the *inactive* OTA app partition; otadata is only
 // switched by Update.end(true) after the whole image is written and validated.
 // A wrong/aborted upload therefore leaves the running firmware untouched — no
-// brick risk. On success we schedule a delayed reboot from settingsWebPoll()
-// so the HTTP response can flush before ESP.restart().
+// brick risk. On success the user is told to reset the device manually: a
+// programmatic reset (esp_restart or a full RTC-WDT chip reset) hangs early in
+// boot on this board (ESP32-S3, USB-CDC-on-boot) when no USB host is attached —
+// only the hardware/power reset recovers. See docs/adr/0003-ota-manual-restart.md.
 
 bool s_ota_upload_failed = false;   // set on any per-request upload error
-bool s_ota_reboot_pending = false;  // success -> reboot from poll loop
-unsigned long s_ota_reboot_at_ms = 0;
 bool s_ota_header_checked = false;  // magic byte checked on the first write chunk
 size_t s_ota_since_breather = 0;    // bytes written since the last delay(1)
 
@@ -1119,7 +1119,7 @@ void handleUpdateUpload() {
 void handleUpdateDone() {
   if (s_ota_upload_failed || !Update.isFinished() || Update.hasError()) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "Update failed (error %u). Device not rebooted.",
+    snprintf(msg, sizeof(msg), "Update failed (error %u). Device not restarted.",
              static_cast<unsigned>(Update.getError()));
     s_server->send(500, "text/plain; charset=utf-8", msg);
     return;
@@ -1127,14 +1127,14 @@ void handleUpdateDone() {
   // Close the connection after this response so the browser can't hold a
   // keep-alive socket open — an idle keep-alive would block the next
   // handleClient() and stall the poll loop. Header must be set before send().
+  // We do NOT reboot programmatically: on this board a soft/WDT reset hangs the
+  // USB-CDC boot with no host attached, so the new firmware only starts after a
+  // manual reset. See docs/adr/0003-ota-manual-restart.md.
   s_server->sendHeader("Connection", "close");
-  // Defer the reboot (fired from settingsWebPoll before its active-guard) so
-  // this response reaches the browser first — the ~800 ms delay is the guard.
   s_server->send(200, "text/plain; charset=utf-8",
-                 "Update OK. Rebooting into the new firmware\xE2\x80\xA6");
+                 "Update installed. Press the reset button on the device (or "
+                 "unplug/replug power) to start the new firmware.");
   s_server->client().stop();
-  s_ota_reboot_pending = true;
-  s_ota_reboot_at_ms = millis() + 800;
 }
 
 void handleNotFound() {
@@ -1209,17 +1209,6 @@ void settingsWebStop() {
 }
 
 void settingsWebPoll() {
-  // Fire a pending OTA reboot BEFORE the active-guard and BEFORE handleClient().
-  // A WiFi blip during the heavy flash write can trigger settingsWebStop()
-  // (clearing s_active / s_server), and an idle keep-alive socket can block
-  // handleClient() — both would strand the reboot if it lived after those.
-  // The response was already sent (and the socket closed) on the iteration that
-  // set the flag; the ~800 ms defer gives it time to leave the wire.
-  if (s_ota_reboot_pending && millis() >= s_ota_reboot_at_ms) {
-    Serial.println("[ota] rebooting into new firmware");
-    Serial.flush();
-    services::hardReboot();  // full chip reset: soft reset hangs USB-CDC boot
-  }
   if (!s_active || s_server == nullptr) {
     return;
   }
