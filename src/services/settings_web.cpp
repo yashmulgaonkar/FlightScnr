@@ -1121,7 +1121,11 @@ void handleUpdateDone() {
     char msg[96];
     snprintf(msg, sizeof(msg), "Update failed (error %u). Device not restarted.",
              static_cast<unsigned>(Update.getError()));
+    // Close the connection (as in the success path) so an idle keep-alive
+    // socket can't block the next handleClient(). Header must be set before send.
+    s_server->sendHeader("Connection", "close");
     s_server->send(500, "text/plain; charset=utf-8", msg);
+    s_server->client().stop();
     return;
   }
   // Close the connection after this response so the browser can't hold a

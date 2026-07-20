@@ -21,6 +21,15 @@ namespace services::ota {
  * Rules (all must hold, else false):
  *   - head_len >= 1 and head != nullptr.
  *   - head[0] == 0xE9 (ESP image magic byte).
+ *   - if head_len >= kAppDescOffset + 4: the esp_app_desc magic
+ *       (kAppDescMagic = 0xABCD5432, little-endian) must be present at byte
+ *       offset kAppDescOffset (0x20). This distinguishes a real *app* image
+ *       (firmware.bin) from a merged/full image (firmware-merged.bin) — the
+ *       latter starts with the bootloader (also 0xE9) but has no app descriptor
+ *       there, and flashing it into the app partition would corrupt the device.
+ *       If head_len is too short to reach the descriptor, this check is skipped
+ *       (not a rejection) — the real first WRITE chunk is ~1.4-2 KB, so in
+ *       practice it is always present.
  *   - if total_size > 0:
  *       total_size <= max_partition_size, and
  *       total_size >= kMinImageSize (a plausible minimum app image).
@@ -47,6 +56,14 @@ bool firmwareSizeLooksValid(size_t total_size, size_t max_partition_size);
 
 /** ESP32 image magic byte at offset 0. */
 constexpr uint8_t kEspImageMagic = 0xE9;
+
+/** Byte offset of the esp_app_desc structure in an app image (right after the
+ *  32-byte image + segment header). A merged/bootloader image has no app
+ *  descriptor here. */
+constexpr size_t kAppDescOffset = 0x20;
+
+/** esp_app_desc magic word (little-endian at kAppDescOffset). */
+constexpr uint32_t kAppDescMagic = 0xABCD5432u;
 
 /** Plausible minimum size of a real app image (64 KB). Smaller uploads are
  *  almost certainly a wrong/truncated file, not the firmware.bin. */

@@ -4,6 +4,8 @@
 
 using services::ota::firmwareHeaderLooksValid;
 using services::ota::firmwareSizeLooksValid;
+using services::ota::kAppDescMagic;
+using services::ota::kAppDescOffset;
 using services::ota::kEspImageMagic;
 using services::ota::kMinImageSize;
 
@@ -13,8 +15,38 @@ void tearDown(void) {}
 // Target OTA app partition size on the T-Encoder Pro (0x640000 = 6.5 MB).
 static constexpr size_t kPart = 0x640000u;
 
-// (a) valid: magic byte + a size comfortably within the partition.
+// A realistic app-image head: 0xE9 at offset 0 and the esp_app_desc magic
+// (little-endian) at offset 0x20 — like the real first WRITE chunk (~1.4-2 KB).
+static uint8_t s_app_head[64];
+static void buildAppHead(bool with_desc_magic) {
+  for (size_t i = 0; i < sizeof(s_app_head); ++i) s_app_head[i] = 0x00;
+  s_app_head[0] = kEspImageMagic;
+  if (with_desc_magic) {
+    s_app_head[kAppDescOffset + 0] = static_cast<uint8_t>(kAppDescMagic & 0xFF);
+    s_app_head[kAppDescOffset + 1] = static_cast<uint8_t>((kAppDescMagic >> 8) & 0xFF);
+    s_app_head[kAppDescOffset + 2] = static_cast<uint8_t>((kAppDescMagic >> 16) & 0xFF);
+    s_app_head[kAppDescOffset + 3] = static_cast<uint8_t>((kAppDescMagic >> 24) & 0xFF);
+  }
+}
+
+// (a) valid: full-length app head with 0xE9 + app-desc magic at 0x20.
 void test_valid_image(void) {
+  buildAppHead(/*with_desc_magic=*/true);
+  TEST_ASSERT_TRUE(firmwareHeaderLooksValid(s_app_head, sizeof(s_app_head),
+                                            5u * 1024u * 1024u, kPart));
+}
+
+// (a2) merged/bootloader image: starts with 0xE9 and fits, but has NO app-desc
+// magic at 0x20 -> rejected (would corrupt the app partition if flashed).
+void test_merged_image_rejected(void) {
+  buildAppHead(/*with_desc_magic=*/false);
+  TEST_ASSERT_FALSE(firmwareHeaderLooksValid(s_app_head, sizeof(s_app_head),
+                                             5u * 1024u * 1024u, kPart));
+}
+
+// (a3) short head (< 0x24 bytes): descriptor check is skipped, so a bare 0xE9
+// in-range head still passes (real first chunk is always long enough).
+void test_short_head_skips_desc_check(void) {
   const uint8_t head[] = {kEspImageMagic, 0x00, 0x03, 0x02};
   TEST_ASSERT_TRUE(firmwareHeaderLooksValid(head, sizeof(head),
                                             5u * 1024u * 1024u, kPart));
@@ -90,6 +122,8 @@ void test_size_too_big(void) {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_valid_image);
+  RUN_TEST(test_merged_image_rejected);
+  RUN_TEST(test_short_head_skips_desc_check);
   RUN_TEST(test_wrong_magic);
   RUN_TEST(test_unknown_total_size);
   RUN_TEST(test_too_big);

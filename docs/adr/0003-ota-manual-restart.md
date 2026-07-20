@@ -56,3 +56,9 @@ räumt das vollständig auf.
   Diese können im Feld (ohne USB-Host) denselben Boot-Hang zeigen. Das ist in
   diesem OTA-PR **nicht** gefixt — eigenes Follow-up-Ticket, damit der PR sauber
   auf das OTA-Feature scoped bleibt.
+- **Bekannte Einschränkung:** Der `/update`-Endpunkt ist **unauthentifiziert**
+  (erreichbar, solange das Gerät im Heim-WLAN als STA verbunden ist). Das ist
+  eine bewusste Design-Entscheidung — Absicherung über Confirm-Dialog + deutliche
+  Warnung statt Login, konsistent zum offenen Settings-Modell (und zum
+  WebFlasher). Ein optionales PIN/Token vor dem Upload ist ein möglicher
+  Follow-up, falls stärkerer Schutz gewünscht wird.
