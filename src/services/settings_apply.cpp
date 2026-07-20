@@ -22,7 +22,8 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
                            const char* lon_str, const char* dist_unit_str,
                            const char* legacy_miles_checkbox,
                            const char* cardinals_checkbox,
-                           const char* min_height_str, const char* range_mi_str,
+                           const char* min_height_str, const char* max_height_str,
+                           const char* range_mi_str,
                            const char* airlabs_key, const char* flightaware_key,
                            const char* fr24_key, const char* use_airlabs_checkbox,
                            const char* use_flightaware_checkbox,
@@ -47,6 +48,7 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
     ui::radar::saveCompassRoseFromForm(cardinals_checkbox);
   }
   services::adsb::saveAltitudeFloorFromForm(min_height_str);
+  services::adsb::saveAltitudeCeilingFromForm(max_height_str);
   services::apikeys::saveFromForm(airlabs_key, flightaware_key, fr24_key);
   services::apikeys::saveEnabledFromForm(use_airlabs_checkbox, use_flightaware_checkbox,
                                          use_fr24_checkbox);
