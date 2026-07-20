@@ -317,10 +317,16 @@ void handleSettingsPage() {
 
   const int min_n = snprintf(
       page + used, kSettingsPageCap - used,
+      "<div class=\"row2\"><div>"
       "<label for=\"min_height\">Min altitude floor (ft, 0 = off)</label>"
       "<input id=\"min_height\" name=\"min_height\" type=\"number\" min=\"0\" step=\"100\" "
-      "value=\"%d\">",
-      services::adsb::altitudeFloorFt());
+      "value=\"%d\">"
+      "</div><div>"
+      "<label for=\"max_height\">Max altitude ceiling (ft, 0 = off)</label>"
+      "<input id=\"max_height\" name=\"max_height\" type=\"number\" min=\"0\" step=\"100\" "
+      "value=\"%d\">"
+      "</div></div>",
+      services::adsb::altitudeFloorFt(), services::adsb::altitudeCeilingFt());
   appendClamped(page, kSettingsPageCap, &used, min_n);
 
   appendRaw(page, kSettingsPageCap, &used,
@@ -821,6 +827,7 @@ void handleSave() {
       s_server->arg("dist_unit").c_str(), s_server->arg("use_miles").c_str(),
       s_server->arg("show_cardinals").c_str(),
       s_server->arg("min_height").c_str(),
+      s_server->arg("max_height").c_str(),
       s_server->arg("range_mi").c_str(), s_server->arg("airlabs_key").c_str(),
       s_server->arg("flightaware_key").c_str(), s_server->arg("fr24_key").c_str(),
       s_server->arg("use_airlabs").c_str(), s_server->arg("use_flightaware").c_str(),

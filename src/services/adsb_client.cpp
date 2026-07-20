@@ -21,6 +21,7 @@
 #include "config.h"
 #include "geo/flat_earth.h"
 #include "services/airport_lookup.h"
+#include "services/altitude_filter.h"
 #include "services/https_heap.h"
 #include "services/https_lock.h"
 #include "services/route_lookup.h"
@@ -260,10 +261,12 @@ void logAircraftToSerial(const Aircraft* planes, size_t count, double center_lat
 constexpr char kPrefsNamespace[] = "flightscnr";
 constexpr char kPrefsAltFloorKey[] = "alt_floor_ft";
 constexpr char kLegacyAltFloorKey[] = "minAltFt";
+constexpr char kPrefsAltCeilKey[] = "alt_ceil_ft";
 
 Aircraft s_aircraft[kMaxAircraft];
 size_t s_aircraft_count = 0;
 int s_altitude_floor_ft = config::kFactoryAltitudeFloorFt;
+int s_altitude_ceiling_ft = config::kFactoryAltitudeCeilingFt;
 
 Aircraft s_aircraft_staging[kMaxAircraft];
 size_t s_aircraft_staging_count = 0;
@@ -383,15 +386,14 @@ bool readAltitudeFt(const JsonObject& plane, float* out_ft) {
   return readJsonFloat(plane, "alt_geom", out_ft);
 }
 
-bool passesAltitudeFloor(const JsonObject& plane) {
-  if (s_altitude_floor_ft <= 0) {
+bool passesAltitudeBand(const JsonObject& plane) {
+  if (s_altitude_floor_ft <= 0 && s_altitude_ceiling_ft <= 0) {
     return true;
   }
   float alt_ft = 0.0f;
-  if (!readAltitudeFt(plane, &alt_ft)) {
-    return false;
-  }
-  return alt_ft >= static_cast<float>(s_altitude_floor_ft);
+  const bool has = readAltitudeFt(plane, &alt_ft);
+  return services::adsb::altitudeWithinBand(has, alt_ft, s_altitude_floor_ft,
+                                            s_altitude_ceiling_ft);
 }
 
 void copyJsonStringTrimmed(const JsonObject& obj, const char* key, char* out,
@@ -646,6 +648,7 @@ void trafficFilterBootLoad() {
   Preferences prefs;
   if (!prefs.begin(kPrefsNamespace, true)) {
     s_altitude_floor_ft = config::kFactoryAltitudeFloorFt;
+    s_altitude_ceiling_ft = config::kFactoryAltitudeCeilingFt;
     return;
   }
   if (prefs.isKey(kPrefsAltFloorKey)) {
@@ -657,14 +660,24 @@ void trafficFilterBootLoad() {
   if (s_altitude_floor_ft < 0) {
     s_altitude_floor_ft = 0;
   }
+  s_altitude_ceiling_ft =
+      prefs.getInt(kPrefsAltCeilKey, config::kFactoryAltitudeCeilingFt);
+  if (s_altitude_ceiling_ft < 0) {
+    s_altitude_ceiling_ft = 0;
+  }
   prefs.end();
 
   if (s_altitude_floor_ft > 0) {
     Serial.printf("Traffic altitude floor: %d ft\n", s_altitude_floor_ft);
   }
+  if (s_altitude_ceiling_ft > 0) {
+    Serial.printf("Traffic altitude ceiling: %d ft\n", s_altitude_ceiling_ft);
+  }
 }
 
 int altitudeFloorFt() { return s_altitude_floor_ft; }
+
+int altitudeCeilingFt() { return s_altitude_ceiling_ft; }
 
 void saveAltitudeFloorFromForm(const char* value) {
   int min_ft = 0;
@@ -687,6 +700,27 @@ void saveAltitudeFloorFromForm(const char* value) {
   }
 }
 
+void saveAltitudeCeilingFromForm(const char* value) {
+  int max_ft = 0;
+  if (value != nullptr && value[0] != '\0') {
+    max_ft = static_cast<int>(lroundf(strtof(value, nullptr)));
+  }
+  if (max_ft < 0) {
+    max_ft = 0;
+  }
+  Preferences prefs;
+  if (prefs.begin(kPrefsNamespace, false)) {
+    prefs.putInt(kPrefsAltCeilKey, max_ft);
+    prefs.end();
+  }
+  s_altitude_ceiling_ft = max_ft;
+  if (max_ft > 0) {
+    Serial.printf("Traffic altitude ceiling: %d ft\n", max_ft);
+  } else {
+    Serial.println("Traffic altitude ceiling off");
+  }
+}
+
 bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count) {
   JsonArray ac = doc["ac"].as<JsonArray>();
   if (ac.isNull()) {
@@ -705,7 +739,7 @@ bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count) {
     if (isOnGround(plane) && !config::kTrafficIncludeGround) {
       continue;
     }
-    if (!passesAltitudeFloor(plane)) {
+    if (!passesAltitudeBand(plane)) {
       continue;
     }
 

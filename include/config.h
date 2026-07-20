@@ -115,6 +115,8 @@ constexpr size_t kRouteCacheFileMaxEntries = 1500;
 constexpr bool kTrafficIncludeGround = false;
 /** Minimum altitude (ft); 0 disables the filter. */
 constexpr int kFactoryAltitudeFloorFt = 500;
+/** Maximum altitude (ft); 0 disables the filter. */
+constexpr int kFactoryAltitudeCeilingFt = 0;
 
 /** Serial [gfx]/[radar] SPI debug (set false once stable). */
 constexpr bool kGfxDebug = false;

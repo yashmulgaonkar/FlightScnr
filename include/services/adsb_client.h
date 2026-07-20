@@ -127,6 +127,8 @@ uint32_t fetchTaskStackFreeBytes();
 void trafficFilterBootLoad();
 int altitudeFloorFt();
 void saveAltitudeFloorFromForm(const char* value);
+int altitudeCeilingFt();
+void saveAltitudeCeilingFromForm(const char* value);
 
 /** Merge route fields into the live aircraft list entry for callsign. */
 void applyRouteFieldsByCallsign(const char* callsign, const char* airline,
