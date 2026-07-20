@@ -346,8 +346,12 @@ void applyCallsignAirlineFallback(const char* callsign, RouteInfo* route) {
     return;
   }
   services::airline::resolveFromCallsign(callsign, true, route->airline, sizeof(route->airline));
-  services::airline::resolveIcaoFromCallsign(callsign, true, route->airline_icao,
-                                             sizeof(route->airline_icao));
+  // Keep an ICAO a source already supplied (e.g. adsbdb route-only hit) — it
+  // drives the local logo lookup. Only fill it from the prefix when empty.
+  if (route->airline_icao[0] == '\0') {
+    services::airline::resolveIcaoFromCallsign(callsign, true, route->airline_icao,
+                                               sizeof(route->airline_icao));
+  }
 }
 
 bool detailRouteApiAllowed() { return services::https::heapReadyForRouteApi(); }

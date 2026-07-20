@@ -16,8 +16,10 @@ enum class ApiSource : uint8_t {
   kAirLabs,
   kFlightAware,
   kFr24,
-  kAdsbDb,  // free key-less adsbdb.com route source
   kPrefix,  // callsign-prefix fallback when no API keys / all failed
+  // NOTE: appended at the end to keep the persisted flash-cache wire format
+  // stable (route_cache_store maps ApiSource value <-> tag; kPrefix must stay 5).
+  kAdsbDb,  // free key-less adsbdb.com route source
 };
 
 void init();
