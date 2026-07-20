@@ -606,7 +606,10 @@ bool fetchWeatherBlocking(WeatherData* out) {
     // Free key-less Open-Meteo when Tomorrow.io is off/keyless or just failed.
     if (!ok && services::apikeys::useOpenMeteo()) {
       if (tomorrow_ready) {
-        // Reconnect for a clean session after a Tomorrow.io failure.
+        // Discard any partial Tomorrow.io writes and reconnect for a clean
+        // session after the failure.
+        *out = WeatherData{};
+        out->imperial = s_req_imperial;
         client.setInsecure();
         client.setTimeout(kTimeoutSec);
         client.setHandshakeTimeout(kTimeoutSec);
