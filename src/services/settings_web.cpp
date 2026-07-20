@@ -405,6 +405,10 @@ void handleSettingsPage() {
   appendToggle(page, kSettingsPageCap, &used, "idle_clock",
                "Return to clock when no aircraft visible",
                ui::displayPrefsAutoIdleClockEnabled());
+  appendToggle(page, kSettingsPageCap, &used, "clock_24h", "24-hour clock",
+               services::clock::use24Hour());
+  appendToggle(page, kSettingsPageCap, &used, "date_numeric",
+               "Numeric date (20.07.2026)", services::clock::useNumericDate());
   appendToggle(page, kSettingsPageCap, &used, "auto_timezone",
                "Auto timezone from radar center (DST-aware)",
                services::clock::useAutoTimezone());
@@ -847,6 +851,8 @@ void handleSave() {
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
   ui::radar::saveFacingDegFromForm(s_server->arg("facing_deg").c_str());
+  services::clock::saveHourFormatFromForm(s_server->arg("clock_24h").c_str());
+  services::clock::saveDateFormatFromForm(s_server->arg("date_numeric").c_str());
   const bool auto_tz_before = services::clock::useAutoTimezone();
   services::clock::saveAutoTimezoneFromForm(s_server->arg("auto_timezone").c_str());
   ui::radar::accentSaveFromForm(s_server->arg("radar_accent").c_str());

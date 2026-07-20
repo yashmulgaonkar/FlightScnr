@@ -26,7 +26,7 @@ const int kCenterX = config::kDisplayWidth / 2;
 const int kCenterY = config::kDisplayHeight / 2;
 const int kCircleRadius = kCenterX - kBezelInsetPx;
 
-enum class ClockSettingsRow : uint8_t { Timezone, Format };
+enum class ClockSettingsRow : uint8_t { Timezone, Format, DateFormat };
 
 ClockSettingsRow s_focus = ClockSettingsRow::Timezone;
 
@@ -99,12 +99,15 @@ int measureBlockHeight(const InfoLine* lines, size_t count) {
   return total;
 }
 
-void buildStrings(char* tz_line, size_t tz_len, char* fmt_line, size_t fmt_len) {
+void buildStrings(char* tz_line, size_t tz_len, char* fmt_line, size_t fmt_len,
+                  char* date_line, size_t date_len) {
   char tz_label[16];
   services::clock::formatTimezoneLabel(tz_label, sizeof(tz_label));
   snprintf(tz_line, tz_len, "Timezone: %s", tz_label);
   snprintf(fmt_line, fmt_len, "Time format: %s",
            services::clock::use24Hour() ? "24 hour" : "12 hour");
+  snprintf(date_line, date_len, "Date format: %s",
+           services::clock::useNumericDate() ? "numeric" : "text");
 }
 
 }  // namespace
@@ -112,8 +115,17 @@ void buildStrings(char* tz_line, size_t tz_len, char* fmt_line, size_t fmt_len) 
 void clockSettingsResetFocus() { s_focus = ClockSettingsRow::Timezone; }
 
 void clockSettingsCycleFocus() {
-  s_focus = (s_focus == ClockSettingsRow::Timezone) ? ClockSettingsRow::Format
-                                                    : ClockSettingsRow::Timezone;
+  switch (s_focus) {
+    case ClockSettingsRow::Timezone:
+      s_focus = ClockSettingsRow::Format;
+      break;
+    case ClockSettingsRow::Format:
+      s_focus = ClockSettingsRow::DateFormat;
+      break;
+    case ClockSettingsRow::DateFormat:
+      s_focus = ClockSettingsRow::Timezone;
+      break;
+  }
 }
 
 void clockSettingsScreenDraw() {
@@ -130,17 +142,22 @@ void clockSettingsScreenDraw() {
 
   char tz_line[32];
   char fmt_line[28];
-  buildStrings(tz_line, sizeof(tz_line), fmt_line, sizeof(fmt_line));
+  char date_line[28];
+  buildStrings(tz_line, sizeof(tz_line), fmt_line, sizeof(fmt_line), date_line,
+               sizeof(date_line));
 
   const uint16_t tz_fg =
       (s_focus == ClockSettingsRow::Timezone) ? active_fg : label_fg;
   const uint16_t fmt_fg =
       (s_focus == ClockSettingsRow::Format) ? active_fg : label_fg;
+  const uint16_t date_fg =
+      (s_focus == ClockSettingsRow::DateFormat) ? active_fg : label_fg;
 
   const int title_h = displayFontHeight(tft, displayFontTitle());
   const InfoLine option_lines[] = {
       {tz_line, displayFontBody(), tz_fg},
       {fmt_line, displayFontBody(), fmt_fg},
+      {date_line, displayFontBody(), date_fg},
   };
   const InfoLine hint_lines[] = {
       {"Knob press: change item", displayFontDetail(), hint_fg},
@@ -188,9 +205,10 @@ void clockSettingsHandleKnob(int8_t delta) {
       services::clock::stepTimezoneHours(delta);
       break;
     case ClockSettingsRow::Format:
-      if (delta != 0) {
-        services::clock::toggleHourFormat();
-      }
+      services::clock::toggleHourFormat();
+      break;
+    case ClockSettingsRow::DateFormat:
+      services::clock::toggleDateFormat();
       break;
   }
   clockSettingsScreenDraw();

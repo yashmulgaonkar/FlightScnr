@@ -28,6 +28,17 @@ void stepTimezoneHours(int8_t delta);
 
 bool use24Hour();
 void toggleHourFormat();
+/** Web-form checkbox ("T" = 24-hour clock); shares state with the on-device
+ *  hour-format toggle. */
+void saveHourFormatFromForm(const char* h24_checkbox);
+
+/** True when the date line uses numeric TT.MM.JJJJ ("20.07.2026"); false = text
+ *  ("Mon, Jul 20", the default). */
+bool useNumericDate();
+/** Flip the date format (numeric <-> text) and persist; on-device knob path. */
+void toggleDateFormat();
+/** Web-form checkbox ("T" = numeric date). */
+void saveDateFormatFromForm(const char* numeric_checkbox);
 
 /** Apply a resolved IANA/POSIX timezone for the given coordinates. */
 bool applyAutoTimezone(const char* iana, const char* posix, double lat, double lon);

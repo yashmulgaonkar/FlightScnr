@@ -9,6 +9,7 @@
 #include <ctime>
 
 #include "config.h"
+#include "services/clock_format.h"
 
 namespace services::clock {
 
@@ -17,6 +18,7 @@ namespace {
 constexpr char kNs[] = "flightscnr";
 constexpr char kTzOffsetKey[] = "clk_tz_sec";
 constexpr char kUse24hKey[] = "clk_24h";
+constexpr char kDateFmtKey[] = "clk_datefmt";
 constexpr char kAutoTzKey[] = "clk_auto_tz";
 constexpr char kPosixTzKey[] = "clk_posix";
 constexpr char kIanaTzKey[] = "clk_iana";
@@ -31,6 +33,7 @@ constexpr size_t kMaxIanaLen = 40;
 
 int32_t s_tz_offset_sec = 0;
 bool s_use_24h = false;
+bool s_use_numeric_date = false;
 bool s_auto_timezone = true;
 char s_posix_tz[kMaxPosixLen + 1] = {0};
 char s_iana_name[kMaxIanaLen + 1] = {0};
@@ -91,6 +94,14 @@ void persistFormat() {
   Preferences prefs;
   if (prefs.begin(kNs, false)) {
     prefs.putBool(kUse24hKey, s_use_24h);
+    prefs.end();
+  }
+}
+
+void persistDateFormat() {
+  Preferences prefs;
+  if (prefs.begin(kNs, false)) {
+    prefs.putBool(kDateFmtKey, s_use_numeric_date);
     prefs.end();
   }
 }
@@ -162,6 +173,11 @@ void setUse24Hour(bool use_24h) {
   persistFormat();
 }
 
+void setUseNumericDate(bool numeric) {
+  s_use_numeric_date = numeric;
+  persistDateFormat();
+}
+
 void formatManualTimezoneLabel(char* out, size_t len) {
   const int32_t off = s_tz_offset_sec;
   const int sign = off >= 0 ? 1 : -1;
@@ -182,11 +198,13 @@ void bootLoad() {
   if (!prefs.begin(kNs, true)) {
     s_tz_offset_sec = 0;
     s_use_24h = false;
+    s_use_numeric_date = false;
     s_auto_timezone = true;
     return;
   }
   s_tz_offset_sec = prefs.getInt(kTzOffsetKey, 0);
   s_use_24h = prefs.getBool(kUse24hKey, false);
+  s_use_numeric_date = prefs.getBool(kDateFmtKey, false);
   s_auto_timezone = prefs.getBool(kAutoTzKey, true);
   copyBlob(s_posix_tz, prefs.getString(kPosixTzKey).c_str(), sizeof(s_posix_tz));
   copyBlob(s_iana_name, prefs.getString(kIanaTzKey).c_str(), sizeof(s_iana_name));
@@ -280,6 +298,20 @@ void toggleHourFormat() {
   setUse24Hour(!s_use_24h);
 }
 
+void saveHourFormatFromForm(const char* h24_checkbox) {
+  setUse24Hour(portalCheckboxChecked(h24_checkbox));
+}
+
+bool useNumericDate() { return s_use_numeric_date; }
+
+void toggleDateFormat() {
+  setUseNumericDate(!s_use_numeric_date);
+}
+
+void saveDateFormatFromForm(const char* numeric_checkbox) {
+  setUseNumericDate(portalCheckboxChecked(numeric_checkbox));
+}
+
 bool applyAutoTimezone(const char* iana, const char* posix, double lat, double lon) {
   if (iana == nullptr || posix == nullptr || iana[0] == '\0' || posix[0] == '\0') {
     return false;
@@ -363,7 +395,7 @@ void formatDateLine(char* out, size_t len) {
   struct tm local {};
   const time_t now = time(nullptr);
   localtime_r(&now, &local);
-  strftime(out, len, "%a, %b %d", &local);
+  formatCivilDate(local, s_use_numeric_date, out, len);
 }
 
 void formatClockFromEpoch(int64_t utc_epoch_sec, char* out, size_t len) {
