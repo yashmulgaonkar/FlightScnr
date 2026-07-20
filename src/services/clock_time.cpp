@@ -173,6 +173,11 @@ void setUse24Hour(bool use_24h) {
   persistFormat();
 }
 
+void setUseNumericDate(bool numeric) {
+  s_use_numeric_date = numeric;
+  persistDateFormat();
+}
+
 void formatManualTimezoneLabel(char* out, size_t len) {
   const int32_t off = s_tz_offset_sec;
   const int sign = off >= 0 ? 1 : -1;
@@ -299,9 +304,12 @@ void saveHourFormatFromForm(const char* h24_checkbox) {
 
 bool useNumericDate() { return s_use_numeric_date; }
 
+void toggleDateFormat() {
+  setUseNumericDate(!s_use_numeric_date);
+}
+
 void saveDateFormatFromForm(const char* numeric_checkbox) {
-  s_use_numeric_date = portalCheckboxChecked(numeric_checkbox);
-  persistDateFormat();
+  setUseNumericDate(portalCheckboxChecked(numeric_checkbox));
 }
 
 bool applyAutoTimezone(const char* iana, const char* posix, double lat, double lon) {

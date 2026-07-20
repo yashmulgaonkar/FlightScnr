@@ -35,6 +35,8 @@ void saveHourFormatFromForm(const char* h24_checkbox);
 /** True when the date line uses numeric TT.MM.JJJJ ("20.07.2026"); false = text
  *  ("Mon, Jul 20", the default). */
 bool useNumericDate();
+/** Flip the date format (numeric <-> text) and persist; on-device knob path. */
+void toggleDateFormat();
 /** Web-form checkbox ("T" = numeric date). */
 void saveDateFormatFromForm(const char* numeric_checkbox);
 
