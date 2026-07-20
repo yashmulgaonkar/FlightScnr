@@ -21,4 +21,8 @@ bool firmwareHeaderLooksValid(const uint8_t* head, size_t head_len,
   return true;
 }
 
+bool firmwareSizeLooksValid(size_t total_size, size_t max_partition_size) {
+  return total_size >= kMinImageSize && total_size <= max_partition_size;
+}
+
 }  // namespace services::ota

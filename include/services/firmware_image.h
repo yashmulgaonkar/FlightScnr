@@ -29,6 +29,22 @@ namespace services::ota {
 bool firmwareHeaderLooksValid(const uint8_t* head, size_t head_len,
                               size_t total_size, size_t max_partition_size);
 
+/**
+ * Size-only sanity check applied once the *final* upload size is known.
+ *
+ * On the ESP32 WebServer, upload.totalSize is still 0 during the first
+ * UPLOAD_FILE_WRITE callback (it is only incremented after the callback runs),
+ * so the size rules inside firmwareHeaderLooksValid never fire mid-stream.
+ * This function is meant for UPLOAD_FILE_END, where the total is final.
+ *
+ * Pure, hardware-free transformation (test seam). No Arduino/ESP deps.
+ *
+ * Rules (both must hold, else false):
+ *   - total_size >= kMinImageSize (a plausible minimum app image).
+ *   - total_size <= max_partition_size (fits the OTA app partition).
+ */
+bool firmwareSizeLooksValid(size_t total_size, size_t max_partition_size);
+
 /** ESP32 image magic byte at offset 0. */
 constexpr uint8_t kEspImageMagic = 0xE9;
 

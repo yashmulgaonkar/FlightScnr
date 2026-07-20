@@ -3,6 +3,7 @@
 #include "services/firmware_image.h"
 
 using services::ota::firmwareHeaderLooksValid;
+using services::ota::firmwareSizeLooksValid;
 using services::ota::kEspImageMagic;
 using services::ota::kMinImageSize;
 
@@ -61,6 +62,31 @@ void test_empty_head(void) {
   TEST_ASSERT_FALSE(firmwareHeaderLooksValid(nullptr, 4, 5u * 1024u * 1024u, kPart));
 }
 
+// --- firmwareSizeLooksValid (applied at UPLOAD_FILE_END, size is final) ---
+
+// (g) size in range -> valid.
+void test_size_valid(void) {
+  TEST_ASSERT_TRUE(firmwareSizeLooksValid(5u * 1024u * 1024u, kPart));
+}
+
+// (h) size 0 (never a real image) -> rejected. Unlike the header check, there
+// is no "unknown" escape hatch here: at END the total is authoritative.
+void test_size_zero_rejected(void) {
+  TEST_ASSERT_FALSE(firmwareSizeLooksValid(0, kPart));
+}
+
+// (i) too small -> rejected; exactly the minimum -> accepted.
+void test_size_too_small(void) {
+  TEST_ASSERT_FALSE(firmwareSizeLooksValid(kMinImageSize - 1, kPart));
+  TEST_ASSERT_TRUE(firmwareSizeLooksValid(kMinImageSize, kPart));
+}
+
+// (j) too big -> rejected; exactly partition-sized -> accepted.
+void test_size_too_big(void) {
+  TEST_ASSERT_FALSE(firmwareSizeLooksValid(kPart + 1, kPart));
+  TEST_ASSERT_TRUE(firmwareSizeLooksValid(kPart, kPart));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_valid_image);
@@ -70,5 +96,9 @@ int main(int, char**) {
   RUN_TEST(test_exact_partition_size);
   RUN_TEST(test_too_small);
   RUN_TEST(test_empty_head);
+  RUN_TEST(test_size_valid);
+  RUN_TEST(test_size_zero_rejected);
+  RUN_TEST(test_size_too_small);
+  RUN_TEST(test_size_too_big);
   return UNITY_END();
 }

@@ -6,7 +6,6 @@
 
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
-#include <esp_task_wdt.h>
 
 #include <cmath>
 #include <cstdio>
@@ -45,7 +44,7 @@ bool s_active = false;
  *  overload copies the whole page into an internal-heap String, which under a
  *  ~26 KB post-detail heap starved lwIP (min free 5 KB), stalled loop() for
  *  ~12 s, and left max_blk permanently fragmented below the panel/TLS gates. */
-constexpr size_t kSettingsPageCap = 28672;
+constexpr size_t kSettingsPageCap = 32768;
 char* s_settings_page = nullptr;
 
 char* settingsPageBuffer() {
@@ -1017,7 +1016,14 @@ void handleWifiPass() {
 bool s_ota_upload_failed = false;   // set on any per-request upload error
 bool s_ota_reboot_pending = false;  // success -> reboot from poll loop
 unsigned long s_ota_reboot_at_ms = 0;
-bool s_ota_header_checked = false;  // header validated on the first write chunk
+bool s_ota_header_checked = false;  // magic byte checked on the first write chunk
+size_t s_ota_since_breather = 0;    // bytes written since the last delay(1)
+
+// Give lower-priority tasks (incl. the idle task, which resets the hardware
+// task WDT) a slice roughly every 16 KB of flash writes. A bare yield()/
+// esp_task_wdt_reset() from the prio-1 loopTask is a no-op for the WDT here, so
+// we actually block briefly instead.
+constexpr size_t kOtaBreatherBytes = 16u * 1024u;
 
 size_t otaAppPartitionSize() {
   const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
@@ -1030,6 +1036,7 @@ void handleUpdateUpload() {
     case UPLOAD_FILE_START: {
       s_ota_upload_failed = false;
       s_ota_header_checked = false;
+      s_ota_since_breather = 0;
       Serial.printf("[ota] upload start: %s\n", upload.filename.c_str());
       // Size is not known up front from a browser multipart upload, so let
       // Update size the target partition itself.
@@ -1045,8 +1052,11 @@ void handleUpdateUpload() {
       }
       if (!s_ota_header_checked) {
         s_ota_header_checked = true;
+        // Only the magic byte is meaningful here: upload.totalSize is still 0
+        // during the first chunk on the ESP32 WebServer, so pass 0 (unknown)
+        // and defer the size check to UPLOAD_FILE_END where the total is final.
         if (!services::ota::firmwareHeaderLooksValid(
-                upload.buf, upload.currentSize, upload.totalSize,
+                upload.buf, upload.currentSize, /*total_size=*/0,
                 otaAppPartitionSize())) {
           Serial.println("[ota] rejected: image header looks invalid");
           Update.abort();
@@ -1059,13 +1069,29 @@ void handleUpdateUpload() {
         s_ota_upload_failed = true;
         break;
       }
-      // Long flash writes can starve the task watchdog; feed it and yield.
-      esp_task_wdt_reset();
-      yield();
+      // A bare yield()/esp_task_wdt_reset() from the prio-1 loopTask does not
+      // let the idle task run to pet the hardware WDT, so actually block for a
+      // tick every ~16 KB to keep the long flash write from starving it.
+      s_ota_since_breather += upload.currentSize;
+      if (s_ota_since_breather >= kOtaBreatherBytes) {
+        s_ota_since_breather = 0;
+        delay(1);
+      }
       break;
     }
     case UPLOAD_FILE_END: {
       if (s_ota_upload_failed) {
+        break;
+      }
+      // totalSize is final here — reject an oversized or implausibly small
+      // image before flipping otadata. Wrong sizes never reach the header
+      // check's size rules mid-stream (totalSize is 0 on the first chunk).
+      if (!services::ota::firmwareSizeLooksValid(upload.totalSize,
+                                                 otaAppPartitionSize())) {
+        Serial.printf("[ota] rejected: size %u out of range\n",
+                      static_cast<unsigned>(upload.totalSize));
+        Update.abort();
+        s_ota_upload_failed = true;
         break;
       }
       if (Update.end(true)) {
@@ -1097,10 +1123,10 @@ void handleUpdateDone() {
     s_server->send(500, "text/plain; charset=utf-8", msg);
     return;
   }
-  // Defer the reboot so this response can flush before ESP.restart().
+  // Defer the reboot (from settingsWebPoll) so this response reaches the
+  // browser before ESP.restart() — the ~800 ms delay is the real guard.
   s_server->send(200, "text/plain; charset=utf-8",
                  "Update OK. Rebooting into the new firmware\xE2\x80\xA6");
-  s_server->client().flush();
   s_ota_reboot_pending = true;
   s_ota_reboot_at_ms = millis() + 800;
 }
