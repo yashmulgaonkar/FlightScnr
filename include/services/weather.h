@@ -17,8 +17,13 @@ struct DayForecast {
 };
 
 struct WeatherData {
+  // Which provider supplied this snapshot. Drives on-screen attribution:
+  // Open-Meteo's CC BY 4.0 data requires a visible credit; Tomorrow.io does not.
+  enum class Source : uint8_t { None, TomorrowIo, OpenMeteo };
+
   bool valid = false;
   bool imperial = false;        // unit system this snapshot was fetched in
+  Source source = Source::None;
   float current_temp = 0.0f;
   int current_humidity = 0;     // percent
   int current_code = 0;         // Tomorrow.io realtime weather code (4-digit)

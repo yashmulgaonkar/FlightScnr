@@ -42,6 +42,11 @@ bool canUseWeather();
 void saveAdsbDbEnabledFromForm(const char* use_adsbdb);
 /** Free key-less adsbdb.com route source enabled (default on). */
 bool useAdsbDb();
+
+/** Portal/web checkbox ("T" = enabled) for the free Open-Meteo weather source. */
+void saveOpenMeteoEnabledFromForm(const char* use_openmeteo);
+/** Free key-less Open-Meteo weather source enabled (default on). */
+bool useOpenMeteo();
 void maskedWeather(char* out, size_t len);
 
 bool useAirLabs();
