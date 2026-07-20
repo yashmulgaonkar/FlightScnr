@@ -1,9 +1,12 @@
 #include "services/settings_web.h"
 
+#include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
+#include <esp_task_wdt.h>
 
 #include <cmath>
 #include <cstdio>
@@ -13,6 +16,7 @@
 #endif
 
 #include "config.h"
+#include "services/firmware_image.h"
 #include "hardware/buzzer.h"
 #include "hardware/display_brightness.h"
 #include "services/adsb_client.h"
@@ -796,6 +800,50 @@ void handleSettingsPage() {
             "<a class=\"dl\" href=\"/route_cache.csv\" download=\"route_cache.csv\">"
             "&#8681;&nbsp; Download route_cache.csv</a></div></details>");
 
+  // ---------- Firmware update card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#8635;</span>"
+            "Firmware update<span class=\"sum\">upload .bin (OTA)</span>"
+            "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
+            "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
+            "<b>Warning.</b> Upload only the <b>app image</b> "
+            "(<code>firmware.bin</code>, the WebFlasher &ldquo;App only&rdquo; file) &mdash; "
+            "<b>not</b> <code>firmware-merged.bin</code>. The device reboots into the new "
+            "firmware. Do not disconnect power during the update.</div>"
+            "<input id=\"fw_file\" type=\"file\" accept=\".bin\">"
+            "<p style=\"margin-top:.6rem\">"
+            "<button id=\"fw_btn\" class=\"sm\" type=\"button\">Upload &amp; flash</button></p>"
+            "<div id=\"fw_bar\" style=\"display:none;height:.55rem;border-radius:6px;"
+            "background:#262626;border:1px solid var(--line);margin-top:.6rem;overflow:hidden\">"
+            "<div id=\"fw_fill\" style=\"height:100%;width:0;background:var(--accent2)\"></div></div>"
+            "<p id=\"fw_msg\" class=\"note\"></p>"
+            "<script>"
+            "(function(){"
+            "var b=document.getElementById('fw_btn'),f=document.getElementById('fw_file'),"
+            "m=document.getElementById('fw_msg'),bar=document.getElementById('fw_bar'),"
+            "fill=document.getElementById('fw_fill');"
+            "b.addEventListener('click',function(){"
+            "if(!f.files||!f.files[0]){m.textContent='Choose a firmware.bin file first.';return;}"
+            "if(!confirm('Flash this firmware and reboot the device? Do not upload the "
+            "merged image, and keep power connected.'))return;"
+            "var fd=new FormData();fd.append('firmware',f.files[0]);"
+            "var x=new XMLHttpRequest();x.open('POST','/update');"
+            "b.disabled=true;f.disabled=true;bar.style.display='block';"
+            "x.upload.onprogress=function(e){if(e.lengthComputable){"
+            "var p=Math.round(e.loaded/e.total*100);fill.style.width=p+'%';"
+            "m.textContent='Uploading '+p+'%';}};"
+            "x.onload=function(){if(x.status==200){fill.style.width='100%';"
+            "m.textContent='Update OK \\u2014 rebooting\\u2026 this page reloads in ~10 s.';"
+            "setTimeout(function(){location.href='/';},10000);}"
+            "else{m.textContent='Failed: '+(x.responseText||('HTTP '+x.status));"
+            "b.disabled=false;f.disabled=false;}};"
+            "x.onerror=function(){m.textContent='Upload error (connection lost).';"
+            "b.disabled=false;f.disabled=false;};"
+            "x.send(fd);"
+            "});"
+            "})();"
+            "</script></div></details>");
+
   const int tail_n = snprintf(
       page + used, kSettingsPageCap - used,
       "<p class=\"foot\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
@@ -958,6 +1006,105 @@ void handleWifiPass() {
   redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
 }
 
+// ---------- Firmware update (OTA over Update.h) ----------
+//
+// The upload streams into the *inactive* OTA app partition; otadata is only
+// switched by Update.end(true) after the whole image is written and validated.
+// A wrong/aborted upload therefore leaves the running firmware untouched — no
+// brick risk. On success we schedule a delayed reboot from settingsWebPoll()
+// so the HTTP response can flush before ESP.restart().
+
+bool s_ota_upload_failed = false;   // set on any per-request upload error
+bool s_ota_reboot_pending = false;  // success -> reboot from poll loop
+unsigned long s_ota_reboot_at_ms = 0;
+bool s_ota_header_checked = false;  // header validated on the first write chunk
+
+size_t otaAppPartitionSize() {
+  const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+  return next != nullptr ? static_cast<size_t>(next->size) : 0;
+}
+
+void handleUpdateUpload() {
+  HTTPUpload& upload = s_server->upload();
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      s_ota_upload_failed = false;
+      s_ota_header_checked = false;
+      Serial.printf("[ota] upload start: %s\n", upload.filename.c_str());
+      // Size is not known up front from a browser multipart upload, so let
+      // Update size the target partition itself.
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+        s_ota_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_WRITE: {
+      if (s_ota_upload_failed) {
+        break;  // already failed: discard the rest
+      }
+      if (!s_ota_header_checked) {
+        s_ota_header_checked = true;
+        if (!services::ota::firmwareHeaderLooksValid(
+                upload.buf, upload.currentSize, upload.totalSize,
+                otaAppPartitionSize())) {
+          Serial.println("[ota] rejected: image header looks invalid");
+          Update.abort();
+          s_ota_upload_failed = true;
+          break;
+        }
+      }
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+        s_ota_upload_failed = true;
+        break;
+      }
+      // Long flash writes can starve the task watchdog; feed it and yield.
+      esp_task_wdt_reset();
+      yield();
+      break;
+    }
+    case UPLOAD_FILE_END: {
+      if (s_ota_upload_failed) {
+        break;
+      }
+      if (Update.end(true)) {
+        Serial.printf("[ota] update ok: %u bytes\n",
+                      static_cast<unsigned>(upload.totalSize));
+      } else {
+        Update.printError(Serial);
+        s_ota_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_ABORTED: {
+      Serial.println("[ota] upload aborted");
+      Update.abort();
+      s_ota_upload_failed = true;
+      break;
+    }
+    default:
+      break;
+  }
+  yield();
+}
+
+void handleUpdateDone() {
+  if (s_ota_upload_failed || !Update.isFinished() || Update.hasError()) {
+    char msg[96];
+    snprintf(msg, sizeof(msg), "Update failed (error %u). Device not rebooted.",
+             static_cast<unsigned>(Update.getError()));
+    s_server->send(500, "text/plain; charset=utf-8", msg);
+    return;
+  }
+  // Defer the reboot so this response can flush before ESP.restart().
+  s_server->send(200, "text/plain; charset=utf-8",
+                 "Update OK. Rebooting into the new firmware\xE2\x80\xA6");
+  s_server->client().flush();
+  s_ota_reboot_pending = true;
+  s_ota_reboot_at_ms = millis() + 800;
+}
+
 void handleNotFound() {
   s_server->sendHeader("Location", "/", true);
   s_server->send(302, "text/plain", "");
@@ -973,6 +1120,7 @@ void registerRoutes() {
   s_server->on("/wifi/up", HTTP_POST, handleWifiUp);
   s_server->on("/wifi/down", HTTP_POST, handleWifiDown);
   s_server->on("/wifi/pass", HTTP_POST, handleWifiPass);
+  s_server->on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
   s_server->onNotFound(handleNotFound);
 }
 
@@ -1033,6 +1181,11 @@ void settingsWebPoll() {
     return;
   }
   s_server->handleClient();
+  if (s_ota_reboot_pending && millis() >= s_ota_reboot_at_ms) {
+    Serial.println("[ota] rebooting into new firmware");
+    Serial.flush();
+    ESP.restart();
+  }
 }
 
 bool settingsWebActive() { return s_active; }
