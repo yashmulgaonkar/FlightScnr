@@ -145,7 +145,8 @@ void formatRouteApiLine(const char* name, bool enabled, bool has_key, bool can_u
 }
 
 void buildApiStatusStrings(char* airlabs_line, size_t airlabs_len, char* fa_line,
-                           size_t fa_len, char* fr24_line, size_t fr24_len) {
+                           size_t fa_len, char* fr24_line, size_t fr24_len,
+                           char* adsbdb_line, size_t adsbdb_len) {
   services::apikeys::load();
   formatRouteApiLine("AirLabs", services::apikeys::useAirLabs(),
                      services::apikeys::hasAirLabs(), services::apikeys::canUseAirLabs(),
@@ -155,6 +156,10 @@ void buildApiStatusStrings(char* airlabs_line, size_t airlabs_len, char* fa_line
                      services::apikeys::canUseFlightAware(), fa_line, fa_len);
   formatRouteApiLine("FR24", services::apikeys::useFr24(), services::apikeys::hasFr24(),
                      services::apikeys::canUseFr24(), fr24_line, fr24_len);
+  // adsbdb is key-less: simple on/off status (no key/limit states). Naming
+  // the source here doubles as the ToS-requested route-data attribution.
+  snprintf(adsbdb_line, adsbdb_len, "adsbdb.com: %s",
+           services::apikeys::useAdsbDb() ? "on" : "off");
 }
 
 void buildMainStrings(char* ip_line, size_t ip_len, char* wifi_line, size_t wifi_len,
@@ -237,12 +242,13 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
   char airlabs_line[24];
   char fa_line[28];
   char fr24_line[20];
+  char adsbdb_line[20];
 
   buildMainStrings(ip_line, sizeof(ip_line), wifi_line, sizeof(wifi_line), saved_line,
                    sizeof(saved_line), lat_line, sizeof(lat_line), lon_line, sizeof(lon_line),
                    alt_line, sizeof(alt_line), web_line, sizeof(web_line));
   buildApiStatusStrings(airlabs_line, sizeof(airlabs_line), fa_line, sizeof(fa_line),
-                        fr24_line, sizeof(fr24_line));
+                        fr24_line, sizeof(fr24_line), adsbdb_line, sizeof(adsbdb_line));
 
   const int title_h = displayFontHeight(tft, displayFontTitle());
   const InfoLine main_lines[] = {
@@ -259,6 +265,7 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
       {airlabs_line, displayFontDetail(), label_fg},
       {fa_line, displayFontDetail(), label_fg},
       {fr24_line, displayFontDetail(), label_fg},
+      {adsbdb_line, displayFontDetail(), label_fg},
   };
   const InfoLine hint_lines[] = {
       {"Swipe left — Display", displayFontDetail(), hint_fg},
@@ -305,6 +312,8 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
                  api_color(services::apikeys::useFr24(), services::apikeys::hasFr24(),
                            services::apikeys::canUseFr24()),
                  bg);
+  drawCenterLine(adsbdb_line, &y, displayFontDetail(),
+                 services::apikeys::useAdsbDb() ? fg : label_fg, bg);
 
   y += kHintsTopGap;
 

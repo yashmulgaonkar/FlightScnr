@@ -18,7 +18,9 @@
 #include <ctime>
 
 #include "config.h"
+#include "services/adsbdb_parse.h"
 #include "services/https_heap.h"
+#include "services/route_info.h"
 #include "services/airline_lookup.h"
 #include "services/airport_lookup.h"
 #include "services/api_keys.h"
@@ -39,12 +41,7 @@ constexpr char kFr24Base[] =
 
 constexpr size_t kCacheSize = 64;
 
-struct RouteInfo {
-  char airline[28];
-  char airline_icao[4];
-  char origin[5];
-  char dest[5];
-};
+constexpr char kAdsbDbBase[] = "https://api.adsbdb.com/v0/callsign/";
 
 struct CacheSlot {
   char callsign[9];
@@ -85,6 +82,7 @@ enum class DetailStep : uint8_t {
   kAirLabs,
   kFlightAware,
   kFr24,
+  kAdsbDb,
   kPrefix,
   kDone,
 };
@@ -148,6 +146,8 @@ const char* stepTag(DetailStep step) {
       return "FA";
     case DetailStep::kFr24:
       return "FR";
+    case DetailStep::kAdsbDb:
+      return "adb";
     case DetailStep::kPrefix:
       return "pfx";
     default:
@@ -346,8 +346,12 @@ void applyCallsignAirlineFallback(const char* callsign, RouteInfo* route) {
     return;
   }
   services::airline::resolveFromCallsign(callsign, true, route->airline, sizeof(route->airline));
-  services::airline::resolveIcaoFromCallsign(callsign, true, route->airline_icao,
-                                             sizeof(route->airline_icao));
+  // Keep an ICAO a source already supplied (e.g. adsbdb route-only hit) — it
+  // drives the local logo lookup. Only fill it from the prefix when empty.
+  if (route->airline_icao[0] == '\0') {
+    services::airline::resolveIcaoFromCallsign(callsign, true, route->airline_icao,
+                                               sizeof(route->airline_icao));
+  }
 }
 
 bool detailRouteApiAllowed() { return services::https::heapReadyForRouteApi(); }
@@ -902,7 +906,13 @@ bool apiAvailable() {
   return (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs()) ||
          (apikeys::useFlightAware() && apikeys::hasFlightAware() &&
           apikeys::canUseFlightAware()) ||
-         (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24());
+         (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24()) ||
+         apikeys::useAdsbDb();
+}
+
+/** Waterfall step after the paid APIs: free adsbdb if enabled, else prefix. */
+DetailStep stepAfterPaidApis() {
+  return apikeys::useAdsbDb() ? DetailStep::kAdsbDb : DetailStep::kPrefix;
 }
 
 DetailStep firstLiveApiStep() {
@@ -916,7 +926,7 @@ DetailStep firstLiveApiStep() {
   if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24()) {
     return DetailStep::kFr24;
   }
-  return DetailStep::kPrefix;
+  return stepAfterPaidApis();
 }
 
 DetailStep nextApiStepAfter(DetailStep step) {
@@ -929,13 +939,15 @@ DetailStep nextApiStepAfter(DetailStep step) {
       if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24()) {
         return DetailStep::kFr24;
       }
-      return DetailStep::kPrefix;
+      return stepAfterPaidApis();
     case DetailStep::kFlightAware:
       if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24()) {
         return DetailStep::kFr24;
       }
-      return DetailStep::kPrefix;
+      return stepAfterPaidApis();
     case DetailStep::kFr24:
+      return stepAfterPaidApis();
+    case DetailStep::kAdsbDb:
     default:
       return DetailStep::kPrefix;
   }
@@ -1423,6 +1435,32 @@ bool lookupFr24FirstKey(const char* callsign, RouteInfo* route) {
   return false;
 }
 
+bool lookupAdsbDb(const char* callsign, RouteInfo* route) {
+  if (route == nullptr || callsign == nullptr || callsign[0] == '\0') {
+    return false;
+  }
+  routeClear(route);
+  if (s_route_tls_hard_fail) {
+    return false;
+  }
+  if (!isCurrentDetailSelection(callsign)) {
+    return false;
+  }
+
+  // Callsign is alphanumeric (ADS-B feed format) -> no URL encoding needed,
+  // matching the existing FR24 URL construction.
+  String url = kAdsbDbBase;
+  url += callsign;
+
+  JsonDocument filter(&s_route_json_allocator);
+  buildAdsbdbFilter(filter);
+  JsonDocument doc(&s_route_json_allocator);
+  if (!httpGetJson(url.c_str(), doc, callsign, config::kDetailApiTimeoutMs, nullptr, 0, &filter)) {
+    return false;
+  }
+  return parseAdsbdbResponse(doc, route);
+}
+
 bool lookupPrefixFallback(const char* callsign, RouteInfo* route) {
   if (route == nullptr) {
     return false;
@@ -1797,12 +1835,46 @@ void detailWorkerRunStep() {
         ok = true;
         s_detail_step = DetailStep::kDone;
       } else {
-        RouteInfo miss;
-        routeClear(&miss);
-        storeCache(callsign, miss, ApiSource::kNone, true);
-        s_detail_step = DetailStep::kPrefix;
+        // Miss is cached by the terminal step (adsbdb miss -> prefix, or
+        // prefix itself) with api_done set, so no premature cache here.
+        s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kFr24);
       }
       logDetailStepEnd(DetailStep::kFr24, callsign, ok);
+      return;
+    }
+    case DetailStep::kAdsbDb: {
+      logDetailStepBegin(DetailStep::kAdsbDb, callsign);
+      RouteInfo live;
+      routeClear(&live);
+      bool ok = false;
+      if (s_route_tls_hard_fail) {
+        s_detail_step = DetailStep::kPrefix;
+      } else if (!prepareRouteHttp(callsign, config::kDetailApiTimeoutMs)) {
+        logHeapSkipRateLimited(callsign);
+        if (!detailWorkerAdvanceOnHeapSkip(DetailStep::kAdsbDb)) {
+          vTaskDelay(pdMS_TO_TICKS(kDetailHeapSkipRetryMs));
+          return;
+        }
+        logDetailStepEnd(DetailStep::kAdsbDb, callsign, false);
+        return;
+      } else if (apikeys::useAdsbDb() && lookupAdsbDb(callsign, &live)) {
+        // adsbdb may only know the route; fill airline/ICAO from the local
+        // callsign prefix so route + airline/logo appear together.
+        applyCallsignAirlineFallback(callsign, &live);
+        s_detail_result = live;
+        s_detail_result_src = ApiSource::kAdsbDb;
+        storeCache(callsign, live, ApiSource::kAdsbDb, true);
+        applyRouteToCallsign(callsign, live);
+        if (isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, live, "adb");
+        }
+        ok = true;
+        s_detail_step = DetailStep::kDone;
+      } else {
+        // Miss cached by the prefix step (api_done set there).
+        s_detail_step = DetailStep::kPrefix;
+      }
+      logDetailStepEnd(DetailStep::kAdsbDb, callsign, ok);
       return;
     }
     case DetailStep::kPrefix: {
@@ -2191,6 +2263,8 @@ const char* sourceTag(ApiSource s) {
       return "FA";
     case ApiSource::kFr24:
       return "FR";
+    case ApiSource::kAdsbDb:
+      return "adb";
     case ApiSource::kPrefix:
       return "pfx";
     default:

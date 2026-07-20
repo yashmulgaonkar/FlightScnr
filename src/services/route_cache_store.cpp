@@ -103,7 +103,7 @@ bool ensureMounted() {
 bool entryResolved(const Entry& e) {
   const bool has_data =
       e.airline[0] != '\0' || e.origin[0] != '\0' || e.dest[0] != '\0';
-  return e.api_done || has_data || e.source == 5;  // ApiSource::kPrefix
+  return e.api_done || has_data || e.source == 5;  // 5 == ApiSource::kPrefix
 }
 
 bool entryPending(const Entry& e) {
@@ -207,6 +207,8 @@ bool parseCsvLine(char* line, Entry* out) {
     out->source = 4;
   } else if (strcmp(field, "pfx") == 0) {
     out->source = 5;
+  } else if (strcmp(field, "adb") == 0) {
+    out->source = 6;  // 6 == ApiSource::kAdsbDb
   } else if (strcmp(field, "cache") == 0) {
     out->source = 1;
   }
@@ -243,6 +245,9 @@ void formatSourceTag(uint8_t source, char* out, size_t out_len) {
       break;
     case 5:
       tag = "pfx";
+      break;
+    case 6:
+      tag = "adb";  // 6 == ApiSource::kAdsbDb
       break;
     case 1:
       tag = "cache";
