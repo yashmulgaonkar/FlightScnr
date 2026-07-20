@@ -21,6 +21,28 @@ namespace {
 
 const int kCenterX = config::kDisplayWidth / 2;
 const int kCenterY = config::kDisplayHeight / 2;
+constexpr int kBezelInsetPx = 10;
+constexpr int kTextPadPx = 6;
+const int kCircleRadius = kCenterX - kBezelInsetPx;
+
+// Usable half-width of the visible circular chord at a given text row (same
+// math as clock_screen::circleHalfWidthAtRow). Near the bottom of the round
+// panel the chord is much narrower than the 390 px square, so any line placed
+// there must be clamped to this width or it renders clipped/illegible.
+int circleHalfWidthAtRow(int row_y, int row_h) {
+  if (kCircleRadius <= 0 || row_h <= 0) {
+    return 0;
+  }
+  const int row_center_y = row_y + row_h / 2;
+  const int dy = row_center_y - kCenterY;
+  if (std::abs(dy) >= kCircleRadius) {
+    return 0;
+  }
+  const float half =
+      std::sqrt(static_cast<float>(kCircleRadius * kCircleRadius - dy * dy));
+  const int usable = static_cast<int>(half) - kTextPadPx;
+  return usable > 0 ? usable : 0;
+}
 
 void drawCenteredAt(const char* text, int cx, int y, UiTextStyle style, uint16_t fg,
                     uint16_t bg) {
@@ -140,10 +162,21 @@ void weatherScreenDraw() {
     drawForecast(services::weather::data(), fg, dim, accent, bg);
     // Open-Meteo data is CC BY 4.0 → a visible credit is required. Show it only
     // when the displayed snapshot actually came from Open-Meteo (not Tomorrow.io).
+    // The credit sits below the rain row but must stay inside the visible chord
+    // of the round panel; "Open-Meteo.com" in the detail font fits the chord
+    // width available at this y (see calc in the PR). Only draw when it fits so
+    // a clipped, illegible credit never masquerades as attribution.
     if (services::weather::data().source ==
         services::weather::WeatherData::Source::OpenMeteo) {
-      drawCentered("Weather data: Open-Meteo.com", config::kDisplayHeight - 22,
-                   displayFontDetail(), dim, bg);
+      const char* credit = "Open-Meteo.com";
+      const UiTextStyle credit_style = displayFontDetail();
+      const int credit_y = 330;
+      displayFontApply(tft, credit_style);
+      const int credit_h = displayFontHeight(tft, credit_style);
+      const int max_w = circleHalfWidthAtRow(credit_y, credit_h) * 2;
+      if (tft.textWidth(credit) <= max_w) {
+        drawCentered(credit, credit_y, credit_style, dim, bg);
+      }
     }
   }
 

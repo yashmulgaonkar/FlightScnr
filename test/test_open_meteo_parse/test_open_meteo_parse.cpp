@@ -155,6 +155,49 @@ void test_extra_fields_ignored(void) {
   TEST_ASSERT_EQUAL_INT(5, wx.days[0].precip_probability);
 }
 
+// (f) inconsistent daily array lengths: `time` has 3 entries but the value
+// arrays are shorter. The parser must not read past the shorter arrays — the
+// bucket count follows `time`, missing values stay at their defaults, and no
+// out-of-bounds access occurs.
+void test_ragged_daily_arrays(void) {
+  const char* json =
+      "{\"current\":{\"temperature_2m\":15.0,\"relative_humidity_2m\":50,"
+      "\"weather_code\":2},"
+      "\"daily\":{"
+      "\"time\":[1721433600,1721520000,1721606400],"
+      "\"weather_code\":[2,3],"           // only 2 entries
+      "\"temperature_2m_max\":[20.0,21.0],"  // only 2 entries
+      "\"temperature_2m_min\":[10.0],"       // only 1 entry
+      "\"precipitation_probability_max\":[30],"  // only 1 entry
+      "\"sunrise\":[1721446800],"
+      "\"sunset\":[1721503200]}}";
+  WeatherData wx;
+  const bool ok = parseJson(json, &wx);
+  TEST_ASSERT_TRUE(ok);
+
+  // day 0: everything present.
+  TEST_ASSERT_TRUE(wx.days[0].valid);
+  TEST_ASSERT_EQUAL_INT64(1721433600, wx.days[0].date_epoch);
+  TEST_ASSERT_EQUAL_INT(1101, wx.days[0].weather_code);  // WMO 2
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 20.0f, wx.days[0].temp_max);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 10.0f, wx.days[0].temp_min);
+  TEST_ASSERT_EQUAL_INT(30, wx.days[0].precip_probability);
+
+  // day 1: has date + code + max, but min/precip arrays ran out → defaults.
+  TEST_ASSERT_TRUE(wx.days[1].valid);
+  TEST_ASSERT_EQUAL_INT64(1721520000, wx.days[1].date_epoch);
+  TEST_ASSERT_EQUAL_INT(1001, wx.days[1].weather_code);  // WMO 3
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 21.0f, wx.days[1].temp_max);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, wx.days[1].temp_min);  // default
+  TEST_ASSERT_EQUAL_INT(-1, wx.days[1].precip_probability);    // default
+
+  // day 2: only date present; code array ran out → cloudy fallback (1001).
+  TEST_ASSERT_TRUE(wx.days[2].valid);
+  TEST_ASSERT_EQUAL_INT64(1721606400, wx.days[2].date_epoch);
+  TEST_ASSERT_EQUAL_INT(1001, wx.days[2].weather_code);
+  TEST_ASSERT_EQUAL_INT(-1, wx.days[2].precip_probability);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_full_response);
@@ -162,5 +205,6 @@ int main(int, char**) {
   RUN_TEST(test_missing_precip);
   RUN_TEST(test_empty_response);
   RUN_TEST(test_extra_fields_ignored);
+  RUN_TEST(test_ragged_daily_arrays);
   return UNITY_END();
 }

@@ -50,7 +50,13 @@ volatile bool s_pending = false;  // queued on the worker or running
 volatile bool s_ready = false;
 unsigned long s_last_ok_ms = 0;
 unsigned long s_last_attempt_ms = 0;
+// Generic per-attempt / failure back-off; applies to whatever source is
+// configured (Tomorrow.io and/or Open-Meteo) and gates requestRefresh.
 volatile unsigned long s_retry_after_ms = 0;
+// Tomorrow.io-only rate-limit window (HTTP 429). Gates just the paid path so a
+// quota hit never blocks the key-less Open-Meteo fallback, which is not
+// rate-limited. See ADR 0002.
+volatile unsigned long s_tomorrow_retry_after_ms = 0;
 // Local calendar day (days since epoch in local time) of the last successful
 // fetch, so the forecast is refreshed at midnight even within the staleness
 // window. -1 = unknown / time not yet synced.
@@ -481,8 +487,10 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
 
 // GET Open-Meteo forecast over one TLS connection and parse it. Key-less and
 // no per-request throttling needed (free tier, ~10k/day). Requests current +
-// 3-day daily in the active unit system with unixtime UTC epochs, then reuses
-// the shared readHttpPayload + PSRAM buffer so it stays off the tight DRAM heap.
+// daily in the active unit system with unixtime (absolute UTC) epochs, then
+// reuses the shared readHttpPayload + PSRAM buffer so it stays off the tight
+// DRAM heap. timezone=auto anchors the daily buckets to the coordinates' local
+// day, matching the Tomorrow.io path (column 0 = local "today").
 bool fetchOpenMeteo(HTTPClient& http, WiFiClientSecure& client, double lat, double lon,
                     WeatherData* out, int* out_code) {
   String url = "https://api.open-meteo.com/v1/forecast?latitude=";
@@ -492,7 +500,9 @@ bool fetchOpenMeteo(HTTPClient& http, WiFiClientSecure& client, double lat, doub
   url += "&current=temperature_2m,relative_humidity_2m,weather_code";
   url += "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
          "precipitation_probability_max,sunrise,sunset";
-  url += "&timezone=UTC&forecast_days=3&timeformat=unixtime&temperature_unit=";
+  url += "&timezone=auto&forecast_days=";
+  url += kForecastDays;
+  url += "&timeformat=unixtime&temperature_unit=";
   url += s_req_imperial ? "fahrenheit" : "celsius";
 
   if (out_code != nullptr) {
@@ -576,8 +586,10 @@ bool fetchWeatherBlocking(WeatherData* out) {
   out->imperial = s_req_imperial;
 
   const char* key = services::apikeys::weatherKey();
-  const bool tomorrow_ready =
-      services::apikeys::canUseWeather() && key != nullptr && key[0] != '\0';
+  const bool now_in_tomorrow_backoff =
+      s_tomorrow_retry_after_ms != 0 && millis() < s_tomorrow_retry_after_ms;
+  const bool tomorrow_ready = services::apikeys::canUseWeather() && key != nullptr &&
+                              key[0] != '\0' && !now_in_tomorrow_backoff;
 
   const unsigned long started = millis();
   bool ok = false;
@@ -591,12 +603,15 @@ bool fetchWeatherBlocking(WeatherData* out) {
     // Paid Tomorrow.io first (one TLS handshake, one POST → current + daily).
     if (tomorrow_ready) {
       ok = fetchTimelines(http, client, s_req_lat, s_req_lon, key, out, &code);
-      if (!ok) {
+      if (ok) {
+        s_tomorrow_retry_after_ms = 0;  // healthy paid response clears the window
+      } else {
         // HTTP 429 = Tomorrow.io rate limit; back off much longer than a
-        // transient failure so we stop hammering the free-tier quota.
+        // transient failure so we stop hammering the free-tier quota. This
+        // window gates only the paid path, not the Open-Meteo fallback below.
         if (code == 429) {
-          s_retry_after_ms = millis() + config::kWeatherRateLimitBackoffMs;
-          Serial.printf("[weather] rate limited — backing off %lus\n",
+          s_tomorrow_retry_after_ms = millis() + config::kWeatherRateLimitBackoffMs;
+          Serial.printf("[weather] tomorrow.io rate limited — backing off %lus\n",
                         config::kWeatherRateLimitBackoffMs / 1000UL);
         }
         client.stop();
@@ -615,8 +630,9 @@ bool fetchWeatherBlocking(WeatherData* out) {
         client.setHandshakeTimeout(kTimeoutSec);
       }
       HTTPClient om_http;
-      int om_code = 0;
-      ok = fetchOpenMeteo(om_http, client, s_req_lat, s_req_lon, out, &om_code);
+      // fetchOpenMeteo logs its own HTTP status; no caller-side code handling
+      // (no per-request throttle), so don't collect a status we won't read.
+      ok = fetchOpenMeteo(om_http, client, s_req_lat, s_req_lon, out, nullptr);
     }
     client.stop();
   }
