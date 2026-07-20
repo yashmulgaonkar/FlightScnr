@@ -294,8 +294,7 @@ void toggleHourFormat() {
 }
 
 void saveHourFormatFromForm(const char* h24_checkbox) {
-  s_use_24h = portalCheckboxChecked(h24_checkbox);
-  persistFormat();
+  setUse24Hour(portalCheckboxChecked(h24_checkbox));
 }
 
 bool useNumericDate() { return s_use_numeric_date; }

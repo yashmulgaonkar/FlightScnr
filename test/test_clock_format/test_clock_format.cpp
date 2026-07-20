@@ -7,6 +7,9 @@
 
 using services::clock::formatCivilDate;
 
+// The "%a"/"%b" expectations assume the "C" locale (English abbreviations,
+// which is the default on the native runner and on the device's newlib).
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -59,6 +62,8 @@ void test_short_buffer_no_overflow(void) {
   for (size_t i = 4; i < sizeof(guard); ++i) {
     TEST_ASSERT_EQUAL_CHAR(0x7f, guard[i]);
   }
+  // And the output is a valid (empty) terminated string, per the header contract.
+  TEST_ASSERT_EQUAL_CHAR('\0', guard[0]);
 }
 
 void test_null_and_zero_len_guards(void) {
