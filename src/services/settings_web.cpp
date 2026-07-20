@@ -1123,10 +1123,15 @@ void handleUpdateDone() {
     s_server->send(500, "text/plain; charset=utf-8", msg);
     return;
   }
-  // Defer the reboot (from settingsWebPoll) so this response reaches the
-  // browser before ESP.restart() — the ~800 ms delay is the real guard.
+  // Close the connection after this response so the browser can't hold a
+  // keep-alive socket open — an idle keep-alive would block the next
+  // handleClient() and stall the poll loop. Header must be set before send().
+  s_server->sendHeader("Connection", "close");
+  // Defer the reboot (fired from settingsWebPoll before its active-guard) so
+  // this response reaches the browser first — the ~800 ms delay is the guard.
   s_server->send(200, "text/plain; charset=utf-8",
                  "Update OK. Rebooting into the new firmware\xE2\x80\xA6");
+  s_server->client().stop();
   s_ota_reboot_pending = true;
   s_ota_reboot_at_ms = millis() + 800;
 }
@@ -1203,15 +1208,21 @@ void settingsWebStop() {
 }
 
 void settingsWebPoll() {
-  if (!s_active || s_server == nullptr) {
-    return;
-  }
-  s_server->handleClient();
+  // Fire a pending OTA reboot BEFORE the active-guard and BEFORE handleClient().
+  // A WiFi blip during the heavy flash write can trigger settingsWebStop()
+  // (clearing s_active / s_server), and an idle keep-alive socket can block
+  // handleClient() — both would strand the reboot if it lived after those.
+  // The response was already sent (and the socket closed) on the iteration that
+  // set the flag; the ~800 ms defer gives it time to leave the wire.
   if (s_ota_reboot_pending && millis() >= s_ota_reboot_at_ms) {
     Serial.println("[ota] rebooting into new firmware");
     Serial.flush();
     ESP.restart();
   }
+  if (!s_active || s_server == nullptr) {
+    return;
+  }
+  s_server->handleClient();
 }
 
 bool settingsWebActive() { return s_active; }
