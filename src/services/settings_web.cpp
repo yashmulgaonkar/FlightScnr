@@ -1,9 +1,11 @@
 #include "services/settings_web.h"
 
+#include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
 
 #include <cmath>
 #include <cstdio>
@@ -13,6 +15,7 @@
 #endif
 
 #include "config.h"
+#include "services/firmware_image.h"
 #include "hardware/buzzer.h"
 #include "hardware/display_brightness.h"
 #include "services/adsb_client.h"
@@ -41,7 +44,7 @@ bool s_active = false;
  *  overload copies the whole page into an internal-heap String, which under a
  *  ~26 KB post-detail heap starved lwIP (min free 5 KB), stalled loop() for
  *  ~12 s, and left max_blk permanently fragmented below the panel/TLS gates. */
-constexpr size_t kSettingsPageCap = 28672;
+constexpr size_t kSettingsPageCap = 32768;
 char* s_settings_page = nullptr;
 
 char* settingsPageBuffer() {
@@ -796,6 +799,51 @@ void handleSettingsPage() {
             "<a class=\"dl\" href=\"/route_cache.csv\" download=\"route_cache.csv\">"
             "&#8681;&nbsp; Download route_cache.csv</a></div></details>");
 
+  // ---------- Firmware update card ----------
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#8635;</span>"
+            "Firmware update<span class=\"sum\">upload .bin (OTA)</span>"
+            "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
+            "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
+            "<b>Warning.</b> Upload only the <b>app image</b> "
+            "(<code>firmware.bin</code>, the WebFlasher &ldquo;App only&rdquo; file) &mdash; "
+            "<b>not</b> <code>firmware-merged.bin</code>. Do not disconnect power during "
+            "the update. After it installs, press the device&rsquo;s <b>reset button</b> "
+            "(or unplug/replug power) to start the new firmware.</div>"
+            "<input id=\"fw_file\" type=\"file\" accept=\".bin\">"
+            "<p style=\"margin-top:.6rem\">"
+            "<button id=\"fw_btn\" class=\"sm\" type=\"button\">Upload &amp; flash</button></p>"
+            "<div id=\"fw_bar\" style=\"display:none;height:.55rem;border-radius:6px;"
+            "background:#262626;border:1px solid var(--line);margin-top:.6rem;overflow:hidden\">"
+            "<div id=\"fw_fill\" style=\"height:100%;width:0;background:var(--accent2)\"></div></div>"
+            "<p id=\"fw_msg\" class=\"note\"></p>"
+            "<script>"
+            "(function(){"
+            "var b=document.getElementById('fw_btn'),f=document.getElementById('fw_file'),"
+            "m=document.getElementById('fw_msg'),bar=document.getElementById('fw_bar'),"
+            "fill=document.getElementById('fw_fill');"
+            "b.addEventListener('click',function(){"
+            "if(!f.files||!f.files[0]){m.textContent='Choose a firmware.bin file first.';return;}"
+            "if(!confirm('Flash this firmware? Do not upload the merged image, and keep "
+            "power connected. You will need to reset the device afterwards.'))return;"
+            "var fd=new FormData();fd.append('firmware',f.files[0]);"
+            "var x=new XMLHttpRequest();x.open('POST','/update');"
+            "b.disabled=true;f.disabled=true;bar.style.display='block';"
+            "x.upload.onprogress=function(e){if(e.lengthComputable){"
+            "var p=Math.round(e.loaded/e.total*100);fill.style.width=p+'%';"
+            "m.textContent='Uploading '+p+'%';}};"
+            "x.onload=function(){if(x.status==200){fill.style.width='100%';"
+            "m.textContent='Update installed \\u2014 press the device\\u2019s reset button "
+            "to boot the new firmware.';}"
+            "else{m.textContent='Failed: '+(x.responseText||('HTTP '+x.status));"
+            "b.disabled=false;f.disabled=false;}};"
+            "x.onerror=function(){m.textContent='Upload error (connection lost).';"
+            "b.disabled=false;f.disabled=false;};"
+            "x.send(fd);"
+            "});"
+            "})();"
+            "</script></div></details>");
+
   const int tail_n = snprintf(
       page + used, kSettingsPageCap - used,
       "<p class=\"foot\"><a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
@@ -958,6 +1006,141 @@ void handleWifiPass() {
   redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
 }
 
+// ---------- Firmware update (OTA over Update.h) ----------
+//
+// The upload streams into the *inactive* OTA app partition; otadata is only
+// switched by Update.end(true) after the whole image is written and validated.
+// A wrong/aborted upload therefore leaves the running firmware untouched — no
+// brick risk. On success the user is told to reset the device manually: a
+// programmatic reset (esp_restart or a full RTC-WDT chip reset) hangs early in
+// boot on this board (ESP32-S3, USB-CDC-on-boot) when no USB host is attached —
+// only the hardware/power reset recovers. See docs/adr/0003-ota-manual-restart.md.
+
+bool s_ota_upload_failed = false;   // set on any per-request upload error
+bool s_ota_header_checked = false;  // magic byte checked on the first write chunk
+size_t s_ota_since_breather = 0;    // bytes written since the last delay(1)
+
+// Give lower-priority tasks (incl. the idle task, which resets the hardware
+// task WDT) a slice roughly every 16 KB of flash writes. A bare yield()/
+// esp_task_wdt_reset() from the prio-1 loopTask is a no-op for the WDT here, so
+// we actually block briefly instead.
+constexpr size_t kOtaBreatherBytes = 16u * 1024u;
+
+size_t otaAppPartitionSize() {
+  const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+  return next != nullptr ? static_cast<size_t>(next->size) : 0;
+}
+
+void handleUpdateUpload() {
+  HTTPUpload& upload = s_server->upload();
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      s_ota_upload_failed = false;
+      s_ota_header_checked = false;
+      s_ota_since_breather = 0;
+      Serial.printf("[ota] upload start: %s\n", upload.filename.c_str());
+      // Size is not known up front from a browser multipart upload, so let
+      // Update size the target partition itself.
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+        s_ota_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_WRITE: {
+      if (s_ota_upload_failed) {
+        break;  // already failed: discard the rest
+      }
+      if (!s_ota_header_checked) {
+        s_ota_header_checked = true;
+        // Only the magic byte is meaningful here: upload.totalSize is still 0
+        // during the first chunk on the ESP32 WebServer, so pass 0 (unknown)
+        // and defer the size check to UPLOAD_FILE_END where the total is final.
+        if (!services::ota::firmwareHeaderLooksValid(
+                upload.buf, upload.currentSize, /*total_size=*/0,
+                otaAppPartitionSize())) {
+          Serial.println("[ota] rejected: image header looks invalid");
+          Update.abort();
+          s_ota_upload_failed = true;
+          break;
+        }
+      }
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+        s_ota_upload_failed = true;
+        break;
+      }
+      // A bare yield()/esp_task_wdt_reset() from the prio-1 loopTask does not
+      // let the idle task run to pet the hardware WDT, so actually block for a
+      // tick every ~16 KB to keep the long flash write from starving it.
+      s_ota_since_breather += upload.currentSize;
+      if (s_ota_since_breather >= kOtaBreatherBytes) {
+        s_ota_since_breather = 0;
+        delay(1);
+      }
+      break;
+    }
+    case UPLOAD_FILE_END: {
+      if (s_ota_upload_failed) {
+        break;
+      }
+      // totalSize is final here — reject an oversized or implausibly small
+      // image before flipping otadata. Wrong sizes never reach the header
+      // check's size rules mid-stream (totalSize is 0 on the first chunk).
+      if (!services::ota::firmwareSizeLooksValid(upload.totalSize,
+                                                 otaAppPartitionSize())) {
+        Serial.printf("[ota] rejected: size %u out of range\n",
+                      static_cast<unsigned>(upload.totalSize));
+        Update.abort();
+        s_ota_upload_failed = true;
+        break;
+      }
+      if (Update.end(true)) {
+        Serial.printf("[ota] update ok: %u bytes\n",
+                      static_cast<unsigned>(upload.totalSize));
+      } else {
+        Update.printError(Serial);
+        s_ota_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_ABORTED: {
+      Serial.println("[ota] upload aborted");
+      Update.abort();
+      s_ota_upload_failed = true;
+      break;
+    }
+    default:
+      break;
+  }
+  yield();
+}
+
+void handleUpdateDone() {
+  if (s_ota_upload_failed || !Update.isFinished() || Update.hasError()) {
+    char msg[96];
+    snprintf(msg, sizeof(msg), "Update failed (error %u). Device not restarted.",
+             static_cast<unsigned>(Update.getError()));
+    // Close the connection (as in the success path) so an idle keep-alive
+    // socket can't block the next handleClient(). Header must be set before send.
+    s_server->sendHeader("Connection", "close");
+    s_server->send(500, "text/plain; charset=utf-8", msg);
+    s_server->client().stop();
+    return;
+  }
+  // Close the connection after this response so the browser can't hold a
+  // keep-alive socket open — an idle keep-alive would block the next
+  // handleClient() and stall the poll loop. Header must be set before send().
+  // We do NOT reboot programmatically: on this board a soft/WDT reset hangs the
+  // USB-CDC boot with no host attached, so the new firmware only starts after a
+  // manual reset. See docs/adr/0003-ota-manual-restart.md.
+  s_server->sendHeader("Connection", "close");
+  s_server->send(200, "text/plain; charset=utf-8",
+                 "Update installed. Press the reset button on the device (or "
+                 "unplug/replug power) to start the new firmware.");
+  s_server->client().stop();
+}
+
 void handleNotFound() {
   s_server->sendHeader("Location", "/", true);
   s_server->send(302, "text/plain", "");
@@ -973,6 +1156,7 @@ void registerRoutes() {
   s_server->on("/wifi/up", HTTP_POST, handleWifiUp);
   s_server->on("/wifi/down", HTTP_POST, handleWifiDown);
   s_server->on("/wifi/pass", HTTP_POST, handleWifiPass);
+  s_server->on("/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
   s_server->onNotFound(handleNotFound);
 }
 
