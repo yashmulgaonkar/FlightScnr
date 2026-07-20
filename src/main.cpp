@@ -11,6 +11,7 @@
 
 #include "config.h"
 #include "services/route_cache_store.h"
+#include "services/reboot.h"
 #include "hardware/buzzer.h"
 #include "hardware/display.h"
 #include "hardware/plane_gfx.h"
@@ -1754,7 +1755,7 @@ void tickAdsbFetch() {
               "[fetch] heap unrecoverable after %u recycles free=%u max_blk=%u — restart\n",
               s_stuck_recycles, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
           delay(200);
-          esp_restart();
+          services::hardReboot();  // full chip reset (soft reset hangs USB-CDC boot with no host)
         }
         recycleWifiForTls(now, "heap stuck — WiFi recycle");
         s_heap_recover_attempts = 0;

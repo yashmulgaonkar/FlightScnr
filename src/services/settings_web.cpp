@@ -16,6 +16,7 @@
 
 #include "config.h"
 #include "services/firmware_image.h"
+#include "services/reboot.h"
 #include "hardware/buzzer.h"
 #include "hardware/display_brightness.h"
 #include "services/adsb_client.h"
@@ -1217,7 +1218,7 @@ void settingsWebPoll() {
   if (s_ota_reboot_pending && millis() >= s_ota_reboot_at_ms) {
     Serial.println("[ota] rebooting into new firmware");
     Serial.flush();
-    ESP.restart();
+    services::hardReboot();  // full chip reset: soft reset hangs USB-CDC boot
   }
   if (!s_active || s_server == nullptr) {
     return;
