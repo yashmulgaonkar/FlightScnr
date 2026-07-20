@@ -669,10 +669,16 @@ void handleSettingsPage() {
       "<option value=\"imperial\"%s>Imperial (&deg;F)</option>"
       "</select>"
       "<p class=\"note\">Current conditions show on the clock screen; swipe right for the 3-day "
-      "forecast.</p></div></details>",
+      "forecast.</p>",
       masked, services::weather::useImperial() ? "" : " selected",
       services::weather::useImperial() ? " selected" : "");
   appendClamped(page, kSettingsPageCap, &used, wx_n);
+  // Open-Meteo (free, key-less; used when Tomorrow.io is off/keyless or fails).
+  appendToggle(page, kSettingsPageCap, &used, "use_openmeteo", "Use Open-Meteo (free weather)",
+               services::apikeys::useOpenMeteo());
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"note\">Free weather source (Open-Meteo.com), no key needed. "
+            "Used when Tomorrow.io is off or unavailable.</p></div></details>");
 
   // Close the settings form but keep .wrap open so Wi-Fi / route-cache cards
   // share the same column spacing (nested forms cannot live inside /save).
@@ -843,9 +849,11 @@ void handleSave() {
       s_server->arg("show_sweep").c_str(), s_server->arg("detail_timeout").c_str());
 
   const bool use_weather_before = services::apikeys::useWeather();
+  const bool use_openmeteo_before = services::apikeys::useOpenMeteo();
   const bool weather_key_saved =
       services::apikeys::saveWeatherKeyFromForm(s_server->arg("weather_key").c_str());
   services::apikeys::saveWeatherEnabledFromForm(s_server->arg("use_weather").c_str());
+  services::apikeys::saveOpenMeteoEnabledFromForm(s_server->arg("use_openmeteo").c_str());
   services::apikeys::saveAdsbDbEnabledFromForm(s_server->arg("use_adsbdb").c_str());
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
@@ -881,7 +889,8 @@ void handleSave() {
     return;
   }
 
-  if (weather_key_saved || use_weather_before != services::apikeys::useWeather()) {
+  if (weather_key_saved || use_weather_before != services::apikeys::useWeather() ||
+      use_openmeteo_before != services::apikeys::useOpenMeteo()) {
     services::weather::notifyEnabledChanged();
   }
 

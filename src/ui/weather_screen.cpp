@@ -123,18 +123,28 @@ void weatherScreenDraw() {
   tft.fillScreen(bg);
   drawCentered("Forecast", 48, displayFontClockDate(), fg, bg);
 
-  if (!services::apikeys::useWeather()) {
-    drawCentered("Tomorrow.io disabled", kCenterY - 12, displayFontDetail(), dim, bg);
-    drawCentered("in web settings", kCenterY + 12, displayFontDetail(), dim, bg);
-  } else if (!services::apikeys::hasWeather()) {
-    drawCentered("Add a Tomorrow.io key", kCenterY - 12, displayFontDetail(), dim, bg);
-    drawCentered("in web settings", kCenterY + 12, displayFontDetail(), dim, bg);
+  // A weather source is available when paid Tomorrow.io is enabled with a key,
+  // or the free key-less Open-Meteo fallback is on.
+  const bool tomorrow_ready =
+      services::apikeys::useWeather() && services::apikeys::hasWeather();
+  const bool any_source = tomorrow_ready || services::apikeys::useOpenMeteo();
+
+  if (!any_source) {
+    drawCentered("No weather source", kCenterY - 12, displayFontDetail(), dim, bg);
+    drawCentered("enable it in web settings", kCenterY + 12, displayFontDetail(), dim, bg);
   } else if (!services::weather::hasData()) {
     drawCentered(services::weather::fetchInProgress() ? "Loading weather…"
                                                       : "No weather data",
                  kCenterY - 8, displayFontBody(), dim, bg);
   } else {
     drawForecast(services::weather::data(), fg, dim, accent, bg);
+    // Open-Meteo data is CC BY 4.0 → a visible credit is required. Show it only
+    // when the displayed snapshot actually came from Open-Meteo (not Tomorrow.io).
+    if (services::weather::data().source ==
+        services::weather::WeatherData::Source::OpenMeteo) {
+      drawCentered("Weather data: Open-Meteo.com", config::kDisplayHeight - 22,
+                   displayFontDetail(), dim, bg);
+    }
   }
 
   tft.setTextDatum(TextDatum::TopLeft);

@@ -23,6 +23,7 @@
 #include "services/https_heap.h"
 #include "services/https_lock.h"
 #include "services/map_center.h"
+#include "services/open_meteo_parse.h"
 
 namespace services::weather {
 
@@ -471,16 +472,88 @@ bool fetchTimelines(HTTPClient& http, WiFiClientSecure& client, double lat, doub
   if (!got_current && !got_daily) {
     Serial.println("[weather] parsed 0 usable timelines");
   }
-  return got_current || got_daily;
+  if (got_current || got_daily) {
+    out->source = WeatherData::Source::TomorrowIo;
+    return true;
+  }
+  return false;
+}
+
+// GET Open-Meteo forecast over one TLS connection and parse it. Key-less and
+// no per-request throttling needed (free tier, ~10k/day). Requests current +
+// 3-day daily in the active unit system with unixtime UTC epochs, then reuses
+// the shared readHttpPayload + PSRAM buffer so it stays off the tight DRAM heap.
+bool fetchOpenMeteo(HTTPClient& http, WiFiClientSecure& client, double lat, double lon,
+                    WeatherData* out, int* out_code) {
+  String url = "https://api.open-meteo.com/v1/forecast?latitude=";
+  url += String(lat, 5);
+  url += "&longitude=";
+  url += String(lon, 5);
+  url += "&current=temperature_2m,relative_humidity_2m,weather_code";
+  url += "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
+         "precipitation_probability_max,sunrise,sunset";
+  url += "&timezone=UTC&forecast_days=3&timeformat=unixtime&temperature_unit=";
+  url += s_req_imperial ? "fahrenheit" : "celsius";
+
+  if (out_code != nullptr) {
+    *out_code = 0;
+  }
+  if (!http.begin(client, url)) {
+    Serial.println("[weather] open-meteo http.begin failed");
+    return false;
+  }
+  http.setConnectTimeout(config::kWeatherApiTimeoutMs);
+  http.setTimeout(config::kWeatherApiTimeoutMs);
+  http.addHeader("Accept", "application/json");
+
+  const int code = http.GET();
+  if (out_code != nullptr) {
+    *out_code = code;
+  }
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("[weather] open-meteo HTTP %d\n", code);
+    PsramPayload err_body;
+    readHttpPayload(http, &err_body, 2000U);
+    if (err_body.len > 0) {
+      Serial.printf("[weather] body: %.300s\n", err_body.data);
+    }
+    http.end();
+    return false;
+  }
+
+  PsramPayload payload;
+  readHttpPayload(http, &payload, config::kWeatherApiTimeoutMs + 4000U);
+  http.end();
+  workerYield();
+
+  Serial.printf("[weather] open-meteo HTTP %d len=%u\n", code,
+                static_cast<unsigned>(payload.len));
+  if (payload.len == 0 || payload.data == nullptr) {
+    Serial.println("[weather] open-meteo empty response body");
+    return false;
+  }
+
+  JsonDocument filter(&s_weather_json_allocator);
+  buildOpenMeteoFilter(filter);
+  JsonDocument doc(&s_weather_json_allocator);
+  const DeserializationError err = deserializeJson(
+      doc, payload.data, payload.len, DeserializationOption::Filter(filter));
+  if (err) {
+    Serial.printf("[weather] open-meteo JSON parse error: %s\n", err.c_str());
+    Serial.printf("[weather] body: %.300s\n", payload.data);
+    return false;
+  }
+  return parseOpenMeteo(doc, out);
+}
+
+// True when at least one weather provider is configured: paid Tomorrow.io (key +
+// enabled) or the free key-less Open-Meteo fallback.
+bool anyWeatherSourceAvailable() {
+  return services::apikeys::canUseWeather() || services::apikeys::useOpenMeteo();
 }
 
 bool fetchWeatherBlocking(WeatherData* out) {
-  if (!services::apikeys::canUseWeather()) {
-    return false;
-  }
-  const char* key = services::apikeys::weatherKey();
-  if (key == nullptr || key[0] == '\0') {
-    Serial.println("[weather] no API key set");
+  if (!anyWeatherSourceAvailable()) {
     return false;
   }
   services::https::ScopedLock tls(config::kWeatherApiTimeoutMs * 2 + 4000);
@@ -502,8 +575,11 @@ bool fetchWeatherBlocking(WeatherData* out) {
   *out = WeatherData{};
   out->imperial = s_req_imperial;
 
+  const char* key = services::apikeys::weatherKey();
+  const bool tomorrow_ready =
+      services::apikeys::canUseWeather() && key != nullptr && key[0] != '\0';
+
   const unsigned long started = millis();
-  // One TLS connection, one handshake, one POST → current + daily forecast.
   bool ok = false;
   int code = 0;
   {
@@ -512,25 +588,45 @@ bool fetchWeatherBlocking(WeatherData* out) {
     client.setTimeout(kTimeoutSec);
     client.setHandshakeTimeout(kTimeoutSec);
     HTTPClient http;
-    ok = fetchTimelines(http, client, s_req_lat, s_req_lon, key, out, &code);
+    // Paid Tomorrow.io first (one TLS handshake, one POST → current + daily).
+    if (tomorrow_ready) {
+      ok = fetchTimelines(http, client, s_req_lat, s_req_lon, key, out, &code);
+      if (!ok) {
+        // HTTP 429 = Tomorrow.io rate limit; back off much longer than a
+        // transient failure so we stop hammering the free-tier quota.
+        if (code == 429) {
+          s_retry_after_ms = millis() + config::kWeatherRateLimitBackoffMs;
+          Serial.printf("[weather] rate limited — backing off %lus\n",
+                        config::kWeatherRateLimitBackoffMs / 1000UL);
+        }
+        client.stop();
+        services::https::drainTlsHeapAfterSession();
+      }
+    }
+    // Free key-less Open-Meteo when Tomorrow.io is off/keyless or just failed.
+    if (!ok && services::apikeys::useOpenMeteo()) {
+      if (tomorrow_ready) {
+        // Reconnect for a clean session after a Tomorrow.io failure.
+        client.setInsecure();
+        client.setTimeout(kTimeoutSec);
+        client.setHandshakeTimeout(kTimeoutSec);
+      }
+      HTTPClient om_http;
+      int om_code = 0;
+      ok = fetchOpenMeteo(om_http, client, s_req_lat, s_req_lon, out, &om_code);
+    }
     client.stop();
   }
   services::https::drainTlsHeapAfterSession();
 
   if (!ok) {
-    // HTTP 429 = Tomorrow.io rate limit; back off much longer than a transient
-    // failure so we stop hammering the free-tier quota.
-    if (code == 429) {
-      s_retry_after_ms = millis() + config::kWeatherRateLimitBackoffMs;
-      Serial.printf("[weather] rate limited — backing off %lus\n",
-                    config::kWeatherRateLimitBackoffMs / 1000UL);
-    }
     return false;
   }
   out->valid = true;
-  Serial.printf("[weather] ok temp=%.0f code=%d days=%d (%lums)\n", out->current_temp,
-                out->current_code, out->days[0].valid + out->days[1].valid +
-                                       out->days[2].valid,
+  Serial.printf("[weather] ok src=%s temp=%.0f code=%d days=%d (%lums)\n",
+                out->source == WeatherData::Source::OpenMeteo ? "open-meteo" : "tomorrow.io",
+                out->current_temp, out->current_code,
+                out->days[0].valid + out->days[1].valid + out->days[2].valid,
                 millis() - started);
   return true;
 }
@@ -588,8 +684,9 @@ void init() {
 
 void bootSanityCheck() {
   Serial.println("[weather] boot sanity check: one synchronous API call");
-  if (!services::apikeys::canUseWeather()) {
-    Serial.println("[weather] boot check: API disabled or no key set");
+  if (!anyWeatherSourceAvailable()) {
+    Serial.println("[weather] boot check: no weather source (Tomorrow.io off/keyless "
+                   "and Open-Meteo off)");
     return;
   }
   s_req_lat = services::map_center::latitude();
@@ -681,7 +778,7 @@ void notifyLocationChanged() {
 }
 
 void notifyApiKeyChanged() {
-  if (!services::apikeys::canUseWeather()) {
+  if (!anyWeatherSourceAvailable()) {
     return;
   }
   s_retry_after_ms = 0;
@@ -692,18 +789,18 @@ void notifyApiKeyChanged() {
 }
 
 void notifyEnabledChanged() {
-  if (!services::apikeys::canUseWeather()) {
+  if (!anyWeatherSourceAvailable()) {
     s_live.valid = false;
     s_staging.valid = false;
     s_ready = false;
-    Serial.println("[weather] API disabled - cache cleared");
+    Serial.println("[weather] no weather source - cache cleared");
     return;
   }
   notifyApiKeyChanged();
 }
 
 void requestRefresh(bool force) {
-  if (!services::apikeys::canUseWeather()) {
+  if (!anyWeatherSourceAvailable()) {
     return;
   }
   if (s_pending) {
