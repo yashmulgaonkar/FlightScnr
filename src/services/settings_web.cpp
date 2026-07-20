@@ -630,6 +630,14 @@ void handleSettingsPage() {
       masked, fr_budget, fr_cost, fr_used_note);
   appendClamped(page, kSettingsPageCap, &used, fr_n);
 
+  // adsbdb.com (free, key-less; used after the paid APIs)
+  appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\">");
+  appendToggle(page, kSettingsPageCap, &used, "use_adsbdb", "Use adsbdb (free)",
+               services::apikeys::useAdsbDb());
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"usage\">Free route source (adsbdb.com), no key needed. "
+            "Used after the paid APIs above.</p></div>");
+
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
   // ---------- Weather card ----------
@@ -827,6 +835,7 @@ void handleSave() {
   const bool weather_key_saved =
       services::apikeys::saveWeatherKeyFromForm(s_server->arg("weather_key").c_str());
   services::apikeys::saveWeatherEnabledFromForm(s_server->arg("use_weather").c_str());
+  services::apikeys::saveAdsbDbEnabledFromForm(s_server->arg("use_adsbdb").c_str());
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());

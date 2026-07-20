@@ -97,11 +97,10 @@ bool parseAdsbdbResponse(JsonDocument& doc, RouteInfo* route) {
 }
 
 void buildAdsbdbFilter(JsonDocument& filter) {
-  auto flightroute = filter["response"]["flightroute"];
-  flightroute["airline"]["name"] = true;
-  flightroute["airline"]["icao"] = true;
-  flightroute["origin"]["icao_code"] = true;
-  flightroute["destination"]["icao_code"] = true;
+  filter["response"]["flightroute"]["airline"]["name"] = true;
+  filter["response"]["flightroute"]["airline"]["icao"] = true;
+  filter["response"]["flightroute"]["origin"]["icao_code"] = true;
+  filter["response"]["flightroute"]["destination"]["icao_code"] = true;
 }
 
 }  // namespace services::route

@@ -24,6 +24,7 @@ constexpr char kUseWeather[] = "wx_use";
 constexpr char kUseAirLabs[] = "al_use";
 constexpr char kUseFlightAware[] = "fa_use";
 constexpr char kUseFr24[] = "fr24_use";
+constexpr char kUseAdsbDb[] = "adb_use";
 constexpr char kAlMaxCalls[] = "al_max";
 constexpr char kAlUsedKeys[] = "al_used_k";
 constexpr char kFaBudgetMicro[] = "fa_bgt_u";
@@ -59,6 +60,7 @@ bool s_use_fr24 = false;
 
 char s_weather_key[kMaxSingleKeyLen + 1] = {0};
 bool s_use_weather = true;
+bool s_use_adsbdb = true;
 
 uint32_t s_al_max_calls = config::kDefaultAirLabsMaxCalls;
 uint32_t s_fa_budget_micro = config::kDefaultFlightAwareBudgetUsdMicro;
@@ -453,6 +455,7 @@ void load() {
     s_weather_key[0] = '\0';
   }
   s_use_weather = prefs.getBool(kUseWeather, true);
+  s_use_adsbdb = prefs.getBool(kUseAdsbDb, true);
 
   s_al_max_calls = prefs.getUInt(kAlMaxCalls, config::kDefaultAirLabsMaxCalls);
   s_fa_budget_micro = prefs.getUInt(kFaBudgetMicro, config::kDefaultFlightAwareBudgetUsdMicro);
@@ -723,6 +726,18 @@ void saveWeatherEnabledFromForm(const char* use_weather) {
 bool useWeather() { return s_use_weather; }
 
 bool canUseWeather() { return s_use_weather && s_weather_key[0] != '\0'; }
+
+void saveAdsbDbEnabledFromForm(const char* use_adsbdb) {
+  Preferences prefs;
+  if (!prefs.begin(kNs, false)) {
+    return;
+  }
+  s_use_adsbdb = portalCheckboxChecked(use_adsbdb);
+  prefs.putBool(kUseAdsbDb, s_use_adsbdb);
+  prefs.end();
+}
+
+bool useAdsbDb() { return s_use_adsbdb; }
 
 void maskedWeather(char* out, size_t len) { maskedPreviewSingle(s_weather_key, out, len); }
 

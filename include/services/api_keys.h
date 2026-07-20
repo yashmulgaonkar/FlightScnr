@@ -37,6 +37,11 @@ void saveWeatherEnabledFromForm(const char* use_weather);
 bool useWeather();
 /** True when Tomorrow.io is enabled and a key is configured. */
 bool canUseWeather();
+
+/** Portal/web checkbox ("T" = enabled) for the free adsbdb route source. */
+void saveAdsbDbEnabledFromForm(const char* use_adsbdb);
+/** Free key-less adsbdb.com route source enabled (default on). */
+bool useAdsbDb();
 void maskedWeather(char* out, size_t len);
 
 bool useAirLabs();
