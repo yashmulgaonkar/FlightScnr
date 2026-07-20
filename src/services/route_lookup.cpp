@@ -18,7 +18,9 @@
 #include <ctime>
 
 #include "config.h"
+#include "services/adsbdb_parse.h"
 #include "services/https_heap.h"
+#include "services/route_info.h"
 #include "services/airline_lookup.h"
 #include "services/airport_lookup.h"
 #include "services/api_keys.h"
@@ -39,12 +41,7 @@ constexpr char kFr24Base[] =
 
 constexpr size_t kCacheSize = 64;
 
-struct RouteInfo {
-  char airline[28];
-  char airline_icao[4];
-  char origin[5];
-  char dest[5];
-};
+constexpr char kAdsbDbBase[] = "https://api.adsbdb.com/v0/callsign/";
 
 struct CacheSlot {
   char callsign[9];
