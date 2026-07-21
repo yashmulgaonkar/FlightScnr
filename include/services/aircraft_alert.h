@@ -20,12 +20,24 @@ bool emergencyAlertEnabled();
 bool hideNonAlertedEnabled();
 bool watchCallsignsEnabled();
 size_t watchCallsignCount();
+bool watchTypesEnabled();
+size_t watchTypeCount();
+bool watchRegsEnabled();
+size_t watchRegCount();
 
 /** Comma-separated watch list for settings form (e.g. ACA739,UAL123). */
 void watchCallsignsFormatted(char* out, size_t out_len);
 
+/** Comma-separated ICAO type watch list (e.g. B738,A333). */
+void watchTypesFormatted(char* out, size_t out_len);
+
+/** Comma-separated registration / tail watch list (e.g. N2136U,CS-TPQ). */
+void watchRegsFormatted(char* out, size_t out_len);
+
 void saveFromForm(const char* mil_checkbox, const char* emrg_checkbox,
                   const char* hide_checkbox, const char* watch_callsigns,
-                  bool update_watch_callsigns);
+                  bool update_watch_callsigns, const char* watch_types,
+                  bool update_watch_types, const char* watch_regs,
+                  bool update_watch_regs);
 
 }  // namespace services::alert

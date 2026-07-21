@@ -80,7 +80,7 @@ void buildAircraftFilter(JsonDocument& filter) {
       "lat",          "lon",      "true_heading", "mag_heading", "track",
       "dir",          "gs",       "tas",          "ias",         "baro_rate",
       "geom_rate",    "alt_baro", "alt_geom",     "flight",      "hex",
-      "t",            "dbFlags",  "category",     "squawk",
+      "t",            "r",        "dbFlags",      "category",    "squawk",
       "orig_icao",    "origin_icao", "dep_icao",  "from",
       "dest_icao",    "destination_icao", "arr_icao", "to"};
   for (const char* key : kKeepKeys) {
@@ -515,6 +515,11 @@ void fillTagFields(Aircraft* ac, const JsonObject& plane) {
   }
 
   copyJsonStringTrimmed(plane, "t", ac->type, sizeof(ac->type));
+  copyJsonStringTrimmed(plane, "r", ac->registration, sizeof(ac->registration));
+  for (size_t i = 0; ac->registration[i] != '\0'; ++i) {
+    ac->registration[i] =
+        static_cast<char>(toupper(static_cast<unsigned char>(ac->registration[i])));
+  }
   copyJsonStringTrimmed(plane, "category", ac->category, sizeof(ac->category));
   copyJsonStringTrimmed(plane, "squawk", ac->squawk, sizeof(ac->squawk));
   ac->db_flags = static_cast<uint8_t>(plane["dbFlags"] | 0);

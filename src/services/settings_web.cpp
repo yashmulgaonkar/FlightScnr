@@ -254,8 +254,14 @@ void handleSettingsPage() {
   size_t used = 0;
   char masked[24];
   char watch_buf[160];
+  char watch_type_buf[96];
+  char watch_reg_buf[160];
   services::alert::watchCallsignsFormatted(watch_buf, sizeof(watch_buf));
+  services::alert::watchTypesFormatted(watch_type_buf, sizeof(watch_type_buf));
+  services::alert::watchRegsFormatted(watch_reg_buf, sizeof(watch_reg_buf));
   const size_t watch_count = services::alert::watchCallsignCount();
+  const size_t watch_type_count = services::alert::watchTypeCount();
+  const size_t watch_reg_count = services::alert::watchRegCount();
 
   const int head_n = snprintf(page, kSettingsPageCap, "%s", kPageHead);
   if (head_n > 0) {
@@ -520,6 +526,56 @@ void handleSettingsPage() {
             "<p class=\"hint\">Comma-separated callsigns (3-letter airline + flight number). "
             "Buzzes and highlights when a watched flight appears on radar. "
             "To clear all, delete the text in the field above and tap <b>Save</b>.</p>");
+
+  const int watch_type_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<label for=\"alert_watch_type\">Alert on aircraft types</label>"
+      "<input id=\"alert_watch_type\" type=\"text\" "
+      "autocomplete=\"off\" placeholder=\"B738, A333, E75L\" value=\"%s\">",
+      watch_type_buf);
+  appendClamped(page, kSettingsPageCap, &used, watch_type_n);
+  if (watch_type_count == 0) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<p class=\"usage\">No aircraft types tracked.</p>");
+  } else {
+    const int tracked_types_n =
+        snprintf(page + used, kSettingsPageCap - used,
+                 "<p class=\"usage\"><b>Tracking %u types:</b> %s</p>",
+                 static_cast<unsigned>(watch_type_count), watch_type_buf);
+    if (tracked_types_n > 0) {
+      appendClamped(page, kSettingsPageCap, &used, tracked_types_n);
+    }
+  }
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"hint\">Comma-separated <b>ICAO type designators</b> from ADS-B "
+            "(2&#8211;4 chars, e.g. <code>B738</code>, <code>A333</code>). "
+            "All aircraft of that type are alerted. Use the code shown on flight detail / "
+            "radar tags &#8212; not marketing names like A330-743. "
+            "Clear the field and <b>Save</b> to remove all types.</p>");
+
+  const int watch_reg_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<label for=\"alert_watch_reg\">Alert on registrations / tail numbers</label>"
+      "<input id=\"alert_watch_reg\" type=\"text\" "
+      "autocomplete=\"off\" placeholder=\"N2136U, CS-TPQ\" value=\"%s\">",
+      watch_reg_buf);
+  appendClamped(page, kSettingsPageCap, &used, watch_reg_n);
+  if (watch_reg_count == 0) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<p class=\"usage\">No registrations tracked.</p>");
+  } else {
+    const int tracked_regs_n =
+        snprintf(page + used, kSettingsPageCap - used,
+                 "<p class=\"usage\"><b>Tracking %u regs:</b> %s</p>",
+                 static_cast<unsigned>(watch_reg_count), watch_reg_buf);
+    if (tracked_regs_n > 0) {
+      appendClamped(page, kSettingsPageCap, &used, tracked_regs_n);
+    }
+  }
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"hint\">Comma-separated civil registrations from ADS-B "
+            "(e.g. <code>N2136U</code>, <code>CS-TPQ</code>). Hyphens optional when matching. "
+            "Clear the field and <b>Save</b> to remove all.</p>");
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
   // ---------- Route APIs card ----------
@@ -688,14 +744,22 @@ void handleSettingsPage() {
   const int form_close_n = snprintf(
       page + used, kSettingsPageCap - used,
       "<input type=\"hidden\" name=\"alert_watch\" id=\"alert_watch_post\" value=\"%s\">"
+      "<input type=\"hidden\" name=\"alert_watch_type\" id=\"alert_watch_type_post\" value=\"%s\">"
+      "<input type=\"hidden\" name=\"alert_watch_reg\" id=\"alert_watch_reg_post\" value=\"%s\">"
       "<script>"
       "document.getElementById('fs-save').addEventListener('submit',function(){"
       "var v=document.getElementById('alert_watch'),h=document.getElementById('alert_watch_post');"
       "if(v&&h){h.value=v.value;}"
+      "var vt=document.getElementById('alert_watch_type'),"
+      "ht=document.getElementById('alert_watch_type_post');"
+      "if(vt&&ht){ht.value=vt.value;}"
+      "var vr=document.getElementById('alert_watch_reg'),"
+      "hr=document.getElementById('alert_watch_reg_post');"
+      "if(vr&&hr){hr.value=vr.value;}"
       "});"
       "</script>"
       "</form>",
-      watch_buf);
+      watch_buf, watch_type_buf, watch_reg_buf);
   appendClamped(page, kSettingsPageCap, &used, form_close_n);
 
   // ---------- Wi-Fi networks card (above route cache) ----------
@@ -925,10 +989,34 @@ void handleSave() {
   } else {
     Serial.println("[alert] form watch arg missing (keeping saved list)");
   }
+  const bool watch_type_arg_present = s_server->hasArg("alert_watch_type");
+  char watch_type_form[96] = "";
+  if (watch_type_arg_present) {
+    strncpy(watch_type_form, s_server->arg("alert_watch_type").c_str(),
+            sizeof(watch_type_form) - 1);
+    watch_type_form[sizeof(watch_type_form) - 1] = '\0';
+    Serial.printf("[alert] form watch_type='%s'\n", watch_type_form);
+  } else {
+    Serial.println("[alert] form watch_type arg missing (keeping saved list)");
+  }
+  const bool watch_reg_arg_present = s_server->hasArg("alert_watch_reg");
+  char watch_reg_form[160] = "";
+  if (watch_reg_arg_present) {
+    strncpy(watch_reg_form, s_server->arg("alert_watch_reg").c_str(),
+            sizeof(watch_reg_form) - 1);
+    watch_reg_form[sizeof(watch_reg_form) - 1] = '\0';
+    Serial.printf("[alert] form watch_reg='%s'\n", watch_reg_form);
+  } else {
+    Serial.println("[alert] form watch_reg arg missing (keeping saved list)");
+  }
   services::alert::saveFromForm(s_server->arg("alert_mil").c_str(),
                                 s_server->arg("alert_emrg").c_str(),
                                 s_server->arg("alert_hide").c_str(),
-                                watch_arg_present ? watch_form : nullptr, watch_arg_present);
+                                watch_arg_present ? watch_form : nullptr, watch_arg_present,
+                                watch_type_arg_present ? watch_type_form : nullptr,
+                                watch_type_arg_present,
+                                watch_reg_arg_present ? watch_reg_form : nullptr,
+                                watch_reg_arg_present);
 
   Serial.printf("Settings web save (lat/lon %s)\n", loc_ok ? "ok" : "invalid");
 

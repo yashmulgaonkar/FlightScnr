@@ -6,6 +6,8 @@
 #include <cstring>
 
 #include "hardware/buzzer.h"
+#include "services/watch_reg_parse.h"
+#include "services/watch_type_parse.h"
 #include "ui/radar_display.h"
 
 namespace services::alert {
@@ -16,6 +18,8 @@ constexpr char kMilKey[] = "alert_mil";
 constexpr char kEmrgKey[] = "alert_emrg";
 constexpr char kHideKey[] = "alert_hide";
 constexpr char kWatchKey[] = "alert_watch";
+constexpr char kWatchTypeKey[] = "alert_wtype";
+constexpr char kWatchRegKey[] = "alert_wreg";
 
 constexpr size_t kSeenCapacity = 32;
 constexpr size_t kWatchMax = 16;
@@ -30,6 +34,14 @@ bool s_hide_non_alerted = false;
 char s_watch_blob[kWatchBlobLen] = "";
 char s_watch_callsigns[kWatchMax][kWatchCallsignLen];
 size_t s_watch_count = 0;
+
+char s_watch_type_blob[kWatchTypeBlobLen] = "";
+char s_watch_types[kWatchTypeMax][kWatchTypeLen];
+size_t s_watch_type_count = 0;
+
+char s_watch_reg_blob[kWatchRegBlobLen] = "";
+char s_watch_regs[kWatchRegMax][kWatchRegLen];
+size_t s_watch_reg_count = 0;
 
 struct SeenEntry {
   uint32_t hash = 0;
@@ -132,6 +144,14 @@ bool watchlistContains(const char* callsign) {
   return false;
 }
 
+bool watchTypeContains(const char* type) {
+  return watchTypeListContains(s_watch_types, s_watch_type_count, type);
+}
+
+bool watchRegContains(const char* registration) {
+  return watchRegListContains(s_watch_regs, s_watch_reg_count, registration);
+}
+
 void parseWatchBlob(const char* blob) {
   s_watch_count = 0;
   if (blob == nullptr || blob[0] == '\0') {
@@ -204,6 +224,18 @@ void rebuildWatchBlob() {
   }
 }
 
+void applyWatchTypeBlob(const char* blob) {
+  s_watch_type_count = parseWatchTypeBlob(blob, s_watch_types, kWatchTypeMax);
+  rebuildWatchTypeBlob(s_watch_types, s_watch_type_count, s_watch_type_blob,
+                       sizeof(s_watch_type_blob));
+}
+
+void applyWatchRegBlob(const char* blob) {
+  s_watch_reg_count = parseWatchRegBlob(blob, s_watch_regs, kWatchRegMax);
+  rebuildWatchRegBlob(s_watch_regs, s_watch_reg_count, s_watch_reg_blob,
+                      sizeof(s_watch_reg_blob));
+}
+
 bool shouldAlert(const services::adsb::Aircraft& ac) {
   if (s_mil_enabled && ac.isMilitary()) {
     return true;
@@ -214,11 +246,18 @@ bool shouldAlert(const services::adsb::Aircraft& ac) {
   if (watchlistContains(ac.callsign)) {
     return true;
   }
+  if (watchTypeContains(ac.type)) {
+    return true;
+  }
+  if (watchRegContains(ac.registration)) {
+    return true;
+  }
   return false;
 }
 
 bool alertsActive() {
-  return s_mil_enabled || s_emrg_enabled || s_watch_count > 0;
+  return s_mil_enabled || s_emrg_enabled || s_watch_count > 0 || s_watch_type_count > 0 ||
+         s_watch_reg_count > 0;
 }
 
 }  // namespace
@@ -235,11 +274,21 @@ void bootLoad() {
   const String watch = prefs.getString(kWatchKey, "");
   strncpy(s_watch_blob, watch.c_str(), sizeof(s_watch_blob) - 1);
   s_watch_blob[sizeof(s_watch_blob) - 1] = '\0';
+  const String watch_types = prefs.getString(kWatchTypeKey, "");
+  strncpy(s_watch_type_blob, watch_types.c_str(), sizeof(s_watch_type_blob) - 1);
+  s_watch_type_blob[sizeof(s_watch_type_blob) - 1] = '\0';
+  const String watch_regs = prefs.getString(kWatchRegKey, "");
+  strncpy(s_watch_reg_blob, watch_regs.c_str(), sizeof(s_watch_reg_blob) - 1);
+  s_watch_reg_blob[sizeof(s_watch_reg_blob) - 1] = '\0';
   prefs.end();
   parseWatchBlob(s_watch_blob);
-  Serial.printf("[alert] boot mil=%d emrg=%d hide=%d watch=%u\n",
+  applyWatchTypeBlob(s_watch_type_blob);
+  applyWatchRegBlob(s_watch_reg_blob);
+  Serial.printf("[alert] boot mil=%d emrg=%d hide=%d watch=%u types=%u regs=%u\n",
                 s_mil_enabled ? 1 : 0, s_emrg_enabled ? 1 : 0, s_hide_non_alerted ? 1 : 0,
-                static_cast<unsigned>(s_watch_count));
+                static_cast<unsigned>(s_watch_count),
+                static_cast<unsigned>(s_watch_type_count),
+                static_cast<unsigned>(s_watch_reg_count));
 }
 
 void checkNewAircraft(const services::adsb::Aircraft* list, size_t count) {
@@ -263,10 +312,12 @@ void checkNewAircraft(const services::adsb::Aircraft* list, size_t count) {
     }
     markSeen(h);
     fired = true;
-    Serial.printf("[alert] %s mil=%d emrg=%d watch=%d squawk=%s\n",
-                  list[i].callsign, list[i].isMilitary() ? 1 : 0,
-                  list[i].isEmergencySquawk() ? 1 : 0,
-                  watchlistContains(list[i].callsign) ? 1 : 0, list[i].squawk);
+    Serial.printf("[alert] %s type=%s reg=%s mil=%d emrg=%d watch=%d wtype=%d wreg=%d squawk=%s\n",
+                  list[i].callsign, list[i].type, list[i].registration,
+                  list[i].isMilitary() ? 1 : 0, list[i].isEmergencySquawk() ? 1 : 0,
+                  watchlistContains(list[i].callsign) ? 1 : 0,
+                  watchTypeContains(list[i].type) ? 1 : 0,
+                  watchRegContains(list[i].registration) ? 1 : 0, list[i].squawk);
   }
   if (fired) {
     hardware::buzzerAlert();
@@ -283,6 +334,12 @@ bool isHighlighted(const services::adsb::Aircraft& ac) {
   if (watchlistContains(ac.callsign)) {
     return true;
   }
+  if (watchTypeContains(ac.type)) {
+    return true;
+  }
+  if (watchRegContains(ac.registration)) {
+    return true;
+  }
   return false;
 }
 
@@ -295,6 +352,10 @@ bool emergencyAlertEnabled() { return s_emrg_enabled; }
 bool hideNonAlertedEnabled() { return s_hide_non_alerted; }
 bool watchCallsignsEnabled() { return s_watch_count > 0; }
 size_t watchCallsignCount() { return s_watch_count; }
+bool watchTypesEnabled() { return s_watch_type_count > 0; }
+size_t watchTypeCount() { return s_watch_type_count; }
+bool watchRegsEnabled() { return s_watch_reg_count > 0; }
+size_t watchRegCount() { return s_watch_reg_count; }
 
 void watchCallsignsFormatted(char* out, size_t out_len) {
   if (out == nullptr || out_len == 0) {
@@ -304,16 +365,42 @@ void watchCallsignsFormatted(char* out, size_t out_len) {
   out[out_len - 1] = '\0';
 }
 
+void watchTypesFormatted(char* out, size_t out_len) {
+  if (out == nullptr || out_len == 0) {
+    return;
+  }
+  strncpy(out, s_watch_type_blob, out_len - 1);
+  out[out_len - 1] = '\0';
+}
+
+void watchRegsFormatted(char* out, size_t out_len) {
+  if (out == nullptr || out_len == 0) {
+    return;
+  }
+  strncpy(out, s_watch_reg_blob, out_len - 1);
+  out[out_len - 1] = '\0';
+}
+
 void saveFromForm(const char* mil_checkbox, const char* emrg_checkbox,
                   const char* hide_checkbox, const char* watch_callsigns,
-                  bool update_watch_callsigns) {
+                  bool update_watch_callsigns, const char* watch_types,
+                  bool update_watch_types, const char* watch_regs,
+                  bool update_watch_regs) {
   const bool prev_mil = s_mil_enabled;
   const bool prev_emrg = s_emrg_enabled;
   const bool prev_hide = s_hide_non_alerted;
   const size_t prev_watch = s_watch_count;
+  const size_t prev_types = s_watch_type_count;
+  const size_t prev_regs = s_watch_reg_count;
   char prev_blob[sizeof(s_watch_blob)];
+  char prev_type_blob[sizeof(s_watch_type_blob)];
+  char prev_reg_blob[sizeof(s_watch_reg_blob)];
   strncpy(prev_blob, s_watch_blob, sizeof(prev_blob));
   prev_blob[sizeof(prev_blob) - 1] = '\0';
+  strncpy(prev_type_blob, s_watch_type_blob, sizeof(prev_type_blob));
+  prev_type_blob[sizeof(prev_type_blob) - 1] = '\0';
+  strncpy(prev_reg_blob, s_watch_reg_blob, sizeof(prev_reg_blob));
+  prev_reg_blob[sizeof(prev_reg_blob) - 1] = '\0';
 
   s_mil_enabled = (mil_checkbox != nullptr && mil_checkbox[0] == 'T');
   s_emrg_enabled = (emrg_checkbox != nullptr && emrg_checkbox[0] == 'T');
@@ -330,23 +417,52 @@ void saveFromForm(const char* mil_checkbox, const char* emrg_checkbox,
     rebuildWatchBlob();
   }
 
+  if (update_watch_types) {
+    char scratch[kWatchTypeBlobLen];
+    scratch[0] = '\0';
+    if (watch_types != nullptr) {
+      strncpy(scratch, watch_types, sizeof(scratch) - 1);
+      scratch[sizeof(scratch) - 1] = '\0';
+    }
+    applyWatchTypeBlob(scratch);
+  }
+
+  if (update_watch_regs) {
+    char scratch[kWatchRegBlobLen];
+    scratch[0] = '\0';
+    if (watch_regs != nullptr) {
+      strncpy(scratch, watch_regs, sizeof(scratch) - 1);
+      scratch[sizeof(scratch) - 1] = '\0';
+    }
+    applyWatchRegBlob(scratch);
+  }
+
   Preferences prefs;
   if (prefs.begin(kStoreNs, false)) {
     prefs.putBool(kMilKey, s_mil_enabled);
     prefs.putBool(kEmrgKey, s_emrg_enabled);
     prefs.putBool(kHideKey, s_hide_non_alerted);
     prefs.putString(kWatchKey, s_watch_blob);
+    prefs.putString(kWatchTypeKey, s_watch_type_blob);
+    prefs.putString(kWatchRegKey, s_watch_reg_blob);
     prefs.end();
   }
   const bool watch_changed =
       s_watch_count != prev_watch || strcmp(s_watch_blob, prev_blob) != 0;
+  const bool types_changed =
+      s_watch_type_count != prev_types || strcmp(s_watch_type_blob, prev_type_blob) != 0;
+  const bool regs_changed =
+      s_watch_reg_count != prev_regs || strcmp(s_watch_reg_blob, prev_reg_blob) != 0;
   if (s_hide_non_alerted != prev_hide || s_mil_enabled != prev_mil ||
-      s_emrg_enabled != prev_emrg || watch_changed) {
+      s_emrg_enabled != prev_emrg || watch_changed || types_changed || regs_changed) {
     ui::radarDisplayInvalidateAircraft();
   }
-  Serial.printf("[alert] saved mil=%d emrg=%d hide=%d watch=%u (%s)\n",
-                s_mil_enabled ? 1 : 0, s_emrg_enabled ? 1 : 0, s_hide_non_alerted ? 1 : 0,
-                static_cast<unsigned>(s_watch_count), s_watch_blob);
+  Serial.printf(
+      "[alert] saved mil=%d emrg=%d hide=%d watch=%u (%s) types=%u (%s) regs=%u (%s)\n",
+      s_mil_enabled ? 1 : 0, s_emrg_enabled ? 1 : 0, s_hide_non_alerted ? 1 : 0,
+      static_cast<unsigned>(s_watch_count), s_watch_blob,
+      static_cast<unsigned>(s_watch_type_count), s_watch_type_blob,
+      static_cast<unsigned>(s_watch_reg_count), s_watch_reg_blob);
 }
 
 }  // namespace services::alert

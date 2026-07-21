@@ -40,6 +40,8 @@ struct Aircraft {
   char route_origin[5];  /** Origin ICAO (e.g. KSFO). */
   char route_dest[5];    /** Destination ICAO (e.g. KBOS). */
   char type[5];
+  /** Civil registration / tail number from ADS-B `r` (e.g. N2136U, CS-TPQ). */
+  char registration[13];
   char alt[12];
   char category[3];      /** ADS-B emitter category (e.g. "A3", "B6"). */
   char squawk[5];        /** Transponder squawk code (e.g. "7700", "1200"). */
