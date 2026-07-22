@@ -1,0 +1,46 @@
+name: 🚀 Feature request
+description: Suggest an improvement or new option
+title: "[Feature]: "
+labels: ["feature-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Describe the problem or clutter you're trying to solve, and what you'd like added.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is missing or awkward today, and why it matters.
+      placeholder: |
+        The radar already has a "Show compass rose" toggle, but there is no equivalent for…
+    validations:
+      required: true
+
+  - type: textarea
+    id: request
+    attributes:
+      label: Request
+      description: Concrete behavior or UI you want (on-device settings, knob/touch control, web portal checkbox, etc.).
+      placeholder: |
+        Add a `show_range_rings` setting (mirroring the compass rose toggle) with a matching checkbox on the web portal…
+    validations:
+      required: true
+
+  - type: textarea
+    id: touchpoints
+    attributes:
+      label: Where this would touch (optional)
+      description: If you've browsed the code, list files or patterns that look relevant.
+      placeholder: |
+        - include/ui/radar_display.h / src/ui/radar_display.cpp — wrap ring drawing in if …
+        - include/ui/display_prefs.h — add preference key + getter/setter
+        - src/services/settings_web.cpp — portal checkbox + apply path
+      render: markdown
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+      description: Workarounds or other approaches you thought about.

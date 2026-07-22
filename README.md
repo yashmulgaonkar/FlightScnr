@@ -19,6 +19,12 @@ Firmware is **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.
 
 **Enclosure:** [MakerWorld](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055) (separate license - see [below](#enclosure-license)).
 
+## Contributing
+
+Contributions are welcome. If you find a bug, have an idea, or want to improve the project, open a [pull request](https://github.com/yashmulgaonkar/FlightScnr/pulls). For larger changes, opening an [issue](https://github.com/yashmulgaonkar/FlightScnr/issues) first is helpful so we can discuss the approach.
+
+---
+
 ## Features
 
 - **Radar** - sweeping display with range rings (2–30 mi presets: 2, 3, 6, 8, 10, 20, 30; default 8), compass rose, optional sweep line, themed colors (Green default), km/mi/nm units, rim dots for out-of-range traffic. Live ADS-B via [adsb.fi](https://adsb.fi), ~2s refresh, up to 64 aircraft.
