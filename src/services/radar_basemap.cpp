@@ -12,6 +12,7 @@
 #include <esp_heap_caps.h>
 
 #include "services/map_center.h"
+#include "services/https_lock.h"
 #include "services/route_cache_store.h"
 #include "ui/radar_scale.h"
 
@@ -29,18 +30,26 @@ constexpr char kMiKey[] = "mi";
 constexpr char kFacingKey[] = "fac";
 constexpr char kValidKey[] = "ok";
 
+/** Skip JPEG decode on the loop task when memory/TLS is tight (decode can stall
+ *  the UI for seconds and fights ADS-B for internal heap). */
+constexpr uint32_t kMinFreeHeapToDecode = 22000;
+constexpr uint32_t kMinContigHeapToDecode = 10000;
+
 bool s_enabled = false;
 Meta s_meta{};
 
 uint16_t* s_cache = nullptr;
 bool s_cache_valid = false;
 
+/** Cache LittleFS presence — exists()/open on a missing path spams VFS errors
+ *  and was hit from every stalled radar full-draw retry. */
+enum class FileState : uint8_t { Unknown, Present, Absent };
+FileState s_file_state = FileState::Unknown;
+
 File s_upload;
 bool s_upload_active = false;
 size_t s_upload_bytes = 0;
 bool s_upload_failed = false;
-
-JPEGDEC s_jpeg;
 
 struct DrawCtx {
   uint16_t* pixels = nullptr;
@@ -105,6 +114,47 @@ void freeCache() {
   psramFree(s_cache);
   s_cache = nullptr;
   s_cache_valid = false;
+}
+
+void noteFilePresent() { s_file_state = FileState::Present; }
+void noteFileAbsent() { s_file_state = FileState::Absent; }
+void noteFileUnknown() { s_file_state = FileState::Unknown; }
+
+bool filePresent() {
+  if (s_file_state == FileState::Present) {
+    return true;
+  }
+  if (s_file_state == FileState::Absent) {
+    return false;
+  }
+  if (!ensureFs()) {
+    noteFileAbsent();
+    return false;
+  }
+  // Single probe — ESP32 LittleFS.exists() opens the path and logs on miss.
+  if (LittleFS.exists(kPath)) {
+    noteFilePresent();
+    return true;
+  }
+  noteFileAbsent();
+  return false;
+}
+
+void clearMetaIfOrphaned() {
+  if (!s_meta.valid) {
+    return;
+  }
+  if (filePresent()) {
+    return;
+  }
+  // NVS says we have a bake but the JPEG is gone — stop retrying.
+  s_meta = {};
+  persistMeta();
+  if (s_enabled) {
+    s_enabled = false;
+    persistEnabled();
+  }
+  freeCache();
 }
 
 int jpegDrawCallback(JPEGDRAW* draw) {
@@ -184,25 +234,41 @@ bool decodeFileToCache() {
   s_draw_ctx.w = kPixelSize;
   s_draw_ctx.h = kPixelSize;
 
-  if (!s_jpeg.openRAM(jpeg, static_cast<int>(len), jpegDrawCallback)) {
+  // JPEGDEC embeds large file/huffman buffers — keep it out of .bss / internal RAM.
+  void* jpeg_obj_mem = psramAlloc(sizeof(JPEGDEC));
+  if (jpeg_obj_mem == nullptr) {
+    psramFree(jpeg);
+    freeCache();
+    Serial.println("[basemap] JPEGDEC alloc failed");
+    return false;
+  }
+  auto* dec = new (jpeg_obj_mem) JPEGDEC();
+
+  if (!dec->openRAM(jpeg, static_cast<int>(len), jpegDrawCallback)) {
     Serial.println("[basemap] jpeg open failed");
+    dec->~JPEGDEC();
+    psramFree(jpeg_obj_mem);
     psramFree(jpeg);
     freeCache();
     return false;
   }
-  s_jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
-  const int jw = s_jpeg.getWidth();
-  const int jh = s_jpeg.getHeight();
+  dec->setPixelType(RGB565_LITTLE_ENDIAN);
+  const int jw = dec->getWidth();
+  const int jh = dec->getHeight();
   if (jw < kPixelSize - 8 || jh < kPixelSize - 8 || jw > kPixelSize + 16 ||
       jh > kPixelSize + 16) {
     Serial.printf("[basemap] unexpected size %dx%d (want %d)\n", jw, jh, kPixelSize);
-    s_jpeg.close();
+    dec->close();
+    dec->~JPEGDEC();
+    psramFree(jpeg_obj_mem);
     psramFree(jpeg);
     freeCache();
     return false;
   }
-  const int ok = s_jpeg.decode(0, 0, 0);
-  s_jpeg.close();
+  const int ok = dec->decode(0, 0, 0);
+  dec->close();
+  dec->~JPEGDEC();
+  psramFree(jpeg_obj_mem);
   psramFree(jpeg);
   s_draw_ctx.pixels = nullptr;
   if (ok != 1) {
@@ -232,9 +298,8 @@ bool anglesNear(uint16_t a, uint16_t b) {
 void init() {
   ensureFs();
   loadPrefs();
-  if (s_enabled && hasImage() && metaMatchesLive()) {
-    // Lazy decode on first blit — avoid boot cost.
-  }
+  noteFileUnknown();
+  clearMetaIfOrphaned();
 }
 
 bool enabled() { return s_enabled; }
@@ -257,10 +322,10 @@ void invalidateCache() { freeCache(); }
 Meta storedMeta() { return s_meta; }
 
 bool hasImage() {
-  if (!ensureFs()) {
+  if (!s_meta.valid) {
     return false;
   }
-  return LittleFS.exists(kPath) && s_meta.valid;
+  return filePresent();
 }
 
 bool metaMatchesLive() {
@@ -281,15 +346,34 @@ bool metaMatchesLive() {
   return true;
 }
 
+bool heapOkToDecode() {
+  if (services::https::busy()) {
+    return false;
+  }
+  return ESP.getFreeHeap() >= kMinFreeHeapToDecode &&
+         ESP.getMaxAllocHeap() >= kMinContigHeapToDecode;
+}
+
 bool blitRgb565(uint16_t* dst, int w, int h) {
   if (dst == nullptr || w != kPixelSize || h != kPixelSize) {
     return false;
   }
-  if (!s_enabled || !hasImage() || !metaMatchesLive()) {
+  if (!s_enabled || !s_meta.valid || !metaMatchesLive()) {
     return false;
   }
-  if (!s_cache_valid && !decodeFileToCache()) {
+  if (!filePresent()) {
+    clearMetaIfOrphaned();
     return false;
+  }
+  if (!s_cache_valid) {
+    // Never decode on the radar stall path while TLS is active / heap is low —
+    // JPEGDEC blocked the loop for ~18s in the field and left max_blk wedged.
+    if (!heapOkToDecode()) {
+      return false;
+    }
+    if (!decodeFileToCache()) {
+      return false;
+    }
   }
   memcpy(dst, s_cache,
          static_cast<size_t>(kPixelSize) * static_cast<size_t>(kPixelSize) * sizeof(uint16_t));
@@ -361,16 +445,13 @@ bool uploadFinish(size_t total_bytes) {
   }
   s_upload.close();
   s_upload_active = false;
-  if (total_bytes > 0 && total_bytes != s_upload_bytes) {
-    // Browser total can differ; prefer counted bytes.
-  }
+  (void)total_bytes;
   if (s_upload_bytes < 64) {
     LittleFS.remove(kTmpPath);
     return false;
   }
   LittleFS.remove(kPath);
   if (!LittleFS.rename(kTmpPath, kPath)) {
-    // Some LittleFS builds lack rename — copy fallback.
     File src = LittleFS.open(kTmpPath, "r");
     File dst = LittleFS.open(kPath, "w");
     if (!src || !dst) {
@@ -396,6 +477,7 @@ bool uploadFinish(size_t total_bytes) {
     LittleFS.remove(kTmpPath);
   }
 
+  noteFilePresent();
   s_meta.lat = services::map_center::latitude();
   s_meta.lon = services::map_center::longitude();
   s_meta.range_miles = ui::radar::scaleActiveMiles();
@@ -425,12 +507,16 @@ void uploadAbort() {
 bool clear() {
   freeCache();
   if (!ensureFs()) {
+    noteFileAbsent();
     return false;
   }
   LittleFS.remove(kPath);
   LittleFS.remove(kTmpPath);
+  noteFileAbsent();
   s_meta = {};
   persistMeta();
+  s_enabled = false;
+  persistEnabled();
   return true;
 }
 

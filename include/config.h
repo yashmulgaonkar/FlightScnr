@@ -171,9 +171,9 @@ constexpr unsigned long kAdsbRateLimitBackoffMs = 15000UL;
 /** Defer radar SPI panel writes when largest contiguous block is below this.
  *  The ESP-IDF SPI master driver uses internal DMA descriptors; corrupted driver
  *  state from prior heap exhaustion causes `spi_device_polling_end` assertion panics.
- *  Post-TLS steady state on flight detail is often ~9–12 KB max_blk (not the older
- *  ~27 KB assumption) — only defer in a true crisis below that floor. */
-constexpr uint32_t kMinContiguousHeapForPanelSpi = 8000;
+ *  Post-TLS steady state often sits ~6–8 KB max_blk — gate must stay under that
+ *  floor or full radar draws stall forever (sweep_skip / defer_spi_heap). */
+constexpr uint32_t kMinContiguousHeapForPanelSpi = 5500;
 
 /** Defer ADS-B HTTPS if internal free heap is below this.
  *  mbedTLS buffers (https_lock PSRAM allocator), the response payload, and the
