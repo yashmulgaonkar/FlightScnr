@@ -23,6 +23,8 @@ Firmware is **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.
 
 Contributions are welcome. If you find a bug, have an idea, or want to improve the project, open a [pull request](https://github.com/yashmulgaonkar/FlightScnr/pulls). For larger changes, opening an [issue](https://github.com/yashmulgaonkar/FlightScnr/issues) first is helpful so we can discuss the approach.
 
+Join the [FlightScnr community on **Discord**](https://discord.gg/wjqgUjv8Re) for any questions or troubleshooting help.
+
 ---
 
 ## Features
