@@ -23,6 +23,7 @@
 #include "services/clock_time.h"
 #include "services/tz_lookup.h"
 #include "services/map_center.h"
+#include "services/radar_basemap.h"
 #include "services/route_lookup.h"
 #include "services/aircraft_photo.h"
 #include "services/settings_web.h"
