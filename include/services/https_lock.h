@@ -29,7 +29,14 @@ bool heldBy(TaskHandle_t task);
 void forceUnlockIfHeldBy(TaskHandle_t task);
 
 /**
- * Unconditionally mark the lock available. Prefer forceUnlockIfHeldBy after
+ * After vTaskDelete(deleted): free the lock if that task owned it, or if the
+ * semaphore is taken with no recorded owner (Take/holder TOCTOU orphan).
+ * Never steals from a different live holder. Returns true if a Give ran.
+ */
+bool reclaimAfterTaskDeleted(TaskHandle_t deleted);
+
+/**
+ * Unconditionally mark the lock available. Prefer reclaimAfterTaskDeleted after
  * killing a known holder. Safe no-op if already free (binary semaphore).
  */
 void forceUnlock();

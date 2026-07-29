@@ -2,6 +2,7 @@
 
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
@@ -13,6 +14,7 @@ namespace {
 
 SemaphoreHandle_t s_sem = nullptr;
 TaskHandle_t s_holder = nullptr;
+portMUX_TYPE s_holder_mux = portMUX_INITIALIZER_UNLOCKED;
 bool s_tls_psram_alloc_set = false;
 
 void ensureSem() {
@@ -67,7 +69,9 @@ bool lock(uint32_t timeout_ms) {
   if (xSemaphoreTake(s_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
     return false;
   }
+  portENTER_CRITICAL(&s_holder_mux);
   s_holder = xTaskGetCurrentTaskHandle();
+  portEXIT_CRITICAL(&s_holder_mux);
   return true;
 }
 
@@ -75,27 +79,60 @@ void unlock() {
   if (s_sem == nullptr) {
     return;
   }
+  portENTER_CRITICAL(&s_holder_mux);
   if (s_holder == xTaskGetCurrentTaskHandle()) {
     s_holder = nullptr;
   }
+  portEXIT_CRITICAL(&s_holder_mux);
   xSemaphoreGive(s_sem);
 }
 
 bool heldBy(TaskHandle_t task) {
-  return task != nullptr && s_holder == task;
+  if (task == nullptr) {
+    return false;
+  }
+  portENTER_CRITICAL(&s_holder_mux);
+  const bool held = (s_holder == task);
+  portEXIT_CRITICAL(&s_holder_mux);
+  return held;
 }
 
 void forceUnlockIfHeldBy(TaskHandle_t task) {
+  (void)reclaimAfterTaskDeleted(task);
+}
+
+bool reclaimAfterTaskDeleted(TaskHandle_t deleted) {
   ensureSem();
-  if (s_sem == nullptr || task == nullptr) {
-    return;
+  if (s_sem == nullptr || deleted == nullptr) {
+    return false;
   }
-  if (s_holder != task) {
-    return;
+
+  portENTER_CRITICAL(&s_holder_mux);
+  const TaskHandle_t holder = s_holder;
+  const UBaseType_t count = uxSemaphoreGetCount(s_sem);
+  portEXIT_CRITICAL(&s_holder_mux);
+
+  if (count > 0) {
+    // Already free — drop a stale pointer to the deleted task if present.
+    portENTER_CRITICAL(&s_holder_mux);
+    if (s_holder == deleted) {
+      s_holder = nullptr;
+    }
+    portEXIT_CRITICAL(&s_holder_mux);
+    return false;
   }
+
+  // Semaphore is taken. Reclaim only if the deleted task owned it, or if the
+  // owner was never recorded (gap between Take and s_holder assign).
+  if (holder != deleted && holder != nullptr) {
+    return false;
+  }
+
+  portENTER_CRITICAL(&s_holder_mux);
   s_holder = nullptr;
-  // Binary Give from any task is safe; ignore errQUEUE_FULL if already free.
+  portEXIT_CRITICAL(&s_holder_mux);
   xSemaphoreGive(s_sem);
+  return true;
 }
 
 void forceUnlock() {
@@ -103,7 +140,9 @@ void forceUnlock() {
   if (s_sem == nullptr) {
     return;
   }
+  portENTER_CRITICAL(&s_holder_mux);
   s_holder = nullptr;
+  portEXIT_CRITICAL(&s_holder_mux);
   xSemaphoreGive(s_sem);
 }
 
@@ -112,12 +151,8 @@ bool busy() {
   if (s_sem == nullptr) {
     return false;
   }
-  if (xSemaphoreTake(s_sem, 0) == pdTRUE) {
-    s_holder = nullptr;
-    xSemaphoreGive(s_sem);
-    return false;
-  }
-  return true;
+  // Prefer count probe — Take/Give can race with a real holder on dual-core.
+  return uxSemaphoreGetCount(s_sem) == 0;
 }
 
 ScopedLock::ScopedLock(uint32_t timeout_ms) {

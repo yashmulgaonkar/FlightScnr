@@ -2193,11 +2193,10 @@ void shutdownDetailWorkerImpl() {
     return;
   }
 
-  // cancelDetailEnrichment clears busy/step flags even while httpGetJson still
-  // holds the HTTPS ScopedLock on the worker stack. Wait for *this* worker to
-  // drop the lock — do not wait on / steal from a live ADS-B holder (that
-  // previously tripped a FreeRTOS mutex ownership assert on resume).
-  const unsigned long deadline = millis() + 5000UL;
+  // Brief grace so an in-flight httpGetJson can unlock cleanly. vTaskDelete
+  // skips C++ destructors, so a long wait just stalls radar resume; reclaim
+  // after delete covers mid-HTTP kills and Take/holder orphans.
+  const unsigned long deadline = millis() + 400UL;
   while (services::https::heldBy(s_detail_task) &&
          static_cast<long>(deadline - millis()) > 0) {
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -2205,16 +2204,11 @@ void shutdownDetailWorkerImpl() {
   detailWorkerCancelWork();
 
   TaskHandle_t task = s_detail_task;
-  const bool our_lock = services::https::heldBy(task);
   s_detail_task = nullptr;
-  if (task != nullptr) {
-    vTaskDelete(task);
-  }
-  if (our_lock) {
-    services::https::forceUnlockIfHeldBy(task);
-    if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
-      Serial.println("[detail] worker shutdown force-unlocked HTTPS");
-    }
+  vTaskDelete(task);
+  const bool reclaimed = services::https::reclaimAfterTaskDeleted(task);
+  if (reclaimed && (config::kSerialTraceDebug || config::kRadarResumeDebug)) {
+    Serial.println("[detail] worker shutdown reclaimed HTTPS");
   }
   if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
     Serial.printf("[detail] worker shutdown free=%u max_blk=%u https_busy=%d\n",
