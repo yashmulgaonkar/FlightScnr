@@ -329,7 +329,7 @@ bool hasImage() {
 }
 
 bool metaMatchesLive() {
-  if (!s_meta.valid) {
+  if (!s_meta.valid || s_meta.range_miles == 0) {
     return false;
   }
   const double dlat = fabs(s_meta.lat - services::map_center::latitude());
@@ -337,7 +337,8 @@ bool metaMatchesLive() {
   if (dlat > 0.00015 || dlon > 0.00015) {
     return false;
   }
-  if (s_meta.range_miles != ui::radar::scaleActiveMiles()) {
+  // Bake covers max range; zooming in is OK. Zooming past baked miles is not.
+  if (ui::radar::scaleActiveMiles() > s_meta.range_miles) {
     return false;
   }
   if (!anglesNear(s_meta.facing_deg, ui::radar::facingDeg())) {
@@ -375,8 +376,39 @@ bool blitRgb565(uint16_t* dst, int w, int h) {
       return false;
     }
   }
-  memcpy(dst, s_cache,
-         static_cast<size_t>(kPixelSize) * static_cast<size_t>(kPixelSize) * sizeof(uint16_t));
+
+  const uint8_t live_mi = ui::radar::scaleActiveMiles();
+  const uint8_t baked_mi = s_meta.range_miles;
+  const size_t px =
+      static_cast<size_t>(kPixelSize) * static_cast<size_t>(kPixelSize);
+  if (live_mi == baked_mi) {
+    memcpy(dst, s_cache, px * sizeof(uint16_t));
+    return true;
+  }
+
+  // Zoomed in vs bake: sample the center crop and stretch to the full panel.
+  // src_offset = dst_offset * (live / baked).
+  const float scale =
+      static_cast<float>(live_mi) / static_cast<float>(baked_mi);
+  const int cx = kPixelSize / 2;
+  const int cy = kPixelSize / 2;
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      const int sx =
+          cx + static_cast<int>(lroundf(static_cast<float>(x - cx) * scale));
+      const int sy =
+          cy + static_cast<int>(lroundf(static_cast<float>(y - cy) * scale));
+      if (sx < 0 || sy < 0 || sx >= w || sy >= h) {
+        dst[static_cast<size_t>(y) * static_cast<size_t>(w) +
+            static_cast<size_t>(x)] = 0;
+      } else {
+        dst[static_cast<size_t>(y) * static_cast<size_t>(w) +
+            static_cast<size_t>(x)] =
+            s_cache[static_cast<size_t>(sy) * static_cast<size_t>(w) +
+                    static_cast<size_t>(sx)];
+      }
+    }
+  }
   return true;
 }
 
@@ -389,16 +421,35 @@ void statusText(char* buf, size_t len) {
     return;
   }
   if (!metaMatchesLive()) {
-    snprintf(buf, len,
-             "Stored: %.4f,%.4f @ %u mi facing %u — does not match current radar "
-             "(regenerate after changing center/range/facing).",
-             s_meta.lat, s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
-             static_cast<unsigned>(s_meta.facing_deg));
+    const uint8_t live_mi = ui::radar::scaleActiveMiles();
+    if (live_mi > s_meta.range_miles) {
+      snprintf(buf, len,
+               "Stored @ %u mi — live range %u mi exceeds bake (regenerate).",
+               static_cast<unsigned>(s_meta.range_miles),
+               static_cast<unsigned>(live_mi));
+    } else {
+      snprintf(buf, len,
+               "Stored: %.4f,%.4f @ %u mi facing %u — does not match current "
+               "center/facing (regenerate).",
+               s_meta.lat, s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
+               static_cast<unsigned>(s_meta.facing_deg));
+    }
     return;
   }
-  snprintf(buf, len, "Ready: %.4f,%.4f @ %u mi facing %u%s", s_meta.lat, s_meta.lon,
-           static_cast<unsigned>(s_meta.range_miles),
-           static_cast<unsigned>(s_meta.facing_deg), s_enabled ? " (enabled)" : " (disabled)");
+  const uint8_t live_mi = ui::radar::scaleActiveMiles();
+  if (live_mi < s_meta.range_miles) {
+    snprintf(buf, len,
+             "Ready: %.4f,%.4f bake %u mi (showing %u mi zoom) facing %u%s",
+             s_meta.lat, s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
+             static_cast<unsigned>(live_mi),
+             static_cast<unsigned>(s_meta.facing_deg),
+             s_enabled ? " (enabled)" : " (disabled)");
+  } else {
+    snprintf(buf, len, "Ready: %.4f,%.4f @ %u mi facing %u%s", s_meta.lat,
+             s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
+             static_cast<unsigned>(s_meta.facing_deg),
+             s_enabled ? " (enabled)" : " (disabled)");
+  }
 }
 
 void uploadBegin() {
@@ -480,7 +531,9 @@ bool uploadFinish(size_t total_bytes) {
   noteFilePresent();
   s_meta.lat = services::map_center::latitude();
   s_meta.lon = services::map_center::longitude();
-  s_meta.range_miles = ui::radar::scaleActiveMiles();
+  // Portal always bakes at max coverage so range zoom-in reuses the same JPEG.
+  s_meta.range_miles =
+      ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1];
   s_meta.facing_deg = ui::radar::facingDeg();
   s_meta.valid = true;
   persistMeta();

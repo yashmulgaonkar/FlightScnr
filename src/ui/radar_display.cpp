@@ -611,8 +611,11 @@ void drawIntercardinalLabel(const char* text, int cx, int cy, int radius,
 bool s_force_cardinals = false;
 
 void drawCardinalLabels() {
-  if (!s_force_cardinals && !radar::showCompassRose()) {
-    return;
+  // Orientation preview always shows cardinals; otherwise respect labels + rose.
+  if (!s_force_cardinals) {
+    if (!ui::displayPrefsRadarLabelsEnabled() || !radar::showCompassRose()) {
+      return;
+    }
   }
   const int cx = radar::kCenterX;
   const int cy = radar::kCenterY;
@@ -642,6 +645,9 @@ void scaleLabelAnchorOnRing(int cx, int cy, int ring_radius, int gap_px, int* x,
 }
 
 void drawRingScaleLabels(int cx, int cy, int outer_radius) {
+  if (!ui::displayPrefsRadarLabelsEnabled()) {
+    return;
+  }
   const float label_km = radar::scaleActive().label_km;
   const radar::DistanceUnit unit = radar::distanceUnit();
 

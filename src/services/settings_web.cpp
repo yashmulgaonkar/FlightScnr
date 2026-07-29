@@ -375,6 +375,9 @@ void handleSettingsPage() {
   }
   appendToggle(page, kSettingsPageCap, &used, "show_sweep", "Show radar sweep line",
                ui::displayPrefsSweepLineEnabled());
+  appendToggle(page, kSettingsPageCap, &used, "show_radar_labels",
+               "Show radar labels (compass + scale)",
+               ui::displayPrefsRadarLabelsEnabled());
 
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
@@ -389,11 +392,15 @@ void handleSettingsPage() {
         "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
         "<p class=\"note\">Optional OSM-based dark map under the radar grid. Generated in "
         "your browser from <a href=\"https://carto.com/basemaps/\" target=\"_blank\" "
-        "rel=\"noopener\">CARTO Dark Matter</a> tiles for the <b>current</b> map center, "
-        "range, and facing, then stored on device flash (~50&ndash;120&nbsp;KB). "
-        "Regenerate after changing center/range/facing. &copy; OpenStreetMap / &copy; CARTO."
+        "rel=\"noopener\">CARTO Dark Matter</a> tiles for the <b>current</b> map center and "
+        "facing at <b>maximum range (%u&nbsp;mi)</b>, then stored on device flash "
+        "(~50&ndash;120&nbsp;KB). Zooming in reuses the bake; regenerate after changing "
+        "center or facing, or if you need a wider range than stored. "
+        "&copy; OpenStreetMap / &copy; CARTO."
         "</p>"
         "<p class=\"hint\" id=\"bm_status\">%s</p>",
+        static_cast<unsigned>(
+            ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1]),
         bm_status);
     appendClamped(page, kSettingsPageCap, &used, bm_n);
   }
@@ -469,7 +476,8 @@ void handleSettingsPage() {
         "x.onerror=function(){msg.textContent='Upload error';};x.send(fd);"
         "}"
         "document.getElementById('bm_gen').addEventListener('click',function(){"
-        "if(!confirm('Bake Carto Dark Matter for current center/range/facing?'))return;"
+        "if(!confirm('Bake Carto Dark Matter at max range ('+miles+' mi) for current "
+        "center/facing? Zooming in will not require regenerate.'))return;"
         "bake().catch(function(e){msg.textContent=String(e&&e.message||e);});});"
         "document.getElementById('bm_clear').addEventListener('click',function(){"
         "if(!confirm('Delete stored basemap?'))return;"
@@ -479,7 +487,8 @@ void handleSettingsPage() {
         "</script></div></details>",
         ui::radar::kSize, ui::radar::kCenterX, ui::radar::kCenterY, ui::radar::kGridOuterRadius,
         services::map_center::latitude(), services::map_center::longitude(),
-        static_cast<unsigned>(ui::radar::scaleActiveMiles()),
+        static_cast<unsigned>(
+            ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1]),
         static_cast<unsigned>(ui::radar::facingDeg()));
     appendClamped(page, kSettingsPageCap, &used, bm2);
   }
@@ -1097,6 +1106,7 @@ void handleSave() {
   services::apikeys::saveAdsbDbEnabledFromForm(s_server->arg("use_adsbdb").c_str());
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
+  ui::displayPrefsSaveRadarLabelsFromForm(s_server->arg("show_radar_labels").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
   services::basemap::saveEnabledFromForm(s_server->arg("use_basemap").c_str());
   ui::radar::saveFacingDegFromForm(s_server->arg("facing_deg").c_str());

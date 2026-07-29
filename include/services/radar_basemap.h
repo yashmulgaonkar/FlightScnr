@@ -18,9 +18,9 @@ void saveEnabledFromForm(const char* checkbox_value);
 void invalidateCache();
 
 /**
- * If enabled and metadata matches current map center / range / facing, copy
- * decoded RGB565 into dst (w*h little-endian). Returns false → caller should
- * solid-fill the background instead.
+ * If enabled and metadata matches current map center / facing, and live range
+ * is within the baked coverage, copy decoded RGB565 into dst (w*h little-endian).
+ * When zoomed in vs bake, crops/scales from center. Returns false → solid fill.
  */
 bool blitRgb565(uint16_t* dst, int w, int h);
 
@@ -41,12 +41,15 @@ struct Meta {
 
 Meta storedMeta();
 
-/** Whether stored meta matches live radar geometry (center/range/facing). */
+/**
+ * Stored center/facing match live, and live range ≤ baked coverage miles.
+ * Zooming in does not require regenerate; zooming past bake or moving center does.
+ */
 bool metaMatchesLive();
 
 /**
  * Begin/abort/finish multipart upload of a baseline JPEG (390×390).
- * finishUpload stamps meta from live map center / range / facing.
+ * finish stamps meta from live center/facing and max range (full coverage bake).
  */
 void uploadBegin();
 bool uploadWrite(const uint8_t* data, size_t len);
