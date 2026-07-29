@@ -29,7 +29,7 @@ Join the [FlightScnr community on **Discord**](https://discord.gg/wjqgUjv8Re) fo
 
 ## Features
 
-- **Radar** - sweeping display with range rings (2–30 mi presets: 2, 3, 6, 8, 10, 20, 30; default 8), compass rose, optional sweep line, themed colors (Green default), km/mi/nm units, rim dots for out-of-range traffic. Live ADS-B via [adsb.fi](https://adsb.fi), ~2s refresh, up to 64 aircraft.
+- **Radar** - sweeping display with range rings (2–30 mi presets: 2, 3, 6, 8, 10, 20, 30; default 8), compass rose, optional sweep line, optional label hide (compass + scale), themed colors (Green default), km/mi/nm units, rim dots for out-of-range traffic. Live ADS-B via [adsb.fi](https://adsb.fi), ~2s refresh, up to 64 aircraft.
 - **Flight detail** - tap a blip or short-press the knob: callsign, airline logo/name, route, ICAO type, altitude, speed. Knob cycles visible aircraft. Optional route lookup (see [APIs](#optional-apis)).
 - **Clock & forecast** - swipe down from radar: NTP time, date, current weather, sunrise/sunset. Swipe right for a 3-day forecast (hi/lo, icons, rain %).
 - **Auto timezone** - Fetch Timezone + DST from your radar center ([timeapi.io](https://timeapi.io), no API key needed). Manual UTC offset on-device disables auto until re-enabled on the web portal.
@@ -59,6 +59,7 @@ On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle c
 2. Open [http://4.3.2.1](http://4.3.2.1) or [http://flightscnr.local](http://flightscnr.local) → enter Wi‑Fi credentials (or manage **Saved networks**). Reboot the unit.
 3. After connect: boot splash (~5 s) → radar.
 4. Set radar center, weather key, and optional route APIs at [http://flightscnr.local/](http://flightscnr.local/) (or device IP shown on settings page 1).
+5. Optional: **Radar basemap** card → pick style (**Dark Matter**, **Positron**, or **VFR Sectional** with a 35% pale wash) + **Bake coverage**, then **Generate basemap**. Zooming out past the bake needs regenerate; center/facing/style changes do too.
 
 You can save up to **3** Wi‑Fi networks. Preference order is slot order (#1 tried first). Manage them from the setup portal (**Saved networks**) or the online settings page (**Wi‑Fi networks** card: add, remove, reorder, update password).
 

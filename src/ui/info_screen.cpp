@@ -51,6 +51,7 @@ DisplayAdjustRow s_display_focus = DisplayAdjustRow::Brightness;
 // short enough for the round panel with hints visible.
 enum class ColorsAdjustRow : uint8_t {
   Sweep,
+  BlipDetails,
   DetailTimeout,
   ClockTimeout,
   IdleClock,
@@ -211,13 +212,16 @@ void buildDisplayStrings(char* bright_line, size_t bright_len, char* units_line,
   snprintf(facing_line, facing_len, "Facing: %s", facing_tag);
 }
 
-void buildColorsStrings(char* sweep_line, size_t sweep_len, char* detail_line,
-                        size_t detail_len, char* clock_line, size_t clock_len,
-                        char* idle_line, size_t idle_len, char* color_line,
-                        size_t color_len, char* beep_line, size_t beep_len,
-                        char* beep_tone_line, size_t beep_tone_len) {
+void buildColorsStrings(char* sweep_line, size_t sweep_len, char* blip_line,
+                        size_t blip_len, char* detail_line, size_t detail_len,
+                        char* clock_line, size_t clock_len, char* idle_line,
+                        size_t idle_len, char* color_line, size_t color_len,
+                        char* beep_line, size_t beep_len, char* beep_tone_line,
+                        size_t beep_tone_len) {
   snprintf(sweep_line, sweep_len, "Radar Sweep: %s",
            ui::displayPrefsSweepLineEnabled() ? "on" : "off");
+  snprintf(blip_line, blip_len, "Hide Blip Details: %s",
+           ui::displayPrefsHideBlipDetails() ? "on" : "off");
   snprintf(detail_line, detail_len, "Flight Detail: %s",
            ui::displayPrefsFlightDetailTimeoutLabel());
   snprintf(clock_line, clock_len, "Clock/Forecast: %s",
@@ -394,20 +398,24 @@ void drawDisplayPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_
 
 void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg) {
   char sweep_line[24];
+  char blip_line[28];
   char detail_line[28];
   char clock_line[28];
   char idle_line[24];
   char color_line[28];
   char beep_line[24];
   char beep_tone_line[28];
-  buildColorsStrings(sweep_line, sizeof(sweep_line), detail_line, sizeof(detail_line),
-                     clock_line, sizeof(clock_line), idle_line, sizeof(idle_line),
-                     color_line, sizeof(color_line), beep_line, sizeof(beep_line),
-                     beep_tone_line, sizeof(beep_tone_line));
+  buildColorsStrings(sweep_line, sizeof(sweep_line), blip_line, sizeof(blip_line),
+                     detail_line, sizeof(detail_line), clock_line, sizeof(clock_line),
+                     idle_line, sizeof(idle_line), color_line, sizeof(color_line),
+                     beep_line, sizeof(beep_line), beep_tone_line,
+                     sizeof(beep_tone_line));
 
   const uint16_t active_fg = settingsActiveFg();
   const uint16_t sweep_fg =
       (s_colors_focus == ColorsAdjustRow::Sweep) ? active_fg : label_fg;
+  const uint16_t blip_fg =
+      (s_colors_focus == ColorsAdjustRow::BlipDetails) ? active_fg : label_fg;
   const uint16_t detail_fg =
       (s_colors_focus == ColorsAdjustRow::DetailTimeout) ? active_fg : label_fg;
   const uint16_t clock_fg =
@@ -424,6 +432,7 @@ void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_f
   const int title_h = displayFontHeight(tft, displayFontTitle());
   const InfoLine option_lines[] = {
       {sweep_line, displayFontBody(), sweep_fg},
+      {blip_line, displayFontBody(), blip_fg},
       {detail_line, displayFontBody(), detail_fg},
       {clock_line, displayFontBody(), clock_fg},
       {idle_line, displayFontBody(), idle_fg},
@@ -502,6 +511,9 @@ void infoScreenResetColorsFocus() { s_colors_focus = ColorsAdjustRow::Sweep; }
 void infoScreenCycleColorsFocus() {
   switch (s_colors_focus) {
     case ColorsAdjustRow::Sweep:
+      s_colors_focus = ColorsAdjustRow::BlipDetails;
+      break;
+    case ColorsAdjustRow::BlipDetails:
       s_colors_focus = ColorsAdjustRow::DetailTimeout;
       break;
     case ColorsAdjustRow::DetailTimeout:
@@ -559,6 +571,9 @@ void infoScreenHandleKnob(int8_t delta) {
     switch (s_colors_focus) {
       case ColorsAdjustRow::Sweep:
         ui::displayPrefsToggleSweepLine();
+        break;
+      case ColorsAdjustRow::BlipDetails:
+        ui::displayPrefsToggleHideBlipDetails();
         break;
       case ColorsAdjustRow::DetailTimeout:
         ui::displayPrefsFlightDetailTimeoutStep(delta);

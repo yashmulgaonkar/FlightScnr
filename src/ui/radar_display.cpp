@@ -13,6 +13,8 @@
 #include "services/adsb_client.h"
 #include "services/aircraft_alert.h"
 #include "services/aircraft_type_lookup.h"
+#include "services/https_lock.h"
+#include "services/radar_basemap.h"
 #include "geo/flat_earth.h"
 #include "services/map_center.h"
 #include "ui/aircraft_symbol.h"
@@ -54,6 +56,8 @@ PlaneGfxSprite s_bg(&tft);
 PlaneGfxSprite s_content(&tft);
 bool s_bg_ready = false;
 bool s_content_ready = false;
+/** True after basemap upload/clear until background is rebuilt with the new map. */
+bool s_basemap_bg_stale = false;
 
 struct IntRect {
   int x = 0;
@@ -139,21 +143,45 @@ void initLabelMetrics() {
 
 void initPalette() {
   const radar::AccentRgb accent = radar::accentPalette();
-  radar::kColorBackground = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
-  radar::kColorGrid = tft.color565(accent.grid_r, accent.grid_g, accent.grid_b);
-  radar::kColorSweep = tft.color565(accent.sweep_r, accent.sweep_g, accent.sweep_b);
-  radar::kColorSweepTrail =
-      tft.color565(accent.trail_r, accent.trail_g, accent.trail_b);
-  radar::kColorLabel = tft.color565(accent.label_r, accent.label_g, accent.label_b);
-  radar::kColorAircraft =
-      tft.color565(radar::kAircraftR, radar::kAircraftG, radar::kAircraftB);
-  radar::kColorTagType =
-      tft.color565(radar::kTagTypeR, radar::kTagTypeG, radar::kTagTypeB);
-  radar::kColorTagAltitudeAscend =
-      tft.color565(radar::kTagAltAscendR, radar::kTagAltAscendG, radar::kTagAltAscendB);
-  radar::kColorTagAltitudeDescend = tft.color565(radar::kTagAltDescendR,
-                                                 radar::kTagAltDescendG,
-                                                 radar::kTagAltDescendB);
+  const auto bm_style = services::basemap::storedStyle();
+  const bool light_map =
+      services::basemap::wantsDisplay() &&
+      (bm_style == services::basemap::Style::Light ||
+       bm_style == services::basemap::Style::Vfr);
+
+  if (light_map) {
+    // Cream chips for compass/scale text (avoid CRT-green “black” boxes on Positron).
+    radar::kColorBackground = tft.color565(245, 245, 238);
+    // Darken accent grid/labels for contrast on pale land/water tiles.
+    auto darken = [](uint8_t c) -> uint8_t {
+      return static_cast<uint8_t>((static_cast<unsigned>(c) * 45u) / 100u);
+    };
+    radar::kColorGrid =
+        tft.color565(darken(accent.grid_r), darken(accent.grid_g), darken(accent.grid_b));
+    radar::kColorLabel =
+        tft.color565(darken(accent.label_r), darken(accent.label_g), darken(accent.label_b));
+    // Warm amber washes out on Positron — use deep crimson for blips.
+    radar::kColorAircraft = tft.color565(170, 28, 36);
+    radar::kColorTagType = tft.color565(120, 70, 0);
+    radar::kColorTagAltitudeAscend = tft.color565(0, 110, 140);
+    radar::kColorTagAltitudeDescend = tft.color565(150, 0, 120);
+  } else {
+    radar::kColorBackground = tft.color565(radar::kBgR, radar::kBgG, radar::kBgB);
+    radar::kColorGrid = tft.color565(accent.grid_r, accent.grid_g, accent.grid_b);
+    radar::kColorLabel = tft.color565(accent.label_r, accent.label_g, accent.label_b);
+    radar::kColorAircraft =
+        tft.color565(radar::kAircraftR, radar::kAircraftG, radar::kAircraftB);
+    radar::kColorTagType =
+        tft.color565(radar::kTagTypeR, radar::kTagTypeG, radar::kTagTypeB);
+    radar::kColorTagAltitudeAscend =
+        tft.color565(radar::kTagAltAscendR, radar::kTagAltAscendG, radar::kTagAltAscendB);
+    radar::kColorTagAltitudeDescend = tft.color565(radar::kTagAltDescendR,
+                                                   radar::kTagAltDescendG,
+                                                   radar::kTagAltDescendB);
+  }
+  // Sweep matches rings / crosshairs (same accent as the static grid).
+  radar::kColorSweep = radar::kColorGrid;
+  radar::kColorSweepTrail = radar::kColorGrid;
 }
 
 /** Treat small negative rates as level (cyan). */
@@ -465,16 +493,18 @@ void drawAircraft() {
     aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, displayTrackDeg(planes[i].track_deg),
                           color, &planes[i]);
   }
-  for (size_t d = 0; d < draw_count; ++d) {
-    const size_t i = items[d].index;
-    drawAircraftTag(items[d].x, items[d].y, planes[i]);
+  if (!ui::displayPrefsHideBlipDetails()) {
+    for (size_t d = 0; d < draw_count; ++d) {
+      const size_t i = items[d].index;
+      drawAircraftTag(items[d].x, items[d].y, planes[i]);
+    }
   }
 }
 
 void drawCardinalLabel(const char* text, int x, int y, TextDatum datum) {
   displayFontApply(*s_draw, s_cardinal_style);
   s_draw->setTextDatum(datum);
-  s_draw->setTextColor(radar::kColorGrid, radar::kColorBackground);
+  s_draw->setTextColor(radar::kColorGrid);
   s_draw->drawString(text, x, y);
 }
 
@@ -482,17 +512,7 @@ void drawScaleLabelWithBackground(const char* text, int x, int y) {
   displayFontApply(*s_draw, s_scale_style);
   // Bottom-right anchor: text grows up/left into the W–SW wedge (not toward S).
   s_draw->setTextDatum(TextDatum::BottomRight);
-
-  const int tw = s_draw->textWidth(text);
-  const int th = s_draw->fontHeight();
-  constexpr int kPadX = 3;
-  constexpr int kPadY = 2;
-
-  const int left = x - tw - kPadX;
-  const int top = y - th - kPadY;
-
-  s_draw->fillRect(left, top, tw + kPadX * 2, th + kPadY * 2, radar::kColorBackground);
-  s_draw->setTextColor(radar::kColorGrid, radar::kColorBackground);
+  s_draw->setTextColor(radar::kColorGrid);
   s_draw->drawString(text, x, y);
 }
 
@@ -610,8 +630,11 @@ void drawIntercardinalLabel(const char* text, int cx, int cy, int radius,
 bool s_force_cardinals = false;
 
 void drawCardinalLabels() {
-  if (!s_force_cardinals && !radar::showCompassRose()) {
-    return;
+  // Orientation preview always shows cardinals; otherwise respect compass rose.
+  if (!s_force_cardinals) {
+    if (!radar::showCompassRose()) {
+      return;
+    }
   }
   const int cx = radar::kCenterX;
   const int cy = radar::kCenterY;
@@ -681,6 +704,7 @@ void drawStaticGrid(GfxRef& gfx) {
 }
 
 bool rebuildBackgroundSprite() {
+  const unsigned long t0 = millis();
   if (!s_bg_ready) {
     if (!s_bg.createSprite(radar::kSize, radar::kSize)) {
       Serial.println("radar: background sprite alloc failed");
@@ -689,9 +713,35 @@ bool rebuildBackgroundSprite() {
     s_bg_ready = true;
   }
 
-  drawStaticGrid(s_bg.gfx());
+  // Optional Carto/OSM bake under the CRT grid (LittleFS JPEG → PSRAM cache).
+  uint16_t* pixels = s_bg.bufferMut();
+  const bool painted_map =
+      pixels != nullptr &&
+      services::basemap::blitRgb565(pixels, radar::kSize, radar::kSize);
+  if (painted_map) {
+    initLabelMetrics();
+    const DrawScope scope(s_bg.gfx());
+    const int cx = radar::kCenterX;
+    const int cy = radar::kCenterY;
+    const int grid_r = radar::kGridOuterRadius;
+    drawRings(cx, cy, grid_r);
+    drawGridSpokes(cx, cy, grid_r, radar::kColorGrid);
+    drawCardinalLabels();
+    drawRingScaleLabels(cx, cy, grid_r);
+    s_bg.gfx().setTextDatum(TextDatum::TopLeft);
+    s_basemap_bg_stale = false;
+  } else {
+    drawStaticGrid(s_bg.gfx());
+    // Keep stale if a map is expected but decode was deferred (HTTPS/heap).
+    if (!services::basemap::wantsDisplay()) {
+      s_basemap_bg_stale = false;
+    }
+  }
   s_content_base_valid = false;
   s_sweep_track_valid = false;
+  Serial.printf("[basemap] rebuild_bg painted=%d stale=%d cache=%d ms=%lu heap=%u\n",
+                painted_map ? 1 : 0, s_basemap_bg_stale ? 1 : 0,
+                services::basemap::cacheReady() ? 1 : 0, millis() - t0, ESP.getFreeHeap());
   return true;
 }
 
@@ -933,9 +983,11 @@ void drawAircraftInRect(const IntRect& dirty) {
     aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, displayTrackDeg(planes[i].track_deg),
                           color, &planes[i]);
   }
-  for (size_t d = 0; d < draw_count; ++d) {
-    const size_t i = items[d].index;
-    drawAircraftTag(items[d].x, items[d].y, planes[i]);
+  if (!ui::displayPrefsHideBlipDetails()) {
+    for (size_t d = 0; d < draw_count; ++d) {
+      const size_t i = items[d].index;
+      drawAircraftTag(items[d].x, items[d].y, planes[i]);
+    }
   }
 }
 
@@ -1103,9 +1155,6 @@ void recoverSweepAfterGap(unsigned long gap_ms) {
 }
 
 IntRect aircraftMarkerBounds(int x, int y, const services::adsb::Aircraft& plane) {
-  applyTagStyle();
-  const int block_w = measureTagBlockWidth(plane);
-  const int block_h = s_draw->fontHeight() * 3;
   const int symbol_half = aircraftSymbolHalfPx();
   constexpr int kPad = 6;
 
@@ -1114,19 +1163,24 @@ IntRect aircraftMarkerBounds(int x, int y, const services::adsb::Aircraft& plane
   int min_y = y - symbol_half - kPad;
   int max_y = y + symbol_half + kPad;
 
-  // The tag side MUST match drawAircraftTag(): the label is drawn to the right
-  // of the symbol when it sits left of center, otherwise to the left. Reserving
-  // block_w on the wrong side leaves the label outside this dirty rect, so its
-  // old text ghosts on the panel until the rotating sweep happens to repaint
-  // that region from the content sprite.
-  const bool tag_on_right = x < radar::kCenterX;
-  if (tag_on_right) {
-    max_x = std::max(max_x, x + symbol_half + radar::kAircraftLabelGapPx + block_w + kPad);
-  } else {
-    min_x = std::min(min_x, x - symbol_half - radar::kAircraftLabelGapPx - block_w - kPad);
+  if (!ui::displayPrefsHideBlipDetails()) {
+    applyTagStyle();
+    const int block_w = measureTagBlockWidth(plane);
+    const int block_h = s_draw->fontHeight() * 3;
+    // The tag side MUST match drawAircraftTag(): the label is drawn to the right
+    // of the symbol when it sits left of center, otherwise to the left. Reserving
+    // block_w on the wrong side leaves the label outside this dirty rect, so its
+    // old text ghosts on the panel until the rotating sweep happens to repaint
+    // that region from the content sprite.
+    const bool tag_on_right = x < radar::kCenterX;
+    if (tag_on_right) {
+      max_x = std::max(max_x, x + symbol_half + radar::kAircraftLabelGapPx + block_w + kPad);
+    } else {
+      min_x = std::min(min_x, x - symbol_half - radar::kAircraftLabelGapPx - block_w - kPad);
+    }
+    min_y = std::min(min_y, y - block_h / 2 - kPad);
+    max_y = std::max(max_y, y + block_h / 2 + kPad);
   }
-  min_y = std::min(min_y, y - block_h / 2 - kPad);
-  max_y = std::max(max_y, y + block_h / 2 + kPad);
 
   return clampRectToScreen(
       IntRect(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1));
@@ -1284,7 +1338,27 @@ static void blitStatic() {
 void radarDisplayRefreshSweep() {
   initPalette();
 
-  if (!s_bg_ready) {
+  if (s_basemap_bg_stale) {
+    const bool can_try =
+        !services::basemap::wantsDisplay() || services::basemap::cacheReady() ||
+        (!services::https::busy() && ESP.getFreeHeap() >= 22000 &&
+         ESP.getMaxAllocHeap() >= 10000);
+    if (can_try) {
+      Serial.printf("[basemap] applying stale bg https=%d heap=%u max_blk=%u\n",
+                    services::https::busy() ? 1 : 0, ESP.getFreeHeap(),
+                    ESP.getMaxAllocHeap());
+      rebuildBackgroundSprite();
+    } else {
+      static unsigned long s_last_stale_log_ms = 0;
+      const unsigned long now_ms = millis();
+      if (now_ms - s_last_stale_log_ms >= 2000UL) {
+        Serial.printf("[basemap] wait apply https=%d heap=%u max_blk=%u\n",
+                      services::https::busy() ? 1 : 0, ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+        s_last_stale_log_ms = now_ms;
+      }
+    }
+  } else if (!s_bg_ready) {
     rebuildBackgroundSprite();
   }
 
@@ -1506,6 +1580,13 @@ void radarDisplayInvalidateAircraft() {
   s_aircraft_dirty = true;
   s_aircraft_dirty_rect = IntRect{0, 0, radar::kSize, radar::kSize};
   s_content_base_valid = false;
+}
+
+void radarDisplayInvalidateBasemap() {
+  s_basemap_bg_stale = true;
+  s_content_base_valid = false;
+  s_sweep_track_valid = false;
+  Serial.println("[basemap] bg marked stale (will apply when HTTPS idle)");
 }
 
 void radarDisplayReleasePressureSprites() {

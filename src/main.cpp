@@ -23,6 +23,7 @@
 #include "services/clock_time.h"
 #include "services/tz_lookup.h"
 #include "services/map_center.h"
+#include "services/radar_basemap.h"
 #include "services/route_lookup.h"
 #include "services/aircraft_photo.h"
 #include "services/settings_web.h"
@@ -1835,6 +1836,7 @@ void setup() {
     services::tzlookup::init();
     services::tzlookup::requestForMapCenter();
     services::route::init();
+    services::basemap::init();
     services::adsb::fetchInit();
     services::weather::bootSanityCheck();
     settingsSetSavedCallback(applySettingsLive);

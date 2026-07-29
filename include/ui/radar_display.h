@@ -35,6 +35,12 @@ bool radarDisplayDebugContentBaseValid();
 /** Force aircraft layer to redraw on the next sweep frame. */
 void radarDisplayInvalidateAircraft();
 
+/**
+ * Request background rebuild to pick up a new/cleared basemap. Retries on the
+ * sweep path until JPEG decode is allowed (HTTPS idle + enough heap).
+ */
+void radarDisplayInvalidateBasemap();
+
 /** Drop offscreen radar sprites to relieve heap pressure (rebuilt on next draw). */
 void radarDisplayReleasePressureSprites();
 

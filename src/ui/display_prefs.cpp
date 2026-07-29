@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "ui/radar_display.h"
+
 namespace ui {
 namespace {
 
@@ -11,6 +13,7 @@ constexpr char kStoreNs[] = "flightscnr";
 constexpr char kDetailTimeoutKey[] = "detail_to";
 constexpr char kClockTimeoutKey[] = "clock_to";
 constexpr char kSweepLineKey[] = "sweep_en";
+constexpr char kHideBlipDetailsKey[] = "hide_btag";
 constexpr char kIdleClockKey[] = "idle_clk";
 
 constexpr uint8_t kDefaultDetailTimeoutSec = 10;
@@ -21,6 +24,7 @@ uint8_t s_flight_detail_timeout_sec = kDefaultDetailTimeoutSec;
 /** 0 = manual; otherwise 5, 10, or 15. */
 uint8_t s_clock_weather_timeout_sec = kDefaultClockTimeoutSec;
 bool s_sweep_line_enabled = true;
+bool s_hide_blip_details = false;
 bool s_auto_idle_clock_enabled = true;
 
 constexpr uint8_t kTimeoutOptions[] = {0, 10, 20, 30};
@@ -84,6 +88,14 @@ void persistSweepLine() {
   }
 }
 
+void persistHideBlipDetails() {
+  Preferences prefs;
+  if (prefs.begin(kStoreNs, false)) {
+    prefs.putBool(kHideBlipDetailsKey, s_hide_blip_details);
+    prefs.end();
+  }
+}
+
 void persistAutoIdleClock() {
   Preferences prefs;
   if (prefs.begin(kStoreNs, false)) {
@@ -124,6 +136,7 @@ void displayPrefsBootLoad() {
   s_clock_weather_timeout_sec =
       isValidClockTimeoutSec(clock_stored) ? clock_stored : kDefaultClockTimeoutSec;
   s_sweep_line_enabled = prefs.getBool(kSweepLineKey, true);
+  s_hide_blip_details = prefs.getBool(kHideBlipDetailsKey, false);
   s_auto_idle_clock_enabled = prefs.getBool(kIdleClockKey, true);
   prefs.end();
 }
@@ -254,6 +267,26 @@ void displayPrefsSaveSweepLineFromForm(const char* checkbox_value) {
   s_sweep_line_enabled = formCheckboxOn(checkbox_value);
   persistSweepLine();
   Serial.printf("Radar sweep: %s\n", s_sweep_line_enabled ? "on" : "off");
+}
+
+bool displayPrefsHideBlipDetails() { return s_hide_blip_details; }
+
+void displayPrefsToggleHideBlipDetails() {
+  s_hide_blip_details = !s_hide_blip_details;
+  persistHideBlipDetails();
+  radarDisplayInvalidateAircraft();
+  Serial.printf("Hide blip details: %s\n", s_hide_blip_details ? "on" : "off");
+}
+
+void displayPrefsSaveHideBlipDetailsFromForm(const char* checkbox_value) {
+  const bool next = formCheckboxOn(checkbox_value);
+  if (next == s_hide_blip_details) {
+    return;
+  }
+  s_hide_blip_details = next;
+  persistHideBlipDetails();
+  radarDisplayInvalidateAircraft();
+  Serial.printf("Hide blip details: %s\n", s_hide_blip_details ? "on" : "off");
 }
 
 bool displayPrefsAutoIdleClockEnabled() { return s_auto_idle_clock_enabled; }

@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef WM_MDNS
 #include <ESPmDNS.h>
@@ -30,9 +31,11 @@
 #include "services/aircraft_alert.h"
 #include "services/off_hours.h"
 #include "services/wifi_setup.h"
+#include "services/radar_basemap.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
 #include "ui/radar_scale.h"
+#include "ui/radar_theme.h"
 
 namespace {
 
@@ -45,7 +48,7 @@ bool s_active = false;
  *  overload copies the whole page into an internal-heap String, which under a
  *  ~26 KB post-detail heap starved lwIP (min free 5 KB), stalled loop() for
  *  ~12 s, and left max_blk permanently fragmented below the panel/TLS gates. */
-constexpr size_t kSettingsPageCap = 32768;
+constexpr size_t kSettingsPageCap = 40960;
 char* s_settings_page = nullptr;
 
 char* settingsPageBuffer() {
@@ -373,8 +376,186 @@ void handleSettingsPage() {
   }
   appendToggle(page, kSettingsPageCap, &used, "show_sweep", "Show radar sweep line",
                ui::displayPrefsSweepLineEnabled());
+  appendToggle(page, kSettingsPageCap, &used, "hide_blip_details",
+               "Hide aircraft blip details", ui::displayPrefsHideBlipDetails());
 
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
+
+  // ---------- Radar basemap (Carto / FAA VFR bake) ----------
+  {
+    char bm_status[192];
+    services::basemap::statusText(bm_status, sizeof(bm_status));
+    const auto bm_style = services::basemap::hasImage()
+                              ? services::basemap::storedStyle()
+                              : services::basemap::Style::Dark;
+    const bool dark_sel = bm_style == services::basemap::Style::Dark;
+    const bool light_sel = bm_style == services::basemap::Style::Light;
+    const bool vfr_sel = bm_style == services::basemap::Style::Vfr;
+    const uint8_t live_mi = ui::radar::scaleActiveMiles();
+    const uint8_t max_mi =
+        ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1];
+    const int bm_n = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<details class=\"card\"><summary><span class=\"ico\">&#127758;</span>"
+        "Radar basemap<span class=\"sum\">OSM / VFR</span>"
+        "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
+        "<p class=\"note\">Optional map under the radar grid. "
+        "Generated in your browser from <a href=\"https://carto.com/basemaps/\" "
+        "target=\"_blank\" rel=\"noopener\">CARTO</a> (OSM, no city labels) or "
+        "FAA <a href=\"https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/\" "
+        "target=\"_blank\" rel=\"noopener\">VFR Sectional</a> charts "
+        "(35%% pale wash), then stored on device flash (~50&ndash;120&nbsp;KB). "
+        "<b>Current range</b> bakes sharper detail (best when zoomed in). "
+        "<b>Maximum range</b> lets you zoom in without regenerating, but upscales and "
+        "softens. Zooming out past the bake requires regenerate. "
+        "&copy; OpenStreetMap / &copy; CARTO / &copy; FAA."
+        "</p>"
+        "<p class=\"hint\" id=\"bm_status\">%s</p>"
+        "<label for=\"basemap_style\">Map style</label>"
+        "<select id=\"basemap_style\">"
+        "<option value=\"dark\"%s>Dark Matter (dark)</option>"
+        "<option value=\"light\"%s>Positron (light)</option>"
+        "<option value=\"vfr\"%s>VFR Sectional (FAA)</option>"
+        "</select>"
+        "<label for=\"basemap_coverage\">Bake coverage</label>"
+        "<select id=\"basemap_coverage\">"
+        "<option value=\"current\" selected>Current range (%u mi) — sharper</option>"
+        "<option value=\"max\">Maximum range (%u mi) — zoom-friendly</option>"
+        "</select>",
+        bm_status, dark_sel ? " selected" : "", light_sel ? " selected" : "",
+        vfr_sel ? " selected" : "", static_cast<unsigned>(live_mi),
+        static_cast<unsigned>(max_mi));
+    appendClamped(page, kSettingsPageCap, &used, bm_n);
+  }
+  appendToggle(page, kSettingsPageCap, &used, "use_basemap", "Show basemap on radar",
+               services::basemap::enabled());
+  {
+    const int bm2 = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<p style=\"margin-top:.6rem\">"
+        "<button id=\"bm_gen\" class=\"sm\" type=\"button\">Generate basemap</button> "
+        "<button id=\"bm_clear\" class=\"sm\" type=\"button\">Clear basemap</button></p>"
+        "<p id=\"bm_msg\" class=\"note\"></p>"
+        "<script>"
+        "(function(){"
+        "var SIZE=%d,CX=%d,CY=%d,OUTER=%d;"
+        "var lat=%.6f,lon=%.6f,curMiles=%u,maxMiles=%u,facing=%u;"
+        "var msg=document.getElementById('bm_msg');"
+        "var styleEl=document.getElementById('basemap_style');"
+        "var covEl=document.getElementById('basemap_coverage');"
+        "function styleKey(){"
+        "var v=styleEl&&styleEl.value;"
+        "if(v==='light')return'light';if(v==='vfr')return'vfr';return'dark';}"
+        "function styleLabel(){"
+        "var k=styleKey();"
+        "if(k==='light')return'Positron (light)';"
+        "if(k==='vfr')return'VFR Sectional';"
+        "return'Dark Matter (dark)';}"
+        "function bakeMiles(){return(covEl&&covEl.value==='max')?maxMiles:curMiles;}"
+        "function fillRgb(){"
+        "var k=styleKey();"
+        "if(k==='light')return[240,240,240];"
+        "if(k==='vfr')return[248,248,242];"
+        "return[2,15,3];}"
+        "function fillCss(){var c=fillRgb();return'rgb('+c[0]+','+c[1]+','+c[2]+')';}"
+        "function paleWash(){return styleKey()==='vfr'?0.35:0;}"
+        "function mercX(L){return(L+180)/360;}"
+        "function mercY(A){var s=Math.sin(A*Math.PI/180);return.5-Math.log((1+s)/(1-s))/(4*Math.PI);}"
+        "function tileXY(A,L,z){var n=Math.pow(2,z);return[mercX(L)*n,mercY(A)*n];}"
+        "function pickZ(labelKm){var mpp=(labelKm*1000)/OUTER;var c=Math.cos(lat*Math.PI/180);"
+        "var z=Math.log2(156543.03392*c/mpp);z=Math.round(z);"
+        "if(styleKey()==='vfr')return Math.max(8,Math.min(12,z));"
+        "return Math.max(6,Math.min(15,z));}"
+        "function tileUrl(z,x,y){"
+        "if(styleKey()==='vfr')"
+        "return'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/"
+        "VFR_Sectional/MapServer/tile/'+z+'/'+y+'/'+x;"
+        "var path=styleKey()==='light'?'light_nolabels':'dark_nolabels';"
+        "return'https://a.basemaps.cartocdn.com/'+path+'/'+z+'/'+x+'/'+y+'.png';}"
+        "function loadTile(z,x,y){return new Promise(function(res,rej){"
+        "var i=new Image();i.crossOrigin='anonymous';"
+        "i.onload=function(){res(i)};"
+        "i.onerror=function(){"
+        "if(styleKey()==='vfr')res(null);"
+        "else rej(new Error('tile '+z+'/'+x+'/'+y));};"
+        "i.src=tileUrl(z,x,y);});}"
+        "async function bake(){"
+        "var miles=bakeMiles(),labelKm=miles*1.609344,ppm=OUTER/labelKm;"
+        "var coverR=Math.ceil(Math.hypot(CX,CY))+2;"
+        "msg.textContent='Fetching '+styleLabel()+' @ '+miles+' mi\\u2026';"
+        "var z=pickZ(labelKm),f=facing*Math.PI/180,cf=Math.cos(f),sf=Math.sin(f);"
+        "var corners=[];"
+        "for(var a=0;a<360;a+=30){var r=coverR,ex=(Math.sin(a*Math.PI/180)*r)/ppm,"
+        "ny=(Math.cos(a*Math.PI/180)*r)/ppm;"
+        "var e=ex*cf+ny*sf,n=-ex*sf+ny*cf;"
+        "var R=6371.0088,dLat=n/R*180/Math.PI,dLon=e/(R*Math.cos(lat*Math.PI/180))*180/Math.PI;"
+        "corners.push([lat+dLat,lon+dLon]);}"
+        "var minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;"
+        "corners.forEach(function(p){var t=tileXY(p[0],p[1],z);minX=Math.min(minX,t[0]);"
+        "maxX=Math.max(maxX,t[0]);minY=Math.min(minY,t[1]);maxY=Math.max(maxY,t[1]);});"
+        "var x0=Math.floor(minX)-1,x1=Math.ceil(maxX)+1,y0=Math.floor(minY)-1,y1=Math.ceil(maxY)+1;"
+        "var tiles={},jobs=[],got=0;"
+        "for(var x=x0;x<=x1;x++)for(var y=y0;y<=y1;y++)(function(X,Y){"
+        "jobs.push(loadTile(z,X,Y).then(function(img){if(img){tiles[X+','+Y]=img;got++;}}));})(x,y);"
+        "await Promise.all(jobs);"
+        "if(!got){msg.textContent='No tiles loaded (check coverage / network)';return;}"
+        "msg.textContent='Compositing\\u2026';"
+        "var tw=(x1-x0+1)*256,th=(y1-y0+1)*256;"
+        "var mc=document.createElement('canvas');mc.width=tw;mc.height=th;"
+        "var mg=mc.getContext('2d');mg.fillStyle=fillCss();mg.fillRect(0,0,tw,th);"
+        "for(var x=x0;x<=x1;x++)for(var y=y0;y<=y1;y++){var im=tiles[x+','+y];"
+        "if(im)mg.drawImage(im,(x-x0)*256,(y-y0)*256);}"
+        "var src=mg.getImageData(0,0,tw,th).data;"
+        "var c=document.createElement('canvas');c.width=SIZE;c.height=SIZE;"
+        "var g=c.getContext('2d');var out=g.createImageData(SIZE,SIZE),d=out.data;"
+        "var fr=fillRgb(),wash=paleWash(),keep=1-wash;"
+        "for(var i=0;i<d.length;i+=4){d[i]=fr[0];d[i+1]=fr[1];d[i+2]=fr[2];d[i+3]=255;}"
+        "for(var py=0;py<SIZE;py++)for(var px=0;px<SIZE;px++){"
+        "var dx=px-CX,dy=CY-py;"
+        "var ex=dx/ppm,ny=dy/ppm;var e=ex*cf+ny*sf,n=-ex*sf+ny*cf;"
+        "var R=6371.0088,dLat=n/R*180/Math.PI,dLon=e/(R*Math.cos(lat*Math.PI/180))*180/Math.PI;"
+        "var A=lat+dLat,L=lon+dLon;var t=tileXY(A,L,z);"
+        "var fx=(t[0]-x0)*256,fy=(t[1]-y0)*256;"
+        "var x0i=Math.floor(fx),y0i=Math.floor(fy);"
+        "var tx=fx-x0i,ty=fy-y0i;"
+        "if(x0i<0||y0i<0||x0i+1>=tw||y0i+1>=th)continue;"
+        "function samp(ix,iy){var o=(iy*tw+ix)*4;return[src[o],src[o+1],src[o+2]];}"
+        "var p00=samp(x0i,y0i),p10=samp(x0i+1,y0i),p01=samp(x0i,y0i+1),p11=samp(x0i+1,y0i+1);"
+        "var di=(py*SIZE+px)*4;"
+        "for(var k=0;k<3;k++){var v0=p00[k]+(p10[k]-p00[k])*tx,v1=p01[k]+(p11[k]-p01[k])*tx;"
+        "var v=v0+(v1-v0)*ty;d[di+k]=Math.round(v*keep+255*wash);}d[di+3]=255;}"
+        "g.putImageData(out,0,0);"
+        "msg.textContent='Uploading\\u2026';"
+        "var blob=await new Promise(function(r){c.toBlob(r,'image/jpeg',0.88);});"
+        "if(!blob){msg.textContent='JPEG encode failed';return;}"
+        "var fd=new FormData();fd.append('basemap',blob,'basemap.jpg');"
+        "var q='style='+encodeURIComponent(styleKey())+'&mi='+miles;"
+        "var x=new XMLHttpRequest();x.open('POST','/basemap/upload?'+q);"
+        "x.onload=function(){if(x.status==200){msg.textContent='Basemap saved. Open radar to view.';"
+        "location.href='/?saved=1';}else{msg.textContent='Upload failed: '+(x.responseText||x.status);}};"
+        "x.onerror=function(){msg.textContent='Upload error';};x.send(fd);"
+        "}"
+        "document.getElementById('bm_gen').addEventListener('click',function(){"
+        "var miles=bakeMiles();"
+        "if(!confirm('Bake '+styleLabel()+' at '+miles+' mi for current center/facing?\\n'"
+        "+(miles===maxMiles"
+        "?'Zooming in will soft-upscale (regenerate at current range for sharper detail).'"
+        ":'Zooming out past '+miles+' mi requires regenerate.')))return;"
+        "bake().catch(function(e){msg.textContent=String(e&&e.message||e);});});"
+        "document.getElementById('bm_clear').addEventListener('click',function(){"
+        "if(!confirm('Delete stored basemap?'))return;"
+        "var x=new XMLHttpRequest();x.open('POST','/basemap/clear');"
+        "x.onload=function(){location.href='/?saved=1';};x.send();});"
+        "})();"
+        "</script></div></details>",
+        ui::radar::kSize, ui::radar::kCenterX, ui::radar::kCenterY, ui::radar::kGridOuterRadius,
+        services::map_center::latitude(), services::map_center::longitude(),
+        static_cast<unsigned>(ui::radar::scaleActiveMiles()),
+        static_cast<unsigned>(
+            ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1]),
+        static_cast<unsigned>(ui::radar::facingDeg()));
+    appendClamped(page, kSettingsPageCap, &used, bm2);
+  }
 
   // ---------- Display & screens card ----------
   appendRaw(page, kSettingsPageCap, &used,
@@ -989,7 +1170,9 @@ void handleSave() {
   services::apikeys::saveAdsbDbEnabledFromForm(s_server->arg("use_adsbdb").c_str());
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
+  ui::displayPrefsSaveHideBlipDetailsFromForm(s_server->arg("hide_blip_details").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
+  services::basemap::saveEnabledFromForm(s_server->arg("use_basemap").c_str());
   ui::radar::saveFacingDegFromForm(s_server->arg("facing_deg").c_str());
   services::clock::saveHourFormatFromForm(s_server->arg("clock_24h").c_str());
   services::clock::saveDateFormatFromForm(s_server->arg("date_numeric").c_str());
@@ -1073,6 +1256,79 @@ void handleRouteCacheClear() {
   services::route::clearRamCache();
   const bool ok = services::route_cache::clear();
   redirectToSettings(ok ? "cache_cleared=1" : "cache_err=1");
+}
+
+bool s_basemap_upload_failed = false;
+
+void handleBasemapUploadDone() {
+  if (s_basemap_upload_failed) {
+    s_server->send(400, "text/plain", "basemap upload failed");
+    return;
+  }
+  s_server->send(200, "text/plain", "ok");
+}
+
+void handleBasemapUpload() {
+  HTTPUpload& upload = s_server->upload();
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      s_basemap_upload_failed = false;
+      Serial.printf("[basemap] upload start: %s\n", upload.filename.c_str());
+      services::basemap::uploadBegin();
+      break;
+    }
+    case UPLOAD_FILE_WRITE: {
+      if (s_basemap_upload_failed) {
+        break;
+      }
+      if (!services::basemap::uploadWrite(upload.buf, upload.currentSize)) {
+        s_basemap_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_END: {
+      if (s_basemap_upload_failed) {
+        services::basemap::uploadAbort();
+        break;
+      }
+      services::basemap::Style style = services::basemap::Style::Dark;
+      if (s_server->hasArg("style")) {
+        const String sty = s_server->arg("style");
+        if (sty == "light") {
+          style = services::basemap::Style::Light;
+        } else if (sty == "vfr") {
+          style = services::basemap::Style::Vfr;
+        }
+      }
+      uint8_t mi = ui::radar::scaleActiveMiles();
+      if (s_server->hasArg("mi")) {
+        const long v = strtol(s_server->arg("mi").c_str(), nullptr, 10);
+        if (v > 0 && v <= 255) {
+          mi = static_cast<uint8_t>(v);
+        }
+      }
+      if (!services::basemap::uploadFinish(upload.totalSize, style, mi)) {
+        s_basemap_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_ABORTED: {
+      s_basemap_upload_failed = true;
+      services::basemap::uploadAbort();
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void handleBasemapClear() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  const bool ok = services::basemap::clear();
+  redirectToSettings(ok ? "saved=1" : "error=basemap");
 }
 
 void handleWifiAdd() {
@@ -1270,6 +1526,8 @@ void registerRoutes() {
   s_server->on("/save", HTTP_POST, handleSave);
   s_server->on("/route_cache.csv", HTTP_GET, handleRouteCacheDownload);
   s_server->on("/route_cache/clear", HTTP_POST, handleRouteCacheClear);
+  s_server->on("/basemap/upload", HTTP_POST, handleBasemapUploadDone, handleBasemapUpload);
+  s_server->on("/basemap/clear", HTTP_POST, handleBasemapClear);
   s_server->on("/wifi/add", HTTP_POST, handleWifiAdd);
   s_server->on("/wifi/remove", HTTP_POST, handleWifiRemove);
   s_server->on("/wifi/up", HTTP_POST, handleWifiUp);
