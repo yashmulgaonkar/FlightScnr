@@ -13,6 +13,7 @@
 #include "services/adsb_client.h"
 #include "services/aircraft_alert.h"
 #include "services/aircraft_type_lookup.h"
+#include "services/radar_basemap.h"
 #include "geo/flat_earth.h"
 #include "services/map_center.h"
 #include "ui/aircraft_symbol.h"
@@ -689,7 +690,25 @@ bool rebuildBackgroundSprite() {
     s_bg_ready = true;
   }
 
-  drawStaticGrid(s_bg.gfx());
+  // Optional Carto/OSM bake under the CRT grid (LittleFS JPEG → PSRAM cache).
+  uint16_t* pixels = s_bg.bufferMut();
+  const bool painted_map =
+      pixels != nullptr &&
+      services::basemap::blitRgb565(pixels, radar::kSize, radar::kSize);
+  if (painted_map) {
+    initLabelMetrics();
+    const DrawScope scope(s_bg.gfx());
+    const int cx = radar::kCenterX;
+    const int cy = radar::kCenterY;
+    const int grid_r = radar::kGridOuterRadius;
+    drawRings(cx, cy, grid_r);
+    drawGridSpokes(cx, cy, grid_r, radar::kColorGrid);
+    drawCardinalLabels();
+    drawRingScaleLabels(cx, cy, grid_r);
+    s_bg.gfx().setTextDatum(TextDatum::TopLeft);
+  } else {
+    drawStaticGrid(s_bg.gfx());
+  }
   s_content_base_valid = false;
   s_sweep_track_valid = false;
   return true;

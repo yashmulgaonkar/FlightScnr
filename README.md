@@ -57,6 +57,7 @@ On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle c
 2. Open [http://4.3.2.1](http://4.3.2.1) or [http://flightscnr.local](http://flightscnr.local) → enter Wi‑Fi credentials (or manage **Saved networks**). Reboot the unit.
 3. After connect: boot splash (~5 s) → radar.
 4. Set radar center, weather key, and optional route APIs at [http://flightscnr.local/](http://flightscnr.local/) (or device IP shown on settings page 1).
+5. Optional: **Radar basemap** card → **Generate from Carto** bakes a Dark Matter OSM map for your current center/range/facing into flash (grid overlays on top). Regenerate after moving the center or changing range/facing.
 
 You can save up to **3** Wi‑Fi networks. Preference order is slot order (#1 tried first). Manage them from the setup portal (**Saved networks**) or the online settings page (**Wi‑Fi networks** card: add, remove, reorder, update password).
 

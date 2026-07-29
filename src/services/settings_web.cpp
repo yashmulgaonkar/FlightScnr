@@ -30,9 +30,11 @@
 #include "services/aircraft_alert.h"
 #include "services/off_hours.h"
 #include "services/wifi_setup.h"
+#include "services/radar_basemap.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_accent.h"
 #include "ui/radar_scale.h"
+#include "ui/radar_theme.h"
 
 namespace {
 
@@ -45,7 +47,7 @@ bool s_active = false;
  *  overload copies the whole page into an internal-heap String, which under a
  *  ~26 KB post-detail heap starved lwIP (min free 5 KB), stalled loop() for
  *  ~12 s, and left max_blk permanently fragmented below the panel/TLS gates. */
-constexpr size_t kSettingsPageCap = 32768;
+constexpr size_t kSettingsPageCap = 40960;
 char* s_settings_page = nullptr;
 
 char* settingsPageBuffer() {
@@ -375,6 +377,112 @@ void handleSettingsPage() {
                ui::displayPrefsSweepLineEnabled());
 
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
+
+  // ---------- Radar basemap (Carto Dark Matter bake) ----------
+  {
+    char bm_status[192];
+    services::basemap::statusText(bm_status, sizeof(bm_status));
+    const int bm_n = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<details class=\"card\"><summary><span class=\"ico\">&#127758;</span>"
+        "Radar basemap<span class=\"sum\">Carto Dark Matter</span>"
+        "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
+        "<p class=\"note\">Optional OSM-based dark map under the radar grid. Generated in "
+        "your browser from <a href=\"https://carto.com/basemaps/\" target=\"_blank\" "
+        "rel=\"noopener\">CARTO Dark Matter</a> tiles for the <b>current</b> map center, "
+        "range, and facing, then stored on device flash (~50&ndash;120&nbsp;KB). "
+        "Regenerate after changing center/range/facing. &copy; OpenStreetMap / &copy; CARTO."
+        "</p>"
+        "<p class=\"hint\" id=\"bm_status\">%s</p>",
+        bm_status);
+    appendClamped(page, kSettingsPageCap, &used, bm_n);
+  }
+  appendToggle(page, kSettingsPageCap, &used, "use_basemap", "Show basemap on radar",
+               services::basemap::enabled());
+  {
+    const int bm2 = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<p style=\"margin-top:.6rem\">"
+        "<button id=\"bm_gen\" class=\"sm\" type=\"button\">Generate from Carto</button> "
+        "<button id=\"bm_clear\" class=\"sm\" type=\"button\">Clear basemap</button></p>"
+        "<p id=\"bm_msg\" class=\"note\"></p>"
+        "<script>"
+        "(function(){"
+        "var SIZE=%d,CX=%d,CY=%d,OUTER=%d;"
+        "var lat=%.6f,lon=%.6f,miles=%u,facing=%u;"
+        "var labelKm=miles*1.609344,ppm=OUTER/labelKm;"
+        "var msg=document.getElementById('bm_msg');"
+        "function mercX(L){return(L+180)/360;}"
+        "function mercY(A){var s=Math.sin(A*Math.PI/180);return.5-Math.log((1+s)/(1-s))/(4*Math.PI);}"
+        "function tileXY(A,L,z){var n=Math.pow(2,z);return[mercX(L)*n,mercY(A)*n];}"
+        "function pickZ(){var mpp=(labelKm*1000)/OUTER;var c=Math.cos(lat*Math.PI/180);"
+        "var z=Math.log2(156543.03392*c/mpp);return Math.max(6,Math.min(15,Math.round(z)));}"
+        "function loadTile(z,x,y){return new Promise(function(res,rej){"
+        "var i=new Image();i.crossOrigin='anonymous';"
+        "i.onload=function(){res(i)};i.onerror=function(){rej(new Error('tile '+z+'/'+x+'/'+y));};"
+        "i.src='https://a.basemaps.cartocdn.com/dark_all/'+z+'/'+x+'/'+y+'.png';});}"
+        "async function bake(){"
+        "msg.textContent='Fetching tiles\\u2026';"
+        "var z=pickZ(),f=facing*Math.PI/180,cf=Math.cos(f),sf=Math.sin(f);"
+        "var corners=[];"
+        "for(var a=0;a<360;a+=30){var r=OUTER,ex=(Math.sin(a*Math.PI/180)*r)/ppm,"
+        "ny=(Math.cos(a*Math.PI/180)*r)/ppm;"
+        "var e=ex*cf+ny*sf,n=-ex*sf+ny*cf;"
+        "var R=6371.0088,dLat=n/R*180/Math.PI,dLon=e/(R*Math.cos(lat*Math.PI/180))*180/Math.PI;"
+        "corners.push([lat+dLat,lon+dLon]);}"
+        "var minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;"
+        "corners.forEach(function(p){var t=tileXY(p[0],p[1],z);minX=Math.min(minX,t[0]);"
+        "maxX=Math.max(maxX,t[0]);minY=Math.min(minY,t[1]);maxY=Math.max(maxY,t[1]);});"
+        "var x0=Math.floor(minX)-1,x1=Math.ceil(maxX)+1,y0=Math.floor(minY)-1,y1=Math.ceil(maxY)+1;"
+        "var tiles={},jobs=[];"
+        "for(var x=x0;x<=x1;x++)for(var y=y0;y<=y1;y++)(function(X,Y){"
+        "jobs.push(loadTile(z,X,Y).then(function(img){tiles[X+','+Y]=img;}));})(x,y);"
+        "await Promise.all(jobs);"
+        "msg.textContent='Compositing\\u2026';"
+        "var tw=(x1-x0+1)*256,th=(y1-y0+1)*256;"
+        "var mc=document.createElement('canvas');mc.width=tw;mc.height=th;"
+        "var mg=mc.getContext('2d');mg.fillStyle='#020f03';mg.fillRect(0,0,tw,th);"
+        "for(var x=x0;x<=x1;x++)for(var y=y0;y<=y1;y++){var im=tiles[x+','+y];"
+        "if(im)mg.drawImage(im,(x-x0)*256,(y-y0)*256);}"
+        "var src=mg.getImageData(0,0,tw,th).data;"
+        "var c=document.createElement('canvas');c.width=SIZE;c.height=SIZE;"
+        "var g=c.getContext('2d');var out=g.createImageData(SIZE,SIZE),d=out.data;"
+        "for(var i=0;i<d.length;i+=4){d[i]=2;d[i+1]=15;d[i+2]=3;d[i+3]=255;}"
+        "var nTiles=Math.pow(2,z);"
+        "for(var py=0;py<SIZE;py++)for(var px=0;px<SIZE;px++){"
+        "var dx=px-CX,dy=CY-py;if(dx*dx+dy*dy>OUTER*OUTER+2)continue;"
+        "var ex=dx/ppm,ny=dy/ppm;var e=ex*cf+ny*sf,n=-ex*sf+ny*cf;"
+        "var R=6371.0088,dLat=n/R*180/Math.PI,dLon=e/(R*Math.cos(lat*Math.PI/180))*180/Math.PI;"
+        "var A=lat+dLat,L=lon+dLon;var t=tileXY(A,L,z);"
+        "var fx=t[0]-x0,fy=t[1]-y0;var ix=Math.floor(fx*256),iy=Math.floor(fy*256);"
+        "if(ix<0||iy<0||ix>=tw||iy>=th)continue;"
+        "var si=(iy*tw+ix)*4,di=(py*SIZE+px)*4;"
+        "d[di]=src[si];d[di+1]=src[si+1];d[di+2]=src[si+2];d[di+3]=255;}"
+        "g.putImageData(out,0,0);"
+        "msg.textContent='Uploading\\u2026';"
+        "var blob=await new Promise(function(r){c.toBlob(r,'image/jpeg',0.88);});"
+        "if(!blob){msg.textContent='JPEG encode failed';return;}"
+        "var fd=new FormData();fd.append('basemap',blob,'basemap.jpg');"
+        "var x=new XMLHttpRequest();x.open('POST','/basemap/upload');"
+        "x.onload=function(){if(x.status==200){msg.textContent='Basemap saved. Open radar to view.';"
+        "location.href='/?saved=1';}else{msg.textContent='Upload failed: '+(x.responseText||x.status);}};"
+        "x.onerror=function(){msg.textContent='Upload error';};x.send(fd);"
+        "}"
+        "document.getElementById('bm_gen').addEventListener('click',function(){"
+        "if(!confirm('Bake Carto Dark Matter for current center/range/facing?'))return;"
+        "bake().catch(function(e){msg.textContent=String(e&&e.message||e);});});"
+        "document.getElementById('bm_clear').addEventListener('click',function(){"
+        "if(!confirm('Delete stored basemap?'))return;"
+        "var x=new XMLHttpRequest();x.open('POST','/basemap/clear');"
+        "x.onload=function(){location.href='/?saved=1';};x.send();});"
+        "})();"
+        "</script></div></details>",
+        ui::radar::kSize, ui::radar::kCenterX, ui::radar::kCenterY, ui::radar::kGridOuterRadius,
+        services::map_center::latitude(), services::map_center::longitude(),
+        static_cast<unsigned>(ui::radar::scaleActiveMiles()),
+        static_cast<unsigned>(ui::radar::facingDeg()));
+    appendClamped(page, kSettingsPageCap, &used, bm2);
+  }
 
   // ---------- Display & screens card ----------
   appendRaw(page, kSettingsPageCap, &used,
@@ -990,6 +1098,7 @@ void handleSave() {
   services::weather::saveUnitsFromForm(s_server->arg("weather_units").c_str());
   ui::displayPrefsSaveClockWeatherTimeoutFromForm(s_server->arg("clock_timeout").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
+  services::basemap::saveEnabledFromForm(s_server->arg("use_basemap").c_str());
   ui::radar::saveFacingDegFromForm(s_server->arg("facing_deg").c_str());
   services::clock::saveHourFormatFromForm(s_server->arg("clock_24h").c_str());
   services::clock::saveDateFormatFromForm(s_server->arg("date_numeric").c_str());
@@ -1073,6 +1182,63 @@ void handleRouteCacheClear() {
   services::route::clearRamCache();
   const bool ok = services::route_cache::clear();
   redirectToSettings(ok ? "cache_cleared=1" : "cache_err=1");
+}
+
+bool s_basemap_upload_failed = false;
+
+void handleBasemapUploadDone() {
+  if (s_basemap_upload_failed) {
+    s_server->send(400, "text/plain", "basemap upload failed");
+    return;
+  }
+  s_server->send(200, "text/plain", "ok");
+}
+
+void handleBasemapUpload() {
+  HTTPUpload& upload = s_server->upload();
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      s_basemap_upload_failed = false;
+      Serial.printf("[basemap] upload start: %s\n", upload.filename.c_str());
+      services::basemap::uploadBegin();
+      break;
+    }
+    case UPLOAD_FILE_WRITE: {
+      if (s_basemap_upload_failed) {
+        break;
+      }
+      if (!services::basemap::uploadWrite(upload.buf, upload.currentSize)) {
+        s_basemap_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_END: {
+      if (s_basemap_upload_failed) {
+        services::basemap::uploadAbort();
+        break;
+      }
+      if (!services::basemap::uploadFinish(upload.totalSize)) {
+        s_basemap_upload_failed = true;
+      }
+      break;
+    }
+    case UPLOAD_FILE_ABORTED: {
+      s_basemap_upload_failed = true;
+      services::basemap::uploadAbort();
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void handleBasemapClear() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  const bool ok = services::basemap::clear();
+  redirectToSettings(ok ? "saved=1" : "error=basemap");
 }
 
 void handleWifiAdd() {
@@ -1270,6 +1436,8 @@ void registerRoutes() {
   s_server->on("/save", HTTP_POST, handleSave);
   s_server->on("/route_cache.csv", HTTP_GET, handleRouteCacheDownload);
   s_server->on("/route_cache/clear", HTTP_POST, handleRouteCacheClear);
+  s_server->on("/basemap/upload", HTTP_POST, handleBasemapUploadDone, handleBasemapUpload);
+  s_server->on("/basemap/clear", HTTP_POST, handleBasemapClear);
   s_server->on("/wifi/add", HTTP_POST, handleWifiAdd);
   s_server->on("/wifi/remove", HTTP_POST, handleWifiRemove);
   s_server->on("/wifi/up", HTTP_POST, handleWifiUp);

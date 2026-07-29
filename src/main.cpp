@@ -1835,6 +1835,7 @@ void setup() {
     services::tzlookup::init();
     services::tzlookup::requestForMapCenter();
     services::route::init();
+    services::basemap::init();
     services::adsb::fetchInit();
     services::weather::bootSanityCheck();
     settingsSetSavedCallback(applySettingsLive);
