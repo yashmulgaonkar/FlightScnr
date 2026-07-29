@@ -1032,11 +1032,15 @@ void fetchWatchdog(unsigned long now_ms) {
   Serial.printf("[adsb] fetch stall recovery (%lums busy)\n",
                 now_ms - s_fetch_busy_since_ms);
   if (s_fetch_task != nullptr) {
-    // Worker may hold the HTTPS mutex / stack C++ clients; force-unlock so
-    // other HTTPS users are not stuck on "https busy" after the kill.
-    vTaskDelete(s_fetch_task);
+    // Worker may hold the HTTPS lock / stack C++ clients; reclaim only if this
+    // task owned it — never steal from the route worker.
+    TaskHandle_t task = s_fetch_task;
+    const bool our_lock = services::https::heldBy(task);
     s_fetch_task = nullptr;
-    services::https::forceUnlock();
+    vTaskDelete(task);
+    if (our_lock) {
+      services::https::forceUnlockIfHeldBy(task);
+    }
   }
   s_fetch_requested = false;
   s_fetch_busy = false;

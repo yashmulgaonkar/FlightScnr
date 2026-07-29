@@ -473,18 +473,56 @@ void load() {
 
 bool saveFromForm(const char* airlabs, const char* flightaware, const char* fr24) {
   bool any = false;
+  bool enable_al = false;
+  bool enable_fa = false;
+  bool enable_fr = false;
+
   if (saveIfNonEmpty(airlabs, kAirLabs)) {
     applyProviderBlob(&s_airlabs, airlabs);
+    enable_al = true;
     any = true;
   }
   if (saveIfNonEmpty(flightaware, kFlightAware)) {
     applyProviderBlob(&s_flightaware, flightaware);
+    enable_fa = true;
     any = true;
   }
   if (saveIfNonEmpty(fr24, kFr24)) {
     applyProviderBlob(&s_fr24, fr24);
+    enable_fr = true;
     any = true;
   }
+
+  // Pasting a key auto-enables that provider (toggle can still turn it off later).
+  if (enable_al || enable_fa || enable_fr) {
+    Preferences prefs;
+    if (prefs.begin(kNs, false)) {
+      if (enable_al) {
+        s_use_airlabs = true;
+        prefs.putBool(kUseAirLabs, true);
+      }
+      if (enable_fa) {
+        s_use_flightaware = true;
+        prefs.putBool(kUseFlightAware, true);
+      }
+      if (enable_fr) {
+        s_use_fr24 = true;
+        prefs.putBool(kUseFr24, true);
+      }
+      prefs.end();
+    } else {
+      if (enable_al) {
+        s_use_airlabs = true;
+      }
+      if (enable_fa) {
+        s_use_flightaware = true;
+      }
+      if (enable_fr) {
+        s_use_fr24 = true;
+      }
+    }
+  }
+
   if (any) {
     persistUsageCounters();
   }

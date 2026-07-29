@@ -531,12 +531,21 @@ void showFlightDetail() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
-  if (detailDrawBlocked() || heapBlocksPanel()) {
+  // Detail compositing uses a PSRAM sprite; only the brief sprite-release
+  // handshake must block. Do not hard-gate on panel SPI max_blk — that left
+  // devices stuck at ~9.7 KB max_blk never redrawing / never enriching.
+  if (detailDrawBlocked()) {
     g_flight_detail_draw_pending = true;
     if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
-      Serial.printf("[radar] detail_draw_block sprite_rel=%d route_wkr=%d heap=%u\n",
-                    services::route::detailWorkerDebugSpriteReleasePending() ? 1 : 0,
-                    services::route::detailWorkerBusy() ? 1 : 0, ESP.getFreeHeap());
+      static unsigned long s_last_detail_block_log_ms = 0;
+      const unsigned long now_ms = millis();
+      if (now_ms - s_last_detail_block_log_ms >= 2000UL) {
+        s_last_detail_block_log_ms = now_ms;
+        Serial.printf("[radar] detail_draw_block sprite_rel=%d route_wkr=%d heap=%u max_blk=%u\n",
+                      services::route::detailWorkerDebugSpriteReleasePending() ? 1 : 0,
+                      services::route::detailWorkerBusy() ? 1 : 0, ESP.getFreeHeap(),
+                      ESP.getMaxAllocHeap());
+      }
     }
     g_radar_visible = false;
     return;
@@ -1720,7 +1729,7 @@ void tickAdsbFetch() {
       releaseHttpsPressureMemory();
       ++s_heap_recover_attempts;
 
-      // Prefer reclaiming the 16KB route_detail stack over WiFi recycle.
+      // Prefer reclaiming the route_detail stack over WiFi recycle.
       if (!on_detail) {
         const uint32_t free_before = ESP.getFreeHeap();
         const uint32_t blk_before = ESP.getMaxAllocHeap();

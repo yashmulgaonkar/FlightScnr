@@ -109,15 +109,17 @@ Builds auto-download [tar1090-db](https://github.com/wiedehopf/tar1090-db) and [
 
 ### Weather (Tomorrow.io)
 
-Sign up at [Tomorrow.io](https://app.tomorrow.io/signup?planid=60d46beae90c3b3549a59ff3), enable **Use Tomorrow.io** on the web portal, paste key, **Save**. Fetches only while clock or forecast is open; refreshes after 30 min.
+Sign up at [Tomorrow.io](https://app.tomorrow.io/signup?planid=60d46beae90c3b3549a59ff3), enable **Use Tomorrow.io** on the web portal, paste key, **Save**. Fetches only while clock or forecast is open; refreshes after 30 min. Free [Open-Meteo](https://open-meteo.com/) is on by default as a fallback when Tomorrow.io is off or unavailable.
 
-### Route / airline (AirLabs, FlightAware, FR24)
+### Route / airline (AirLabs, FlightAware, FR24, adsbdb)
 
-Enable providers and keys on the web portal. Multiple comma-separated keys per provider; per-key monthly limits; counters reset each calendar month (NTP).
+Routes (origin → destination) appear on **flight detail** after you tap a blip — not on the radar sweep.
 
-**Order:** AirLabs → FlightAware → FR24 (first enabled provider with quota wins per callsign).
+Enable providers and keys on the web portal. **Paste a key and leave the switch on** (pasting a key turns that provider on automatically). Multiple comma-separated keys per provider; per-key monthly limits; counters reset each calendar month (NTP).
 
-One live API call per uncached callsign on first flight-detail open; results cached in RAM + flash (`/route_cache.csv`, up to 1500 rows, downloadable from the portal). Cached callsigns don’t count toward limits.
+**Order:** AirLabs → FlightAware → FR24 → [adsbdb](https://www.adsbdb.com/) (free, no key, default on) → callsign-prefix airline fallback. First provider that returns a complete origin/destination pair wins per callsign.
+
+One live API call waterfall per uncached callsign on first flight-detail open; results cached in RAM + flash (`/route_cache.csv`, up to 1500 rows, downloadable or clearable from the portal). Cached callsigns don’t count toward limits.
 
 
 | Service     | Sign up                                                                |
@@ -125,6 +127,7 @@ One live API call per uncached callsign on first flight-detail open; results cac
 | AirLabs     | [airlabs.co/signup](https://airlabs.co/signup)                         |
 | FlightAware | [aeroapi signup](https://www.flightaware.com/aeroapi/signup/personal)  |
 | FR24        | [fr24api docs](https://fr24api.flightradar24.com/docs/getting-started) |
+| adsbdb      | Free, no signup — toggle **Use adsbdb** on the portal                   |
 
 
 ## License

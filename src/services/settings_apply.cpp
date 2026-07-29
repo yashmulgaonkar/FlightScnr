@@ -49,9 +49,10 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
   }
   services::adsb::saveAltitudeFloorFromForm(min_height_str);
   services::adsb::saveAltitudeCeilingFromForm(max_height_str);
-  services::apikeys::saveFromForm(airlabs_key, flightaware_key, fr24_key);
   services::apikeys::saveEnabledFromForm(use_airlabs_checkbox, use_flightaware_checkbox,
                                          use_fr24_checkbox);
+  // Key paste runs after toggles so a newly pasted key auto-enables that provider.
+  services::apikeys::saveFromForm(airlabs_key, flightaware_key, fr24_key);
   services::apikeys::saveLimitsFromForm(airlabs_max_calls, flightaware_max_usd,
                                         flightaware_cost_usd, fr24_max_usd, fr24_cost_usd);
   hardware::saveBeepEnabledFromForm(ui_beep_checkbox);

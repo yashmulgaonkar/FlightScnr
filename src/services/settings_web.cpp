@@ -23,6 +23,7 @@
 #include "services/clock_time.h"
 #include "services/map_center.h"
 #include "services/route_cache_store.h"
+#include "services/route_lookup.h"
 #include "services/settings_apply.h"
 #include "services/tz_lookup.h"
 #include "services/weather.h"
@@ -283,6 +284,17 @@ void handleSettingsPage() {
     appendRaw(page, kSettingsPageCap, &used,
               "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
               "<b>Wi&#8209;Fi change failed.</b> Check SSID/password and free slots (max 3)."
+              "</div>");
+  }
+  if (s_server->hasArg("cache_cleared")) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<div class=\"banner\"><b>Route cache cleared.</b> Open flight detail again to "
+              "re-fetch routes.</div>");
+  }
+  if (s_server->hasArg("cache_err")) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
+              "<b>Could not clear route cache.</b> Try again in a moment."
               "</div>");
   }
 
@@ -579,22 +591,55 @@ void handleSettingsPage() {
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
   // ---------- Route APIs card ----------
+  // Runtime order: AirLabs → FlightAware → FR24 → adsbdb → prefix.
   appendRaw(page, kSettingsPageCap, &used,
             "<details class=\"card\"><summary><span class=\"ico\">&#9992;</span>Route APIs"
             "<span class=\"sum\">airline &amp; route lookup</span><span class=\"chev\">&#9656;</span>"
             "</summary><div class=\"body\">"
-            "<p class=\"note\">Enabled providers run in order &mdash; <b>FlightAware &rarr; AirLabs "
-            "&rarr; FR24</b> &mdash; first hit per callsign wins. Paste multiple keys "
-            "comma-separated (key1, key2, key3); when one hits its monthly cap the next is used "
-            "before moving to the next provider. Leave blank to keep the saved value. Caps reset "
-            "on the 1st once NTP syncs.</p>");
+            "<p class=\"note\">Origin/destination show on <b>flight detail</b> (tap a blip), not "
+            "the radar. Paste a key <b>and</b> leave the switch on (pasting a key turns it on "
+            "automatically). Order: <b>AirLabs &rarr; FlightAware &rarr; FR24 &rarr; "
+            "adsbdb</b> &mdash; first complete route per callsign wins. Multiple keys "
+            "comma-separated; when one hits its monthly cap the next key is tried before the "
+            "next provider. Leave blank to keep the saved value. Caps reset on the 1st once "
+            "NTP syncs.</p>");
 
-  // FlightAware (1st priority)
+  // AirLabs (1st priority)
+  appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
+  appendInlineToggle(page, kSettingsPageCap, &used, "use_airlabs",
+                     services::apikeys::useAirLabs());
+  appendRaw(page, kSettingsPageCap, &used,
+            "<span class=\"name\">AirLabs</span><span class=\"badge\">1st</span></div>");
+
+  services::apikeys::maskedAirLabs(masked, sizeof(masked));
+  char al_used_note[64];
+  if (services::apikeys::airLabsMaxCalls() == 0) {
+    snprintf(al_used_note, sizeof(al_used_note), "Used this month: %u (unlimited cap)",
+             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()));
+  } else {
+    snprintf(al_used_note, sizeof(al_used_note), "Used this month: %u / %u",
+             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()),
+             static_cast<unsigned>(services::apikeys::airLabsMaxCalls()));
+  }
+  const int al_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<label for=\"airlabs_key\">API keys (%s)</label>"
+      "<input id=\"airlabs_key\" name=\"airlabs_key\" type=\"password\" "
+      "autocomplete=\"off\" placeholder=\"key1, key2, key3\">"
+      "<label for=\"airlabs_max_calls\">Max calls / month per key (0 = unlimited; "
+      "free tier 1,000/mo)</label>"
+      "<input id=\"airlabs_max_calls\" name=\"airlabs_max_calls\" type=\"number\" min=\"0\" "
+      "step=\"1\" value=\"%u\">"
+      "<p class=\"usage\">%s</p></div>",
+      masked, static_cast<unsigned>(services::apikeys::airLabsMaxCalls()), al_used_note);
+  appendClamped(page, kSettingsPageCap, &used, al_n);
+
+  // FlightAware (2nd priority)
   appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
   appendInlineToggle(page, kSettingsPageCap, &used, "use_flightaware",
                      services::apikeys::useFlightAware());
   appendRaw(page, kSettingsPageCap, &used,
-            "<span class=\"name\">FlightAware</span><span class=\"badge\">1st</span></div>");
+            "<span class=\"name\">FlightAware</span><span class=\"badge\">2nd</span></div>");
 
   services::apikeys::maskedFlightAware(masked, sizeof(masked));
   char fa_budget[16];
@@ -629,36 +674,6 @@ void handleSettingsPage() {
       "<p class=\"usage\">%s</p></div>",
       masked, fa_budget, fa_cost, fa_used_note);
   appendClamped(page, kSettingsPageCap, &used, fa_n);
-
-  // AirLabs (2nd priority)
-  appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
-  appendInlineToggle(page, kSettingsPageCap, &used, "use_airlabs",
-                     services::apikeys::useAirLabs());
-  appendRaw(page, kSettingsPageCap, &used,
-            "<span class=\"name\">AirLabs</span><span class=\"badge\">2nd</span></div>");
-
-  services::apikeys::maskedAirLabs(masked, sizeof(masked));
-  char al_used_note[64];
-  if (services::apikeys::airLabsMaxCalls() == 0) {
-    snprintf(al_used_note, sizeof(al_used_note), "Used this month: %u (unlimited cap)",
-             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()));
-  } else {
-    snprintf(al_used_note, sizeof(al_used_note), "Used this month: %u / %u",
-             static_cast<unsigned>(services::apikeys::airLabsCallsUsed()),
-             static_cast<unsigned>(services::apikeys::airLabsMaxCalls()));
-  }
-  const int al_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"airlabs_key\">API keys (%s)</label>"
-      "<input id=\"airlabs_key\" name=\"airlabs_key\" type=\"password\" "
-      "autocomplete=\"off\" placeholder=\"key1, key2, key3\">"
-      "<label for=\"airlabs_max_calls\">Max calls / month per key (0 = unlimited; "
-      "free tier 1,000/mo)</label>"
-      "<input id=\"airlabs_max_calls\" name=\"airlabs_max_calls\" type=\"number\" min=\"0\" "
-      "step=\"1\" value=\"%u\">"
-      "<p class=\"usage\">%s</p></div>",
-      masked, static_cast<unsigned>(services::apikeys::airLabsMaxCalls()), al_used_note);
-  appendClamped(page, kSettingsPageCap, &used, al_n);
 
   // FlightRadar24 (3rd priority)
   appendRaw(page, kSettingsPageCap, &used, "<div class=\"api\"><div class=\"api-head\">");
@@ -705,7 +720,7 @@ void handleSettingsPage() {
                services::apikeys::useAdsbDb());
   appendRaw(page, kSettingsPageCap, &used,
             "<p class=\"usage\">Free route source (adsbdb.com), no key needed. "
-            "Used after the paid APIs above.</p></div>");
+            "Used after the paid APIs above (default on).</p></div>");
 
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
@@ -856,12 +871,17 @@ void handleSettingsPage() {
   // ---------- Route cache card ----------
   appendRaw(page, kSettingsPageCap, &used,
             "<details class=\"card\"><summary><span class=\"ico\">&#8681;</span>Route cache"
-            "<span class=\"sum\">export</span><span class=\"chev\">&#9656;</span>"
+            "<span class=\"sum\">export / clear</span><span class=\"chev\">&#9656;</span>"
             "</summary><div class=\"body\">"
             "<p class=\"note\">Airline/route lookups are cached on flash (written about every "
-            "10&nbsp;min) so repeat callsigns don't re-bill an API.</p>"
+            "10&nbsp;min) so repeat callsigns don't re-bill an API. Clear the cache if routes "
+            "look stuck after changing API settings.</p>"
             "<a class=\"dl\" href=\"/route_cache.csv\" download=\"route_cache.csv\">"
-            "&#8681;&nbsp; Download route_cache.csv</a></div></details>");
+            "&#8681;&nbsp; Download route_cache.csv</a>"
+            "<form method=\"POST\" action=\"/route_cache/clear\" style=\"margin-top:.75rem\""
+            " onsubmit=\"return confirm('Clear all cached airline/route lookups?');\">"
+            "<button class=\"sm\" type=\"submit\">Clear route cache</button>"
+            "</form></div></details>");
 
   // ---------- Firmware update card ----------
   appendRaw(page, kSettingsPageCap, &used,
@@ -1043,6 +1063,16 @@ void handleSave() {
 
 void handleRouteCacheDownload() {
   services::route_cache::sendDownload(s_server);
+}
+
+void handleRouteCacheClear() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  services::route::clearRamCache();
+  const bool ok = services::route_cache::clear();
+  redirectToSettings(ok ? "cache_cleared=1" : "cache_err=1");
 }
 
 void handleWifiAdd() {
@@ -1239,6 +1269,7 @@ void registerRoutes() {
   s_server->on("/settings", HTTP_GET, handleSettingsPage);
   s_server->on("/save", HTTP_POST, handleSave);
   s_server->on("/route_cache.csv", HTTP_GET, handleRouteCacheDownload);
+  s_server->on("/route_cache/clear", HTTP_POST, handleRouteCacheClear);
   s_server->on("/wifi/add", HTTP_POST, handleWifiAdd);
   s_server->on("/wifi/remove", HTTP_POST, handleWifiRemove);
   s_server->on("/wifi/up", HTTP_POST, handleWifiUp);

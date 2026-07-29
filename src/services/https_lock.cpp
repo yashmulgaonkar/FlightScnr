@@ -3,6 +3,7 @@
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 
 #include "mbedtls/platform.h"
 
@@ -10,12 +11,19 @@ namespace services::https {
 
 namespace {
 
-SemaphoreHandle_t s_mutex = nullptr;
+SemaphoreHandle_t s_sem = nullptr;
+TaskHandle_t s_holder = nullptr;
 bool s_tls_psram_alloc_set = false;
 
-void ensureMutex() {
-  if (s_mutex == nullptr) {
-    s_mutex = xSemaphoreCreateMutex();
+void ensureSem() {
+  if (s_sem != nullptr) {
+    return;
+  }
+  // Binary semaphore (not a mutex): force-unlock after vTaskDelete must Give from
+  // a different task. FreeRTOS mutexes assert if a non-owner Gives.
+  s_sem = xSemaphoreCreateBinary();
+  if (s_sem != nullptr) {
+    xSemaphoreGive(s_sem);  // start available
   }
 }
 
@@ -47,45 +55,66 @@ void ensureTlsPsramAllocator() {
 }  // namespace
 
 void init() {
-  ensureMutex();
+  ensureSem();
   ensureTlsPsramAllocator();
 }
 
 bool lock(uint32_t timeout_ms) {
-  ensureMutex();
-  if (s_mutex == nullptr) {
+  ensureSem();
+  if (s_sem == nullptr) {
     return false;
   }
-  return xSemaphoreTake(s_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+  if (xSemaphoreTake(s_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+    return false;
+  }
+  s_holder = xTaskGetCurrentTaskHandle();
+  return true;
 }
 
 void unlock() {
-  if (s_mutex != nullptr) {
-    xSemaphoreGive(s_mutex);
+  if (s_sem == nullptr) {
+    return;
   }
+  if (s_holder == xTaskGetCurrentTaskHandle()) {
+    s_holder = nullptr;
+  }
+  xSemaphoreGive(s_sem);
+}
+
+bool heldBy(TaskHandle_t task) {
+  return task != nullptr && s_holder == task;
+}
+
+void forceUnlockIfHeldBy(TaskHandle_t task) {
+  ensureSem();
+  if (s_sem == nullptr || task == nullptr) {
+    return;
+  }
+  if (s_holder != task) {
+    return;
+  }
+  s_holder = nullptr;
+  // Binary Give from any task is safe; ignore errQUEUE_FULL if already free.
+  xSemaphoreGive(s_sem);
 }
 
 void forceUnlock() {
-  ensureMutex();
-  if (s_mutex == nullptr) {
+  ensureSem();
+  if (s_sem == nullptr) {
     return;
   }
-  // Mutex may already be free; Give on an untaken mutex is undefined on some
-  // ports — only Give when Take(0) fails (still held by a dead task).
-  if (xSemaphoreTake(s_mutex, 0) == pdTRUE) {
-    xSemaphoreGive(s_mutex);
-    return;
-  }
-  xSemaphoreGive(s_mutex);
+  s_holder = nullptr;
+  xSemaphoreGive(s_sem);
 }
 
 bool busy() {
-  ensureMutex();
-  if (s_mutex == nullptr) {
+  ensureSem();
+  if (s_sem == nullptr) {
     return false;
   }
-  if (xSemaphoreTake(s_mutex, 0) == pdTRUE) {
-    xSemaphoreGive(s_mutex);
+  if (xSemaphoreTake(s_sem, 0) == pdTRUE) {
+    s_holder = nullptr;
+    xSemaphoreGive(s_sem);
     return false;
   }
   return true;

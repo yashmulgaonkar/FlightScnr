@@ -512,6 +512,27 @@ void sendDownload(WebServer* server) {
   f.close();
 }
 
+bool clear() {
+  FsLock lock;
+  if (!lock.acquire(pdMS_TO_TICKS(5000))) {
+    return false;
+  }
+  s_dirty = false;
+  if (!ensureMounted()) {
+    return true;
+  }
+  if (LittleFS.exists(kTmpPath)) {
+    LittleFS.remove(kTmpPath);
+  }
+  if (LittleFS.exists(kPath) && !LittleFS.remove(kPath)) {
+    Serial.println("[route_cache] clear remove failed");
+    return false;
+  }
+  ensureCacheFile();
+  Serial.println("[route_cache] cleared");
+  return true;
+}
+
 bool flashUsage(size_t* used_bytes, size_t* total_bytes) {
   if (used_bytes != nullptr) {
     *used_bytes = 0;

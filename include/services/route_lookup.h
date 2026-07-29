@@ -47,9 +47,9 @@ void tickDetailWorkerWatchdog(unsigned long now_ms);
 void cancelDetailEnrichment();
 
 /**
- * Tear down the route_detail FreeRTOS task (16KB internal stack) when idle.
- * Call when leaving flight detail or during heap recovery while not on detail —
- * next enrich recreates the worker via ensureDetailWorker().
+ * Tear down the route_detail FreeRTOS task (see kRouteDetailWorkerStackBytes)
+ * when idle. Call when leaving flight detail or during heap recovery while not
+ * on detail — next enrich recreates the worker via ensureDetailWorker().
  */
 void shutdownDetailWorker();
 
@@ -104,6 +104,9 @@ bool consumeTlsRecoverRequest();
 
 /** Clear latched route TLS failure state (e.g. after WiFi recycle). */
 void resetTlsHardFail();
+
+/** Clear RAM route cache slots (does not touch LittleFS). */
+void clearRamCache();
 
 const char* sourceTag(ApiSource s);
 

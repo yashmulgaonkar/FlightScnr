@@ -171,33 +171,37 @@ constexpr unsigned long kAdsbRateLimitBackoffMs = 15000UL;
 /** Defer radar SPI panel writes when largest contiguous block is below this.
  *  The ESP-IDF SPI master driver uses internal DMA descriptors; corrupted driver
  *  state from prior heap exhaustion causes `spi_device_polling_end` assertion panics.
- *  Normal steady-state after TLS fragmentation is ~27636; only defer during true
- *  crisis when the driver's internal allocations would likely fail. */
-constexpr uint32_t kMinContiguousHeapForPanelSpi = 10000;
+ *  Post-TLS steady state on flight detail is often ~9–12 KB max_blk (not the older
+ *  ~27 KB assumption) — only defer in a true crisis below that floor. */
+constexpr uint32_t kMinContiguousHeapForPanelSpi = 8000;
 
 /** Defer ADS-B HTTPS if internal free heap is below this.
  *  mbedTLS buffers (https_lock PSRAM allocator), the response payload, and the
  *  parsed JsonDocument all live in PSRAM now, so a fetch only needs internal RAM
- *  for lwIP socket buffers and small client structs (~2-4KB observed). Sized so
- *  the post-flight-detail steady state keeps polling: the lazily created
- *  route_detail worker task carves 16KB of internal stack while flight detail is
- *  active; shutdownDetailWorker() returns that block when leaving detail. Heap
- *  gates must still work while the worker is alive (~12KB max_blk ceiling). */
-constexpr uint32_t kMinFreeHeapForAdsbHttps = 22000;
+ *  for lwIP socket buffers and small client structs (~2-4KB observed). Sized for
+ *  the observed flight-detail steady state (~20–22 KB free, ~9–12 KB max_blk). */
+constexpr uint32_t kMinFreeHeapForAdsbHttps = 16000;
 /** ADS-B TLS needs only small internal blocks now; panel SPI has its own guard. */
-constexpr uint32_t kMinContiguousHeapForAdsbTls = 10000;
+constexpr uint32_t kMinContiguousHeapForAdsbTls = 6000;
 
 /** Defer route API HTTPS if internal free heap is below this.
- *  Slightly above the ADS-B bar so traffic polling wins when memory is tight. */
-constexpr uint32_t kMinFreeHeapForRouteHttps = 24000;
+ *  Sized for the residual after the route_detail worker stack is carved
+ *  (~21KB free → ~13KB with an 8KB stack). Live APIs must pass this gate while
+ *  the worker is alive, not only before create. */
+constexpr uint32_t kMinFreeHeapForRouteHttps = 10000;
 /** Route API TLS + JSON — PSRAM-backed like ADS-B. */
-constexpr uint32_t kMinContiguousHeapForRouteTls = 10000;
-/** Planespotters photo TLS — JPEG body lives in PSRAM; match ADS-B bar so photos
- *  are not stuck forever just under the stricter route 24KB free gate. */
-constexpr uint32_t kMinFreeHeapForPhotoHttps = 22000;
-constexpr uint32_t kMinContiguousHeapForPhotoTls = 10000;
-/** Target max_blk before opening another TLS session (after prior session ends). */
-constexpr uint32_t kMinContiguousHeapForTlsReconnect = 20000;
+constexpr uint32_t kMinContiguousHeapForRouteTls = 6000;
+/** Planespotters photo TLS — JPEG body lives in PSRAM. Match the post-route
+ *  worker residual (~13KB free after an 8KB carve) so photos are not stuck
+ *  behind the ADS-B free bar while route enrichment is active. */
+constexpr uint32_t kMinFreeHeapForPhotoHttps = 10000;
+constexpr uint32_t kMinContiguousHeapForPhotoTls = 6000;
+/** Soft max_blk target while draining a prior TLS session. */
+constexpr uint32_t kMinContiguousHeapForTlsReconnect = 10000;
+
+/** FreeRTOS stack (bytes) for the lazy route_detail worker. 16KB left only
+ *  ~5KB free on a ~21KB detail steady-state heap — too low for TLS gates. */
+constexpr uint32_t kRouteDetailWorkerStackBytes = 8192;
 
 /** Route detail API connect/read timeout (ms). Keep short for fast scroll cancel. */
 constexpr uint32_t kDetailApiTimeoutMs = 4000;
@@ -215,10 +219,8 @@ constexpr unsigned long kDetailWorkerStallMs = 12000UL;
 constexpr unsigned long kDetailWorkerStaleStallMs = 6000UL;
 /** Longer flight-detail enrich debounce when max_blk is below pressure threshold. */
 constexpr unsigned long kDetailEnrichDebouncePressureMs = 1200UL;
-/** Enter enrich pressure mode (longer debounce, defer live APIs) below this max_blk.
- *  Must sit below the ~12KB max_blk that remains after the route_detail worker
- *  stack is carved out, or live route APIs never run on the detail screen. */
-constexpr uint32_t kDetailEnrichHeapPressureBlk = 10000;
+/** Enter enrich pressure mode (longer debounce) below this max_blk. */
+constexpr uint32_t kDetailEnrichHeapPressureBlk = 6000;
 
 // --- Weather (Tomorrow.io) ---
 /** Tomorrow.io API host (HTTPS). One realtime + one daily-forecast GET per refresh. */
@@ -239,11 +241,9 @@ constexpr unsigned long kWeatherRateLimitBackoffMs = 5UL * 60UL * 1000UL;  // 5 
  *  switching so a burst of opens can't blow the API's per-second limit. */
 constexpr unsigned long kWeatherMinFetchIntervalMs = 20000UL;  // 20 s
 /** Weather is the lowest-priority HTTPS user — keep its bar above ADS-B so it
- *  defers when memory is tight. With mbedTLS in PSRAM the old 36000/20000 gates
- *  are obsolete and would permanently block weather after the route_detail
- *  worker stack claims its 16KB of internal heap. */
-constexpr uint32_t kMinFreeHeapForWeather = 24000;
-constexpr uint32_t kMinContiguousHeapForWeather = 12000;
+ *  defers when memory is tight. */
+constexpr uint32_t kMinFreeHeapForWeather = 18000;
+constexpr uint32_t kMinContiguousHeapForWeather = 6000;
 /** Default unit system when the user has not overridden it (true = °F/imperial). */
 constexpr bool kWeatherUseImperialDefault = false;
 

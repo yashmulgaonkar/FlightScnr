@@ -21,6 +21,7 @@
 #include "services/adsbdb_parse.h"
 #include "services/https_heap.h"
 #include "services/route_info.h"
+#include "services/route_waterfall.h"
 #include "services/airline_lookup.h"
 #include "services/airport_lookup.h"
 #include "services/api_keys.h"
@@ -244,10 +245,6 @@ void routeClear(RouteInfo* r) {
 
 bool routeHasData(const RouteInfo& r) {
   return r.airline[0] != '\0' || r.origin[0] != '\0' || r.dest[0] != '\0';
-}
-
-bool routeEndpointsComplete(const RouteInfo& r) {
-  return r.origin[0] != '\0' && r.dest[0] != '\0';
 }
 
 bool slotNeedsApiRouteUpgrade(const CacheSlot& slot) {
@@ -1761,15 +1758,28 @@ void detailWorkerRunStep() {
         return;
       } else if (apikeys::useAirLabs() && apikeys::hasAirLabs() && apikeys::canUseAirLabs() &&
                  lookupAirLabsFirstKey(callsign, &live)) {
-        s_detail_result = live;
-        s_detail_result_src = ApiSource::kAirLabs;
-        storeCache(callsign, live, ApiSource::kAirLabs, true);
-        applyRouteToCallsign(callsign, live);
-        if (isCurrentDetailSelection(callsign)) {
-          logRouteLine(callsign, live, "AL");
+        if (shouldFinishLiveApiStep(live)) {
+          s_detail_result = live;
+          s_detail_result_src = ApiSource::kAirLabs;
+          storeCache(callsign, live, ApiSource::kAirLabs, true);
+          applyRouteToCallsign(callsign, live);
+          if (isCurrentDetailSelection(callsign)) {
+            logRouteLine(callsign, live, "AL");
+          }
+          ok = true;
+          s_detail_step = DetailStep::kDone;
+        } else {
+          // Airline-only (or incomplete OD): keep partial, try later providers.
+          mergePartialRoute(&s_detail_result, live);
+          if (s_detail_result_src == ApiSource::kNone) {
+            s_detail_result_src = ApiSource::kAirLabs;
+          }
+          applyRouteToCallsign(callsign, s_detail_result);
+          if (isCurrentDetailSelection(callsign)) {
+            logRouteLine(callsign, s_detail_result, "AL-partial");
+          }
+          s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kAirLabs);
         }
-        ok = true;
-        s_detail_step = DetailStep::kDone;
       } else {
         s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kAirLabs);
       }
@@ -1825,15 +1835,28 @@ void detailWorkerRunStep() {
         return;
       } else if (apikeys::useFr24() && apikeys::hasFr24() && apikeys::canUseFr24() &&
                  lookupFr24FirstKey(callsign, &live)) {
-        s_detail_result = live;
-        s_detail_result_src = ApiSource::kFr24;
-        storeCache(callsign, live, ApiSource::kFr24, true);
-        applyRouteToCallsign(callsign, live);
-        if (isCurrentDetailSelection(callsign)) {
-          logRouteLine(callsign, live, "FR");
+        if (shouldFinishLiveApiStep(live)) {
+          s_detail_result = live;
+          s_detail_result_src = ApiSource::kFr24;
+          storeCache(callsign, live, ApiSource::kFr24, true);
+          applyRouteToCallsign(callsign, live);
+          if (isCurrentDetailSelection(callsign)) {
+            logRouteLine(callsign, live, "FR");
+          }
+          ok = true;
+          s_detail_step = DetailStep::kDone;
+        } else {
+          // Airline-only (or incomplete OD): keep partial, try adsbdb/prefix.
+          mergePartialRoute(&s_detail_result, live);
+          if (s_detail_result_src == ApiSource::kNone) {
+            s_detail_result_src = ApiSource::kFr24;
+          }
+          applyRouteToCallsign(callsign, s_detail_result);
+          if (isCurrentDetailSelection(callsign)) {
+            logRouteLine(callsign, s_detail_result, "FR-partial");
+          }
+          s_detail_step = nextStepAfterLiveApiMiss(DetailStep::kFr24);
         }
-        ok = true;
-        s_detail_step = DetailStep::kDone;
       } else {
         // Miss is cached by the terminal step (adsbdb miss -> prefix, or
         // prefix itself) with api_done set, so no premature cache here.
@@ -1881,12 +1904,27 @@ void detailWorkerRunStep() {
       logDetailStepBegin(DetailStep::kPrefix, callsign);
       bool ok = false;
       const bool defer_api = !detailRouteApiAllowed();
-      if (lookupPrefixFallback(callsign, &s_detail_result)) {
+      RouteInfo prefix_info;
+      routeClear(&prefix_info);
+      if (lookupPrefixFallback(callsign, &prefix_info)) {
+        // Preserve any partial OD/airline from earlier live steps.
+        mergePartialRoute(&s_detail_result, prefix_info);
         s_detail_result_src = ApiSource::kPrefix;
         storeCache(callsign, s_detail_result, ApiSource::kPrefix, !defer_api);
         applyRouteToCallsign(callsign, s_detail_result);
         if (isCurrentDetailSelection(callsign)) {
           logRouteLine(callsign, s_detail_result, "pfx");
+        }
+        if (defer_api) {
+          setDetailHeapDeferred(callsign);
+        }
+        ok = true;
+      } else if (routeHasData(s_detail_result)) {
+        // Kept partial live data but no prefix airline — still finish.
+        storeCache(callsign, s_detail_result, s_detail_result_src, !defer_api);
+        applyRouteToCallsign(callsign, s_detail_result);
+        if (isCurrentDetailSelection(callsign)) {
+          logRouteLine(callsign, s_detail_result, sourceTag(s_detail_result_src));
         }
         if (defer_api) {
           setDetailHeapDeferred(callsign);
@@ -1942,10 +1980,12 @@ void ensureDetailWorker() {
   if (s_detail_task != nullptr) {
     return;
   }
-  // 16KB internal stack — created lazily on first detail enrich. Prefer
+  // Stack sized so a ~21KB detail-screen free heap still has room for TLS after
+  // the carve (see config::kRouteDetailWorkerStackBytes). Prefer
   // shutdownDetailWorker() when leaving detail so max_blk can recover.
-  xTaskCreatePinnedToCore(detailWorkerTask, "route_detail", 16384, nullptr, 1,
-                          &s_detail_task, config::kCoreNetwork);
+  xTaskCreatePinnedToCore(detailWorkerTask, "route_detail",
+                          config::kRouteDetailWorkerStackBytes, nullptr, 1, &s_detail_task,
+                          config::kCoreNetwork);
 }
 
 void queueDetailEnrichment(const char* callsign) {
@@ -1953,17 +1993,26 @@ void queueDetailEnrichment(const char* callsign) {
     return;
   }
 
-  ensureDetailWorker();
   if (tryDetailCacheOnly(callsign)) {
     if (config::kSerialTraceDebug) {
       Serial.printf("[detail] enrich cache hit %s (skip worker)\n", callsign);
     }
     return;
   }
-  if (!detailRouteApiAllowed()) {
+  // Require headroom for the worker stack + TLS gate before carving the task.
+  // Checking only after ensureDetailWorker() permanently failed on ~21KB heaps.
+  const uint32_t need_free =
+      config::kMinFreeHeapForRouteHttps + config::kRouteDetailWorkerStackBytes;
+  if (s_detail_task == nullptr &&
+      (ESP.getFreeHeap() < need_free || !detailRouteApiAllowed())) {
     syncPrefixOnlyEnrich(callsign);
     return;
   }
+  if (s_detail_task != nullptr && !detailRouteApiAllowed()) {
+    syncPrefixOnlyEnrich(callsign);
+    return;
+  }
+  ensureDetailWorker();
   if (s_detail_busy || s_detail_requested) {
     if (config::kSerialTraceDebug) {
       Serial.printf("[detail] queue busy -> pending %s\n", callsign);
@@ -1986,7 +2035,14 @@ void tickDetailHeapDefer() {
   if (services::adsb::fetchInProgress() || services::https::busy()) {
     return;
   }
-  if (!detailRouteApiAllowed()) {
+  // Before the worker exists, free heap must cover stack carve + TLS residual.
+  if (s_detail_task == nullptr) {
+    const uint32_t need_free =
+        config::kMinFreeHeapForRouteHttps + config::kRouteDetailWorkerStackBytes;
+    if (ESP.getFreeHeap() < need_free || !detailRouteApiAllowed()) {
+      return;
+    }
+  } else if (!detailRouteApiAllowed()) {
     return;
   }
   if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
@@ -2007,6 +2063,13 @@ void tickDetailImmediateDefer() {
   }
   if (!services::https::heapReadyForRouteApi()) {
     return;
+  }
+  if (s_detail_task == nullptr) {
+    const uint32_t need_free =
+        config::kMinFreeHeapForRouteHttps + config::kRouteDetailWorkerStackBytes;
+    if (ESP.getFreeHeap() < need_free) {
+      return;
+    }
   }
   s_detail_immediate_deferred = false;
   if (config::kSerialTraceDebug) {
@@ -2047,8 +2110,12 @@ void onFlightDetailSelectedImpl(const char* callsign, const bool immediate) {
     }
     clearDetailDebounce();
     s_detail_immediate_deferred = false;
+    const uint32_t need_free_before_worker =
+        config::kMinFreeHeapForRouteHttps + config::kRouteDetailWorkerStackBytes;
+    const bool need_worker_headroom =
+        s_detail_task == nullptr && ESP.getFreeHeap() < need_free_before_worker;
     if (services::adsb::fetchInProgress() || services::https::busy() ||
-        !services::https::heapReadyForRouteApi()) {
+        !services::https::heapReadyForRouteApi() || need_worker_headroom) {
       if (tryDetailCacheOnly(callsign)) {
         if (config::kSerialTraceDebug) {
           Serial.printf("[detail] immediate cache hit %s (defer)\n", callsign);
@@ -2127,22 +2194,24 @@ void shutdownDetailWorkerImpl() {
   }
 
   // cancelDetailEnrichment clears busy/step flags even while httpGetJson still
-  // holds the HTTPS ScopedLock on the worker stack. Wait for the lock itself —
-  // otherwise vTaskDelete leaks the mutex and ADS-B stays on "https busy".
+  // holds the HTTPS ScopedLock on the worker stack. Wait for *this* worker to
+  // drop the lock — do not wait on / steal from a live ADS-B holder (that
+  // previously tripped a FreeRTOS mutex ownership assert on resume).
   const unsigned long deadline = millis() + 5000UL;
-  while (services::https::busy() && static_cast<long>(deadline - millis()) > 0) {
+  while (services::https::heldBy(s_detail_task) &&
+         static_cast<long>(deadline - millis()) > 0) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
   detailWorkerCancelWork();
 
-  const bool lock_still_held = services::https::busy();
   TaskHandle_t task = s_detail_task;
+  const bool our_lock = services::https::heldBy(task);
   s_detail_task = nullptr;
   if (task != nullptr) {
     vTaskDelete(task);
   }
-  if (lock_still_held || services::https::busy()) {
-    services::https::forceUnlock();
+  if (our_lock) {
+    services::https::forceUnlockIfHeldBy(task);
     if (config::kSerialTraceDebug || config::kRadarResumeDebug) {
       Serial.println("[detail] worker shutdown force-unlocked HTTPS");
     }
@@ -2240,13 +2309,15 @@ void init() {
     Serial.println("Route lookup: flash cache mounted (/route_cache.csv)");
   }
   if (apiAvailable()) {
-    Serial.println("Route lookup: APIs on flight detail only (AirLabs/FA/FR24)");
+    Serial.println("Route lookup: APIs on flight detail only (AirLabs/FA/FR24/adsbdb)");
   } else if (apikeys::hasAirLabs() || apikeys::hasFlightAware() || apikeys::hasFr24()) {
     Serial.println("Route lookup: API keys saved but all providers disabled");
   } else {
     Serial.println("Route lookup: no API keys - prefix fallback only");
   }
 }
+
+void clearRamCache() { memset(s_cache, 0, sizeof(s_cache)); }
 
 void tickCacheFlush(unsigned long now_ms) {
   route_cache::tick(now_ms, readRamCacheSlot, kCacheSize, nowSec(),

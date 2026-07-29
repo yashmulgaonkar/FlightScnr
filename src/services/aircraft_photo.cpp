@@ -604,11 +604,9 @@ void photoJob() {
   MetaEntry local = {};
   if (meta == nullptr) {
     if (!fetchJsonMeta(s_job_hex, &local)) {
-      // Only cache a miss when this selection is still current (not scrollaway).
-      if (selectionMatches(s_job_callsign, s_job_generation)) {
-        cacheNegativeMeta(s_job_hex);
-      }
-      finishJob(JobEnd::HardFail);
+      // Network/parse failure — soft retry. Do not poison the meta cache as
+      // "no photo" or a blip permanently blanks the image slot.
+      finishJob(JobEnd::SoftFail);
       return;
     }
     meta = allocMeta(s_job_hex);
@@ -625,6 +623,10 @@ void photoJob() {
   }
 
   if (!meta->has_photo || meta->thumb_url[0] == '\0') {
+    // Genuine empty Planespotters result — cache as resolved miss.
+    if (meta == &local && selectionMatches(s_job_callsign, s_job_generation)) {
+      cacheNegativeMeta(s_job_hex);
+    }
     clearDecoded();
     finishJob(JobEnd::HardFail);
     return;

@@ -2,9 +2,12 @@
 
 #include <cstdint>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 namespace services::https {
 
-/** Create the global TLS mutex (safe to call more than once). */
+/** Create the global TLS lock (safe to call more than once). */
 void init();
 
 /** Wait up to timeout_ms for exclusive HTTPS access. Returns false if timed out. */
@@ -12,12 +15,22 @@ bool lock(uint32_t timeout_ms);
 
 void unlock();
 
-/** True when another task holds the global HTTPS mutex. */
+/** True when another task holds the global HTTPS lock. */
 bool busy();
 
+/** True when task currently owns the HTTPS lock. */
+bool heldBy(TaskHandle_t task);
+
 /**
- * Release the HTTPS mutex after a holder was killed (e.g. route worker
- * vTaskDelete mid-request). Safe no-op if the mutex is already free.
+ * Release the HTTPS lock only if held by task (e.g. after vTaskDelete of that
+ * holder). No-op if a different live task owns the lock — never steal from
+ * ADS-B/photo mid-request.
+ */
+void forceUnlockIfHeldBy(TaskHandle_t task);
+
+/**
+ * Unconditionally mark the lock available. Prefer forceUnlockIfHeldBy after
+ * killing a known holder. Safe no-op if already free (binary semaphore).
  */
 void forceUnlock();
 
