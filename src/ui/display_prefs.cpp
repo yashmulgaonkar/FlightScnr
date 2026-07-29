@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "ui/radar_display.h"
+
 namespace ui {
 namespace {
 
@@ -11,7 +13,7 @@ constexpr char kStoreNs[] = "flightscnr";
 constexpr char kDetailTimeoutKey[] = "detail_to";
 constexpr char kClockTimeoutKey[] = "clock_to";
 constexpr char kSweepLineKey[] = "sweep_en";
-constexpr char kRadarLabelsKey[] = "rad_lbl";
+constexpr char kHideBlipDetailsKey[] = "hide_btag";
 constexpr char kIdleClockKey[] = "idle_clk";
 
 constexpr uint8_t kDefaultDetailTimeoutSec = 10;
@@ -22,7 +24,7 @@ uint8_t s_flight_detail_timeout_sec = kDefaultDetailTimeoutSec;
 /** 0 = manual; otherwise 5, 10, or 15. */
 uint8_t s_clock_weather_timeout_sec = kDefaultClockTimeoutSec;
 bool s_sweep_line_enabled = true;
-bool s_radar_labels_enabled = true;
+bool s_hide_blip_details = false;
 bool s_auto_idle_clock_enabled = true;
 
 constexpr uint8_t kTimeoutOptions[] = {0, 10, 20, 30};
@@ -86,10 +88,10 @@ void persistSweepLine() {
   }
 }
 
-void persistRadarLabels() {
+void persistHideBlipDetails() {
   Preferences prefs;
   if (prefs.begin(kStoreNs, false)) {
-    prefs.putBool(kRadarLabelsKey, s_radar_labels_enabled);
+    prefs.putBool(kHideBlipDetailsKey, s_hide_blip_details);
     prefs.end();
   }
 }
@@ -134,7 +136,7 @@ void displayPrefsBootLoad() {
   s_clock_weather_timeout_sec =
       isValidClockTimeoutSec(clock_stored) ? clock_stored : kDefaultClockTimeoutSec;
   s_sweep_line_enabled = prefs.getBool(kSweepLineKey, true);
-  s_radar_labels_enabled = prefs.getBool(kRadarLabelsKey, true);
+  s_hide_blip_details = prefs.getBool(kHideBlipDetailsKey, false);
   s_auto_idle_clock_enabled = prefs.getBool(kIdleClockKey, true);
   prefs.end();
 }
@@ -267,18 +269,24 @@ void displayPrefsSaveSweepLineFromForm(const char* checkbox_value) {
   Serial.printf("Radar sweep: %s\n", s_sweep_line_enabled ? "on" : "off");
 }
 
-bool displayPrefsRadarLabelsEnabled() { return s_radar_labels_enabled; }
+bool displayPrefsHideBlipDetails() { return s_hide_blip_details; }
 
-void displayPrefsToggleRadarLabels() {
-  s_radar_labels_enabled = !s_radar_labels_enabled;
-  persistRadarLabels();
-  Serial.printf("Radar labels: %s\n", s_radar_labels_enabled ? "on" : "off");
+void displayPrefsToggleHideBlipDetails() {
+  s_hide_blip_details = !s_hide_blip_details;
+  persistHideBlipDetails();
+  radarDisplayInvalidateAircraft();
+  Serial.printf("Hide blip details: %s\n", s_hide_blip_details ? "on" : "off");
 }
 
-void displayPrefsSaveRadarLabelsFromForm(const char* checkbox_value) {
-  s_radar_labels_enabled = formCheckboxOn(checkbox_value);
-  persistRadarLabels();
-  Serial.printf("Radar labels: %s\n", s_radar_labels_enabled ? "on" : "off");
+void displayPrefsSaveHideBlipDetailsFromForm(const char* checkbox_value) {
+  const bool next = formCheckboxOn(checkbox_value);
+  if (next == s_hide_blip_details) {
+    return;
+  }
+  s_hide_blip_details = next;
+  persistHideBlipDetails();
+  radarDisplayInvalidateAircraft();
+  Serial.printf("Hide blip details: %s\n", s_hide_blip_details ? "on" : "off");
 }
 
 bool displayPrefsAutoIdleClockEnabled() { return s_auto_idle_clock_enabled; }

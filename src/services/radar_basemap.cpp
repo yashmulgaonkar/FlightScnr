@@ -14,6 +14,7 @@
 #include "services/map_center.h"
 #include "services/https_lock.h"
 #include "services/route_cache_store.h"
+#include "ui/radar_display.h"
 #include "ui/radar_scale.h"
 
 namespace services::basemap {
@@ -28,6 +29,7 @@ constexpr char kLatKey[] = "lat";
 constexpr char kLonKey[] = "lon";
 constexpr char kMiKey[] = "mi";
 constexpr char kFacingKey[] = "fac";
+constexpr char kStyleKey[] = "sty";
 constexpr char kValidKey[] = "ok";
 
 /** Skip JPEG decode on the loop task when memory/TLS is tight (decode can stall
@@ -90,6 +92,7 @@ void persistMeta() {
     prefs.putDouble(kLonKey, s_meta.lon);
     prefs.putUChar(kMiKey, s_meta.range_miles);
     prefs.putUShort(kFacingKey, s_meta.facing_deg);
+    prefs.putUChar(kStyleKey, static_cast<uint8_t>(s_meta.style));
   }
   prefs.end();
 }
@@ -106,6 +109,14 @@ void loadPrefs() {
     s_meta.lon = prefs.getDouble(kLonKey, 0);
     s_meta.range_miles = prefs.getUChar(kMiKey, 0);
     s_meta.facing_deg = prefs.getUShort(kFacingKey, 0);
+    const uint8_t sty = prefs.getUChar(kStyleKey, static_cast<uint8_t>(Style::Dark));
+    if (sty == static_cast<uint8_t>(Style::Light)) {
+      s_meta.style = Style::Light;
+    } else if (sty == static_cast<uint8_t>(Style::Vfr)) {
+      s_meta.style = Style::Vfr;
+    } else {
+      s_meta.style = Style::Dark;
+    }
   }
   prefs.end();
 }
@@ -191,6 +202,7 @@ int jpegDrawCallback(JPEGDRAW* draw) {
 }
 
 bool decodeFileToCache() {
+  const unsigned long t0 = millis();
   freeCache();
   if (!ensureFs() || !LittleFS.exists(kPath)) {
     return false;
@@ -265,7 +277,9 @@ bool decodeFileToCache() {
     freeCache();
     return false;
   }
+  const unsigned long t_decode = millis();
   const int ok = dec->decode(0, 0, 0);
+  const unsigned long decode_ms = millis() - t_decode;
   dec->close();
   dec->~JPEGDEC();
   psramFree(jpeg_obj_mem);
@@ -277,8 +291,8 @@ bool decodeFileToCache() {
     return false;
   }
   s_cache_valid = true;
-  Serial.printf("[basemap] decoded %dx%d (%u jpeg bytes)\n", kPixelSize, kPixelSize,
-                static_cast<unsigned>(len));
+  Serial.printf("[basemap] decoded %dx%d jpeg=%uB decode_ms=%lu total_ms=%lu\n", kPixelSize,
+                kPixelSize, static_cast<unsigned>(len), decode_ms, millis() - t0);
   return true;
 }
 
@@ -313,13 +327,25 @@ void saveEnabledFromForm(const char* checkbox_value) {
       on = true;
     }
   }
+  const bool changed = on != s_enabled;
   s_enabled = on;
   persistEnabled();
+  if (changed) {
+    ui::radarDisplayInvalidateBasemap();
+  }
 }
 
 void invalidateCache() { freeCache(); }
 
 Meta storedMeta() { return s_meta; }
+
+Style storedStyle() { return s_meta.valid ? s_meta.style : Style::Dark; }
+
+bool wantsDisplay() {
+  return s_enabled && s_meta.valid && metaMatchesLive() && filePresent();
+}
+
+bool cacheReady() { return s_cache_valid; }
 
 bool hasImage() {
   if (!s_meta.valid) {
@@ -356,6 +382,7 @@ bool heapOkToDecode() {
 }
 
 bool blitRgb565(uint16_t* dst, int w, int h) {
+  const unsigned long t0 = millis();
   if (dst == nullptr || w != kPixelSize || h != kPixelSize) {
     return false;
   }
@@ -370,6 +397,9 @@ bool blitRgb565(uint16_t* dst, int w, int h) {
     // Never decode on the radar stall path while TLS is active / heap is low —
     // JPEGDEC blocked the loop for ~18s in the field and left max_blk wedged.
     if (!heapOkToDecode()) {
+      Serial.printf("[basemap] decode defer https=%d heap=%u max_blk=%u\n",
+                    services::https::busy() ? 1 : 0, ESP.getFreeHeap(),
+                    ESP.getMaxAllocHeap());
       return false;
     }
     if (!decodeFileToCache()) {
@@ -383,32 +413,91 @@ bool blitRgb565(uint16_t* dst, int w, int h) {
       static_cast<size_t>(kPixelSize) * static_cast<size_t>(kPixelSize);
   if (live_mi == baked_mi) {
     memcpy(dst, s_cache, px * sizeof(uint16_t));
+    Serial.printf("[basemap] blit 1:1 ms=%lu\n", millis() - t0);
     return true;
   }
 
-  // Zoomed in vs bake: sample the center crop and stretch to the full panel.
-  // src_offset = dst_offset * (live / baked).
+  // Zoomed in vs bake: bilinear-sample the center crop and stretch to the panel.
+  // Nearest-neighbor looked blocky; bilinear softens upscales (no new detail).
   const float scale =
       static_cast<float>(live_mi) / static_cast<float>(baked_mi);
-  const int cx = kPixelSize / 2;
-  const int cy = kPixelSize / 2;
+  const float cx = static_cast<float>(kPixelSize - 1) * 0.5f;
+  const float cy = static_cast<float>(kPixelSize - 1) * 0.5f;
+  const int lim = kPixelSize - 1;
+
+  auto sample565 = [&](int sx, int sy) -> uint16_t {
+    if (sx < 0) {
+      sx = 0;
+    } else if (sx > lim) {
+      sx = lim;
+    }
+    if (sy < 0) {
+      sy = 0;
+    } else if (sy > lim) {
+      sy = lim;
+    }
+    return s_cache[static_cast<size_t>(sy) * static_cast<size_t>(kPixelSize) +
+                   static_cast<size_t>(sx)];
+  };
+  auto unpack = [](uint16_t c, int* r, int* g, int* b) {
+    *r = (c >> 11) & 0x1F;
+    *g = (c >> 5) & 0x3F;
+    *b = c & 0x1F;
+  };
+  auto pack = [](int r, int g, int b) -> uint16_t {
+    if (r < 0) {
+      r = 0;
+    } else if (r > 31) {
+      r = 31;
+    }
+    if (g < 0) {
+      g = 0;
+    } else if (g > 63) {
+      g = 63;
+    }
+    if (b < 0) {
+      b = 0;
+    } else if (b > 31) {
+      b = 31;
+    }
+    return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+  };
+
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
-      const int sx =
-          cx + static_cast<int>(lroundf(static_cast<float>(x - cx) * scale));
-      const int sy =
-          cy + static_cast<int>(lroundf(static_cast<float>(y - cy) * scale));
-      if (sx < 0 || sy < 0 || sx >= w || sy >= h) {
+      const float sx_f = cx + (static_cast<float>(x) - cx) * scale;
+      const float sy_f = cy + (static_cast<float>(y) - cy) * scale;
+      if (sx_f < -1.0f || sy_f < -1.0f || sx_f > static_cast<float>(kPixelSize) ||
+          sy_f > static_cast<float>(kPixelSize)) {
         dst[static_cast<size_t>(y) * static_cast<size_t>(w) +
             static_cast<size_t>(x)] = 0;
-      } else {
-        dst[static_cast<size_t>(y) * static_cast<size_t>(w) +
-            static_cast<size_t>(x)] =
-            s_cache[static_cast<size_t>(sy) * static_cast<size_t>(w) +
-                    static_cast<size_t>(sx)];
+        continue;
       }
+      const int x0 = static_cast<int>(floorf(sx_f));
+      const int y0 = static_cast<int>(floorf(sy_f));
+      const float tx = sx_f - static_cast<float>(x0);
+      const float ty = sy_f - static_cast<float>(y0);
+      int r00, g00, b00, r10, g10, b10, r01, g01, b01, r11, g11, b11;
+      unpack(sample565(x0, y0), &r00, &g00, &b00);
+      unpack(sample565(x0 + 1, y0), &r10, &g10, &b10);
+      unpack(sample565(x0, y0 + 1), &r01, &g01, &b01);
+      unpack(sample565(x0 + 1, y0 + 1), &r11, &g11, &b11);
+      const float r0 = static_cast<float>(r00) + (static_cast<float>(r10 - r00) * tx);
+      const float r1 = static_cast<float>(r01) + (static_cast<float>(r11 - r01) * tx);
+      const float g0 = static_cast<float>(g00) + (static_cast<float>(g10 - g00) * tx);
+      const float g1 = static_cast<float>(g01) + (static_cast<float>(g11 - g01) * tx);
+      const float b0 = static_cast<float>(b00) + (static_cast<float>(b10 - b00) * tx);
+      const float b1 = static_cast<float>(b01) + (static_cast<float>(b11 - b01) * tx);
+      const int r = static_cast<int>(lroundf(r0 + (r1 - r0) * ty));
+      const int g = static_cast<int>(lroundf(g0 + (g1 - g0) * ty));
+      const int b = static_cast<int>(lroundf(b0 + (b1 - b0) * ty));
+      dst[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] =
+          pack(r, g, b);
     }
   }
+  Serial.printf("[basemap] blit zoom live=%u bake=%u bilinear ms=%lu\n",
+                static_cast<unsigned>(live_mi), static_cast<unsigned>(baked_mi),
+                millis() - t0);
   return true;
 }
 
@@ -420,18 +509,25 @@ void statusText(char* buf, size_t len) {
     snprintf(buf, len, "No basemap on flash.");
     return;
   }
+  const char* style_name = "dark";
+  if (s_meta.style == Style::Light) {
+    style_name = "light";
+  } else if (s_meta.style == Style::Vfr) {
+    style_name = "vfr";
+  }
   if (!metaMatchesLive()) {
     const uint8_t live_mi = ui::radar::scaleActiveMiles();
     if (live_mi > s_meta.range_miles) {
       snprintf(buf, len,
-               "Stored @ %u mi — live range %u mi exceeds bake (regenerate).",
-               static_cast<unsigned>(s_meta.range_miles),
+               "Stored %s @ %u mi — live range %u mi exceeds bake (regenerate).",
+               style_name, static_cast<unsigned>(s_meta.range_miles),
                static_cast<unsigned>(live_mi));
     } else {
       snprintf(buf, len,
-               "Stored: %.4f,%.4f @ %u mi facing %u — does not match current "
+               "Stored %s: %.4f,%.4f @ %u mi facing %u — does not match current "
                "center/facing (regenerate).",
-               s_meta.lat, s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
+               style_name, s_meta.lat, s_meta.lon,
+               static_cast<unsigned>(s_meta.range_miles),
                static_cast<unsigned>(s_meta.facing_deg));
     }
     return;
@@ -439,14 +535,14 @@ void statusText(char* buf, size_t len) {
   const uint8_t live_mi = ui::radar::scaleActiveMiles();
   if (live_mi < s_meta.range_miles) {
     snprintf(buf, len,
-             "Ready: %.4f,%.4f bake %u mi (showing %u mi zoom) facing %u%s",
-             s_meta.lat, s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
-             static_cast<unsigned>(live_mi),
+             "Ready (%s): %.4f,%.4f bake %u mi (showing %u mi zoom) facing %u%s",
+             style_name, s_meta.lat, s_meta.lon,
+             static_cast<unsigned>(s_meta.range_miles), static_cast<unsigned>(live_mi),
              static_cast<unsigned>(s_meta.facing_deg),
              s_enabled ? " (enabled)" : " (disabled)");
   } else {
-    snprintf(buf, len, "Ready: %.4f,%.4f @ %u mi facing %u%s", s_meta.lat,
-             s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
+    snprintf(buf, len, "Ready (%s): %.4f,%.4f @ %u mi facing %u%s", style_name,
+             s_meta.lat, s_meta.lon, static_cast<unsigned>(s_meta.range_miles),
              static_cast<unsigned>(s_meta.facing_deg),
              s_enabled ? " (enabled)" : " (disabled)");
   }
@@ -489,7 +585,7 @@ bool uploadWrite(const uint8_t* data, size_t len) {
   return true;
 }
 
-bool uploadFinish(size_t total_bytes) {
+bool uploadFinish(size_t total_bytes, Style style, uint8_t range_miles) {
   if (!s_upload_active || s_upload_failed || !s_upload) {
     uploadAbort();
     return false;
@@ -531,19 +627,46 @@ bool uploadFinish(size_t total_bytes) {
   noteFilePresent();
   s_meta.lat = services::map_center::latitude();
   s_meta.lon = services::map_center::longitude();
-  // Portal always bakes at max coverage so range zoom-in reuses the same JPEG.
-  s_meta.range_miles =
-      ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1];
+  uint8_t mi = range_miles;
+  bool mi_ok = false;
+  for (size_t i = 0; i < ui::radar::kRangeMileOptionCount; ++i) {
+    if (ui::radar::kRangeMileOptions[i] == mi) {
+      mi_ok = true;
+      break;
+    }
+  }
+  if (!mi_ok) {
+    mi = ui::radar::scaleActiveMiles();
+    for (size_t i = 0; i < ui::radar::kRangeMileOptionCount; ++i) {
+      if (ui::radar::kRangeMileOptions[i] == mi) {
+        mi_ok = true;
+        break;
+      }
+    }
+    if (!mi_ok) {
+      mi = ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1];
+    }
+  }
+  s_meta.range_miles = mi;
   s_meta.facing_deg = ui::radar::facingDeg();
+  if (style == Style::Light) {
+    s_meta.style = Style::Light;
+  } else if (style == Style::Vfr) {
+    s_meta.style = Style::Vfr;
+  } else {
+    s_meta.style = Style::Dark;
+  }
   s_meta.valid = true;
   persistMeta();
   freeCache();
   s_enabled = true;
   persistEnabled();
-  Serial.printf("[basemap] saved %u bytes meta=%.5f,%.5f mi=%u fac=%u\n",
+  Serial.printf("[basemap] saved %u bytes meta=%.5f,%.5f mi=%u fac=%u sty=%u\n",
                 static_cast<unsigned>(s_upload_bytes), s_meta.lat, s_meta.lon,
                 static_cast<unsigned>(s_meta.range_miles),
-                static_cast<unsigned>(s_meta.facing_deg));
+                static_cast<unsigned>(s_meta.facing_deg),
+                static_cast<unsigned>(s_meta.style));
+  ui::radarDisplayInvalidateBasemap();
   return true;
 }
 
@@ -570,6 +693,7 @@ bool clear() {
   persistMeta();
   s_enabled = false;
   persistEnabled();
+  ui::radarDisplayInvalidateBasemap();
   return true;
 }
 

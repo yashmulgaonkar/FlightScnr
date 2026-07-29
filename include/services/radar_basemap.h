@@ -5,6 +5,13 @@
 
 namespace services::basemap {
 
+/** Raster style used when the basemap JPEG was baked. */
+enum class Style : uint8_t {
+  Dark = 0,  // CARTO Dark Matter, no place labels
+  Light = 1, // CARTO Positron, no place labels
+  Vfr = 2,   // FAA VFR Sectional (pale-washed)
+};
+
 /** Call after LittleFS is mountable (route_cache::mount). Loads NVS prefs. */
 void init();
 
@@ -36,10 +43,20 @@ struct Meta {
   double lon = 0;
   uint8_t range_miles = 0;
   uint16_t facing_deg = 0;
+  Style style = Style::Dark;
   bool valid = false;
 };
 
 Meta storedMeta();
+
+/** Style stamped on the stored bake (Dark if none). */
+Style storedStyle();
+
+/** True when enabled + valid bake should appear under the radar. */
+bool wantsDisplay();
+
+/** True when the decoded RGB565 cache is ready in PSRAM. */
+bool cacheReady();
 
 /**
  * Stored center/facing match live, and live range ≤ baked coverage miles.
@@ -49,11 +66,11 @@ bool metaMatchesLive();
 
 /**
  * Begin/abort/finish multipart upload of a baseline JPEG (390×390).
- * finish stamps meta from live center/facing and max range (full coverage bake).
+ * finish stamps meta from live center/facing, bake coverage miles, and style.
  */
 void uploadBegin();
 bool uploadWrite(const uint8_t* data, size_t len);
-bool uploadFinish(size_t total_bytes);
+bool uploadFinish(size_t total_bytes, Style style, uint8_t range_miles);
 void uploadAbort();
 
 /** Delete /basemap.jpg and clear meta/cache. */

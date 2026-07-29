@@ -22,10 +22,10 @@ bool displayPrefsSweepLineEnabled();
 void displayPrefsToggleSweepLine();
 void displayPrefsSaveSweepLineFromForm(const char* checkbox_value);
 
-/** When false, radar hides compass and scale text (rings/sweep/aircraft stay). */
-bool displayPrefsRadarLabelsEnabled();
-void displayPrefsToggleRadarLabels();
-void displayPrefsSaveRadarLabelsFromForm(const char* checkbox_value);
+/** When true, radar draws plane icons only (no callsign / type / altitude tags). */
+bool displayPrefsHideBlipDetails();
+void displayPrefsToggleHideBlipDetails();
+void displayPrefsSaveHideBlipDetailsFromForm(const char* checkbox_value);
 
 /** When true, an empty radar (no in-range aircraft) auto-opens the clock screen. */
 bool displayPrefsAutoIdleClockEnabled();
