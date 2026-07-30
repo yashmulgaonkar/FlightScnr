@@ -104,6 +104,16 @@ pio run -e tencoder-pro -t upload                      # otherwise
 
 **WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) - Connect → choose the latest or an older release → Install. Older releases are offered as full installs for safer downgrades. Hold screen (**BOOT**) if the port doesn’t appear.
 
+### Firmware update over Wi‑Fi (OTA)
+
+Once the unit is on your network, open the web settings page (`http://flightscnr-xxxx.local/` or the device IP):
+
+1. **Firmware update** card → **Check GitHub** / **Install latest** to pull `FlightScnr-tencoder-pro-app.bin` from the latest [GitHub release](https://github.com/yashmulgaonkar/FlightScnr/releases) (app image only — not the merged factory file).
+2. Or upload an app `.bin` manually (same card).
+3. After a successful install, **press the device reset button** (or power-cycle). Do not rely on a soft reboot.
+
+The device also checks GitHub for a newer release **at most once per day**. If one is available, the **About** screen shows a short “Update available” note (install remains on the web portal).
+
 **Merged binary:** `pio run -t merge -e tencoder-pro` → `.pio/build/tencoder-pro/firmware-merged.bin`
 
 Builds auto-download [tar1090-db](https://github.com/wiedehopf/tar1090-db) and [Airports](https://github.com/mwgg/Airports) lookups. Wrong panel saved? Erase flash and re-detect, or override with `-D FLIGHTSCNR_PANEL_DXQ` / `-D FLIGHTSCNR_PANEL_TFD12` in `platformio.ini`.

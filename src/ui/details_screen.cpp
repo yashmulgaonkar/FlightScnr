@@ -7,6 +7,7 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "hardware/display_font.h"
+#include "services/ota_github.h"
 #include "ui/radar_theme.h"
 
 namespace ui {
@@ -105,8 +106,19 @@ void detailsScreenDraw(bool boot_splash) {
   char version_line[40];
   snprintf(version_line, sizeof(version_line), "FW Ver: %s", config::kFirmwareVersion);
 
+  const bool show_update =
+      !boot_splash && services::ota_github::updateAvailable();
+  char update_line[48] = {};
+  if (show_update) {
+    snprintf(update_line, sizeof(update_line), "Update available");
+  }
+
   const InfoLine version_lines[] = {
       {version_line, displayFontBody(), fg},
+  };
+  const InfoLine update_lines[] = {
+      {update_line, displayFontDetail(), tft.color565(255, 200, 80)},
+      {"Use web settings to install", displayFontDetail(), hint_fg},
   };
   const InfoLine author_lines[] = {
       {"FlightScnr by", displayFontBody(), label_fg},
@@ -117,11 +129,15 @@ void detailsScreenDraw(bool boot_splash) {
   };
 
   const int version_h = measureBlockHeight(version_lines, sizeof(version_lines) / sizeof(version_lines[0]));
+  const int update_h =
+      show_update ? (measureBlockHeight(update_lines, sizeof(update_lines) / sizeof(update_lines[0])) +
+                     kLineGap)
+                  : 0;
   const int author_h = measureBlockHeight(author_lines, sizeof(author_lines) / sizeof(author_lines[0]));
   const int hints_h = boot_splash ? 0
                                   : measureBlockHeight(hint_lines,
                                                        sizeof(hint_lines) / sizeof(hint_lines[0]));
-  const int block_h = version_h + kAuthorTopGap + author_h +
+  const int block_h = version_h + update_h + kAuthorTopGap + author_h +
                       (boot_splash ? 0 : kHintsTopGap + hints_h + kFooterGap);
 
   tft.fillScreen(bg);
@@ -133,6 +149,13 @@ void detailsScreenDraw(bool boot_splash) {
 
   for (const InfoLine& line : version_lines) {
     drawCenterLine(line.text, &y, line.style, line.color, bg);
+  }
+
+  if (show_update) {
+    y += kLineGap;
+    for (const InfoLine& line : update_lines) {
+      drawCenterLine(line.text, &y, line.style, line.color, bg);
+    }
   }
 
   y += kAuthorTopGap - kLineGap;

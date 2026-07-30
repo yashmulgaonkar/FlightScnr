@@ -33,6 +33,7 @@
 #include "services/wifi_setup.h"
 #include "services/off_hours.h"
 #include "services/aircraft_alert.h"
+#include "services/ota_github.h"
 #include "ui/clock_screen.h"
 #include "ui/clock_settings_screen.h"
 #include "ui/details_screen.h"
@@ -1830,6 +1831,7 @@ void setup() {
   services::tzlookup::bootLoad();
   services::offhours::bootLoad();
   services::alert::bootLoad();
+  services::ota_github::init();
 
   if (wifiSetupConnect()) {
     services::clock::startNtp();
@@ -1890,6 +1892,7 @@ void loop() {
   tickWeather();
   services::tzlookup::tick();
   settingsWebPoll();
+  services::ota_github::pollIfDue();
   services::route::tickCacheFlush(millis());
   tickFlightDetailRouteEnrich();
   tickDiagLog();
