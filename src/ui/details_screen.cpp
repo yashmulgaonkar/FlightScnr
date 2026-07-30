@@ -106,8 +106,7 @@ void detailsScreenDraw(bool boot_splash) {
   char version_line[40];
   snprintf(version_line, sizeof(version_line), "FW Ver: %s", config::kFirmwareVersion);
 
-  const bool show_update =
-      !boot_splash && services::ota_github::updateAvailable();
+  const bool show_update = services::ota_github::updateAvailable();
   char update_line[48] = {};
   if (show_update) {
     snprintf(update_line, sizeof(update_line), "Update available");
