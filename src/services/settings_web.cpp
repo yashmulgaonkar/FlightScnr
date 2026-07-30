@@ -50,7 +50,7 @@ bool s_active = false;
  *  overload copies the whole page into an internal-heap String, which under a
  *  ~26 KB post-detail heap starved lwIP (min free 5 KB), stalled loop() for
  *  ~12 s, and left max_blk permanently fragmented below the panel/TLS gates. */
-constexpr size_t kSettingsPageCap = 40960;
+constexpr size_t kSettingsPageCap = 65536;
 char* s_settings_page = nullptr;
 
 char* settingsPageBuffer() {
@@ -169,6 +169,136 @@ void appendClamped(char* page, size_t len, size_t* used, int n) {
   }
   const size_t space = len - *used;
   *used += static_cast<size_t>(n) < space ? static_cast<size_t>(n) : space - 1;
+}
+
+/** Firmware / GitHub OTA card (end of page; page cap must fit this after other cards). */
+void appendFirmwareUpdateCard(char* page, size_t* used) {
+  if (page == nullptr || used == nullptr) {
+    return;
+  }
+  const char* cur = services::ota_github::currentVersion();
+  const char* latest = services::ota_github::latestTag();
+  const bool avail = services::ota_github::updateAvailable();
+  char gh_status[160];
+  if (avail && latest[0] != '\0') {
+    snprintf(gh_status, sizeof(gh_status),
+             "Update available: <b>%s</b> (running %s). Install from GitHub below, "
+             "then reset the device.",
+             latest, cur);
+  } else if (latest[0] != '\0') {
+    snprintf(gh_status, sizeof(gh_status), "Up to date (running %s, latest %s).", cur,
+             latest);
+  } else {
+    snprintf(gh_status, sizeof(gh_status),
+             "Running <b>%s</b>. Check GitHub for a newer release, or upload an app "
+             "<code>.bin</code> manually.",
+             cur);
+  }
+  const int fw_n = snprintf(
+      page + *used, kSettingsPageCap - *used,
+      "<details class=\"card\" id=\"firmware\"%s>"
+      "<summary><span class=\"ico\">&#8635;</span>"
+      "Firmware update<span class=\"sum\">GitHub / upload</span>"
+      "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
+      "<p class=\"hint\" id=\"fw_gh_status\">%s</p>"
+      "<p style=\"margin-top:.4rem\">"
+      "<button id=\"fw_check\" class=\"sm\" type=\"button\">Check GitHub</button> "
+      "<button id=\"fw_install\" class=\"sm\" type=\"button\"%s>Install latest</button></p>"
+      "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33;margin-top:.75rem\">"
+      "<b>Warning.</b> Installs the published <b>app image</b> only "
+      "(<code>FlightScnr-tencoder-pro-app.bin</code>) &mdash; not the merged factory "
+      "image. Keep power connected. After success, press the device&rsquo;s "
+      "<b>reset button</b> (or unplug/replug) to boot the new firmware.</div>"
+      "<label for=\"fw_file\" style=\"margin-top:.6rem\">Manual upload (optional)</label>"
+      "<input id=\"fw_file\" type=\"file\" accept=\".bin\">"
+      "<p style=\"margin-top:.6rem\">"
+      "<button id=\"fw_btn\" class=\"sm\" type=\"button\">Upload &amp; flash</button></p>"
+      "<div id=\"fw_bar\" style=\"display:none;height:10px;border-radius:6px;"
+      "background:#262626;border:1px solid var(--line);margin-top:.6rem;"
+      "overflow:hidden\"></div>"
+      "<p id=\"fw_msg\" class=\"note\"></p>"
+      "<script>"
+      "(function(){"
+      "var b=document.getElementById('fw_btn'),f=document.getElementById('fw_file'),"
+      "m=document.getElementById('fw_msg'),bar=document.getElementById('fw_bar'),"
+      "chk=document.getElementById('fw_check'),ins=document.getElementById('fw_install'),"
+      "st=document.getElementById('fw_gh_status');"
+      "function setBusy(on){b.disabled=on;f.disabled=on;chk.disabled=on;ins.disabled=on;}"
+      "function setPct(p){"
+      "p=Math.max(0,Math.min(100,Number(p)||0));"
+      "bar.style.display='block';"
+      "bar.style.background='linear-gradient(90deg,#22c24c 0 '+p+'%%,#333 '+p+'%%)';"
+      "}"
+      "function fmtMb(n){return(n/1048576).toFixed(1);}"
+      "chk.addEventListener('click',function(){"
+      "m.textContent='Checking GitHub\\u2026';setBusy(true);"
+      "fetch('/ota/github/status?force=1').then(function(r){return r.json();})"
+      ".then(function(j){"
+      "if(!j.ok&&!j.latest){m.textContent='Check failed: '+(j.error||'unknown');return;}"
+      "if(j.available){st.innerHTML='Update available: <b>'+j.latest+"
+      "'</b> (running '+j.current+').';"
+      "m.textContent=j.refreshed?'Newer release found.':"
+      "'Newer release (cached). '+ (j.warning||'');"
+      "ins.disabled=false;}"
+      "else{st.textContent='Up to date (running '+j.current+', latest '+(j.latest||'?')+').';"
+      "m.textContent=j.refreshed?'Already on the latest release.':"
+      "'Cached result: up to date. '+(j.warning||'');}"
+      "}).catch(function(e){m.textContent='Check error: '+e;})"
+      ".finally(function(){setBusy(false);if(st&&st.innerHTML.indexOf('Update available')>=0)"
+      "{ins.disabled=false;}});"
+      "});"
+      "function pollInstall(){"
+      "fetch('/ota/github/progress').then(function(r){return r.json();})"
+      ".then(function(j){"
+      "var p=typeof j.percent==='number'?j.percent:parseInt(j.percent,10)||0;"
+      "setPct(p);"
+      "if(j.state==='running'){"
+      "var msg='Downloading / flashing '+p+'%%';"
+      "if(j.bytes){msg+=' ('+fmtMb(j.bytes)+(j.total?' / '+fmtMb(j.total):'')+' MB)';}"
+      "m.textContent=msg;setTimeout(pollInstall,400);}"
+      "else if(j.state==='succeeded'){setPct(100);"
+      "m.textContent='Update installed \\u2014 press the device\\u2019s reset button "
+      "to boot the new firmware.';setBusy(false);}"
+      "else if(j.state==='idle'){setTimeout(pollInstall,300);}"
+      "else{m.textContent='Install failed: '+(j.error||j.state);setBusy(false);}"
+      "}).catch(function(e){m.textContent='Progress error: '+e;setBusy(false);});"
+      "}"
+      "ins.addEventListener('click',function(){"
+      "if(!confirm('Download and flash the latest GitHub app image? Keep power on. "
+      "You will need to reset afterwards.'))return;"
+      "m.textContent='Starting install\\u2026';setBusy(true);setPct(0);"
+      "fetch('/ota/github/install',{method:'POST'}).then(function(r){"
+      "if(!r.ok)return r.text().then(function(t){throw new Error(t||r.status);});"
+      "pollInstall();"
+      "}).catch(function(e){m.textContent='Install error: '+e;setBusy(false);});"
+      "});"
+      "b.addEventListener('click',function(){"
+      "if(!f.files||!f.files[0]){m.textContent='Choose a firmware.bin file first.';return;}"
+      "if(!confirm('Flash this firmware? Do not upload the merged image, and keep "
+      "power connected. You will need to reset the device afterwards.'))return;"
+      "var fd=new FormData();fd.append('firmware',f.files[0]);"
+      "var x=new XMLHttpRequest();x.open('POST','/update');"
+      "setBusy(true);setPct(0);"
+      "x.upload.onprogress=function(e){if(e.lengthComputable){"
+      "var p=Math.round(e.loaded/e.total*100);setPct(p);"
+      "m.textContent='Uploading '+p+'%%';}};"
+      "x.onload=function(){if(x.status==200){setPct(100);"
+      "m.textContent='Update installed \\u2014 press the device\\u2019s reset button "
+      "to boot the new firmware.';}"
+      "else{m.textContent='Failed: '+(x.responseText||('HTTP '+x.status));"
+      "setBusy(false);}};"
+      "x.onerror=function(){m.textContent='Upload error (connection lost).';setBusy(false);};"
+      "x.send(fd);"
+      "});"
+      "})();"
+      "</script></div></details>",
+      avail ? " open" : "", gh_status, avail ? "" : " disabled");
+  if (fw_n < 0 || static_cast<size_t>(fw_n) >= (kSettingsPageCap - *used)) {
+    Serial.printf("[settings] firmware card truncated used=%u need=%d cap=%u\n",
+                  static_cast<unsigned>(*used), fw_n,
+                  static_cast<unsigned>(kSettingsPageCap));
+  }
+  appendClamped(page, kSettingsPageCap, used, fw_n);
 }
 
 // Emits a labelled on/off toggle row (label left, switch right). id is reused as name.
@@ -301,6 +431,17 @@ void handleSettingsPage() {
               "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
               "<b>Could not clear route cache.</b> Try again in a moment."
               "</div>");
+  }
+  if (services::ota_github::updateAvailable()) {
+    const char* latest = services::ota_github::latestTag();
+    char upd_banner[220];
+    snprintf(upd_banner, sizeof(upd_banner),
+             "<div class=\"banner\"><b>Firmware update available</b>%s%s. "
+             "<a href=\"#firmware\" style=\"color:#9f9\">Open Firmware update</a> to install."
+             "</div>",
+             (latest[0] != '\0') ? ": " : "",
+             (latest[0] != '\0') ? latest : "");
+    appendRaw(page, kSettingsPageCap, &used, upd_banner);
   }
 
   // ---------- Radar card ----------
@@ -1066,126 +1207,7 @@ void handleSettingsPage() {
             "<button class=\"sm\" type=\"submit\">Clear route cache</button>"
             "</form></div></details>");
 
-  // ---------- Firmware update card ----------
-  {
-    const char* cur = services::ota_github::currentVersion();
-    const char* latest = services::ota_github::latestTag();
-    const bool avail = services::ota_github::updateAvailable();
-    char gh_status[160];
-    if (avail && latest[0] != '\0') {
-      snprintf(gh_status, sizeof(gh_status),
-               "Update available: <b>%s</b> (running %s). Install from GitHub below, "
-               "then reset the device.",
-               latest, cur);
-    } else if (latest[0] != '\0') {
-      snprintf(gh_status, sizeof(gh_status), "Up to date (running %s, latest %s).",
-               cur, latest);
-    } else {
-      snprintf(gh_status, sizeof(gh_status),
-               "Running <b>%s</b>. Check GitHub for a newer release, or upload an app "
-               "<code>.bin</code> manually.",
-               cur);
-    }
-    const int fw_n = snprintf(
-        page + used, kSettingsPageCap - used,
-        "<details class=\"card\"><summary><span class=\"ico\">&#8635;</span>"
-        "Firmware update<span class=\"sum\">GitHub / upload</span>"
-        "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
-        "<p class=\"hint\" id=\"fw_gh_status\">%s</p>"
-        "<p style=\"margin-top:.4rem\">"
-        "<button id=\"fw_check\" class=\"sm\" type=\"button\">Check GitHub</button> "
-        "<button id=\"fw_install\" class=\"sm\" type=\"button\"%s>Install latest</button></p>"
-        "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33;margin-top:.75rem\">"
-        "<b>Warning.</b> Installs the published <b>app image</b> only "
-        "(<code>FlightScnr-tencoder-pro-app.bin</code>) &mdash; not the merged factory "
-        "image. Keep power connected. After success, press the device&rsquo;s "
-        "<b>reset button</b> (or unplug/replug) to boot the new firmware.</div>"
-        "<label for=\"fw_file\" style=\"margin-top:.6rem\">Manual upload (optional)</label>"
-        "<input id=\"fw_file\" type=\"file\" accept=\".bin\">"
-        "<p style=\"margin-top:.6rem\">"
-        "<button id=\"fw_btn\" class=\"sm\" type=\"button\">Upload &amp; flash</button></p>"
-        "<div id=\"fw_bar\" style=\"display:none;height:10px;border-radius:6px;"
-        "background:#262626;border:1px solid var(--line);margin-top:.6rem;"
-        "overflow:hidden\"></div>"
-        "<p id=\"fw_msg\" class=\"note\"></p>"
-        "<script>"
-        "(function(){"
-        "var b=document.getElementById('fw_btn'),f=document.getElementById('fw_file'),"
-        "m=document.getElementById('fw_msg'),bar=document.getElementById('fw_bar'),"
-        "chk=document.getElementById('fw_check'),ins=document.getElementById('fw_install'),"
-        "st=document.getElementById('fw_gh_status');"
-        "function setBusy(on){b.disabled=on;f.disabled=on;chk.disabled=on;ins.disabled=on;}"
-        "function setPct(p){"
-        "p=Math.max(0,Math.min(100,Number(p)||0));"
-        "bar.style.display='block';"
-        "bar.style.background='linear-gradient(90deg,#22c24c 0 '+p+'%%,#333 '+p+'%%)';"
-        "}"
-        "function fmtMb(n){return(n/1048576).toFixed(1);}"
-        "chk.addEventListener('click',function(){"
-        "m.textContent='Checking GitHub\\u2026';setBusy(true);"
-        "fetch('/ota/github/status?force=1').then(function(r){return r.json();})"
-        ".then(function(j){"
-        "if(!j.ok&&!j.latest){m.textContent='Check failed: '+(j.error||'unknown');return;}"
-        "if(j.available){st.innerHTML='Update available: <b>'+j.latest+"
-        "'</b> (running '+j.current+').';"
-        "m.textContent=j.refreshed?'Newer release found.':"
-        "'Newer release (cached). '+ (j.warning||'');"
-        "ins.disabled=false;}"
-        "else{st.textContent='Up to date (running '+j.current+', latest '+(j.latest||'?')+').';"
-        "m.textContent=j.refreshed?'Already on the latest release.':"
-        "'Cached result: up to date. '+(j.warning||'');}"
-        "}).catch(function(e){m.textContent='Check error: '+e;})"
-        ".finally(function(){setBusy(false);if(st&&st.innerHTML.indexOf('Update available')>=0)"
-        "{ins.disabled=false;}});"
-        "});"
-        "function pollInstall(){"
-        "fetch('/ota/github/progress').then(function(r){return r.json();})"
-        ".then(function(j){"
-        "var p=typeof j.percent==='number'?j.percent:parseInt(j.percent,10)||0;"
-        "setPct(p);"
-        "if(j.state==='running'){"
-        "var msg='Downloading / flashing '+p+'%%';"
-        "if(j.bytes){msg+=' ('+fmtMb(j.bytes)+(j.total?' / '+fmtMb(j.total):'')+' MB)';}"
-        "m.textContent=msg;setTimeout(pollInstall,400);}"
-        "else if(j.state==='succeeded'){setPct(100);"
-        "m.textContent='Update installed \\u2014 press the device\\u2019s reset button "
-        "to boot the new firmware.';setBusy(false);}"
-        "else if(j.state==='idle'){setTimeout(pollInstall,300);}"
-        "else{m.textContent='Install failed: '+(j.error||j.state);setBusy(false);}"
-        "}).catch(function(e){m.textContent='Progress error: '+e;setBusy(false);});"
-        "}"
-        "ins.addEventListener('click',function(){"
-        "if(!confirm('Download and flash the latest GitHub app image? Keep power on. "
-        "You will need to reset afterwards.'))return;"
-        "m.textContent='Starting install\\u2026';setBusy(true);setPct(0);"
-        "fetch('/ota/github/install',{method:'POST'}).then(function(r){"
-        "if(!r.ok)return r.text().then(function(t){throw new Error(t||r.status);});"
-        "pollInstall();"
-        "}).catch(function(e){m.textContent='Install error: '+e;setBusy(false);});"
-        "});"
-        "b.addEventListener('click',function(){"
-        "if(!f.files||!f.files[0]){m.textContent='Choose a firmware.bin file first.';return;}"
-        "if(!confirm('Flash this firmware? Do not upload the merged image, and keep "
-        "power connected. You will need to reset the device afterwards.'))return;"
-        "var fd=new FormData();fd.append('firmware',f.files[0]);"
-        "var x=new XMLHttpRequest();x.open('POST','/update');"
-        "setBusy(true);setPct(0);"
-        "x.upload.onprogress=function(e){if(e.lengthComputable){"
-        "var p=Math.round(e.loaded/e.total*100);setPct(p);"
-        "m.textContent='Uploading '+p+'%%';}};"
-        "x.onload=function(){if(x.status==200){setPct(100);"
-        "m.textContent='Update installed \\u2014 press the device\\u2019s reset button "
-        "to boot the new firmware.';}"
-        "else{m.textContent='Failed: '+(x.responseText||('HTTP '+x.status));"
-        "setBusy(false);}};"
-        "x.onerror=function(){m.textContent='Upload error (connection lost).';setBusy(false);};"
-        "x.send(fd);"
-        "});"
-        "})();"
-        "</script></div></details>",
-        gh_status, avail ? "" : " disabled");
-    appendClamped(page, kSettingsPageCap, &used, fw_n);
-  }
+  appendFirmwareUpdateCard(page, &used);
 
   const int tail_n = snprintf(
       page + used, kSettingsPageCap - used,
