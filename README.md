@@ -17,6 +17,8 @@ Open-source firmware that shows **live ADS-B traffic** on a sweeping radar aroun
 
 Firmware is **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** ([LICENSE](LICENSE)) - shareable for hobbyists, not for closed commercial forks.
 
+**Not for safety-critical use.** FlightScnr is not certified for aviation or navigation, depends on external APIs, and uptime is not guaranteed. Every boot shows a disclaimer until you tap **Accept** (see [assets/FlightScnr_disclaimer.png](assets/FlightScnr_disclaimer.png)).
+
 **Enclosure:** [MakerWorld](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055) (separate license - see [below](#enclosure-license)).
 
 ## Contributing
@@ -57,7 +59,7 @@ On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle c
 
 1. Power on → if prompted, **scan the on-screen QR** with the phone camera (or Wi‑Fi QR scanner) to join the SoftAP (**FlightScnr-AP-XXXX**). Match the SSID on screen if several units are nearby. The captive portal often opens automatically after join; if not, open [http://4.3.2.1](http://4.3.2.1) while connected to the SoftAP.
 2. Enter Wi‑Fi credentials (or manage **Saved networks**). You can also join the SSID manually and open `http://4.3.2.1` or the unique `http://flightscnr-xxxx.local`. Reboot the unit.
-3. After connect: boot splash (~5 s) → radar.
+3. After connect: safety disclaimer (must Accept each boot) → About splash (~5 s) → radar.
 4. Set radar center, weather key, and optional route APIs at `http://flightscnr-xxxx.local/` (or the device IP shown on settings page 1).
 5. Optional: **Radar basemap** card → pick style (**Dark Matter**, **Positron**, or **VFR Sectional** with a 35% pale wash) + **Bake coverage**, then **Generate basemap**. Zooming out past the bake needs regenerate; center/facing/style changes do too.
 

@@ -37,6 +37,7 @@
 #include "ui/clock_screen.h"
 #include "ui/clock_settings_screen.h"
 #include "ui/details_screen.h"
+#include "ui/disclaimer_screen.h"
 #include "ui/display_prefs.h"
 #include "ui/boot_screens.h"
 #include "ui/flight_detail_screen.h"
@@ -58,6 +59,7 @@ enum class AppScreen : uint8_t {
   ClockSettings,
   Weather,
   Orientation,
+  Disclaimer,
 };
 
 AppScreen g_screen = AppScreen::Radar;
@@ -138,6 +140,8 @@ const char* screenName(AppScreen screen) {
       return "weather";
     case AppScreen::Orientation:
       return "orient";
+    case AppScreen::Disclaimer:
+      return "disclaimer";
     default:
       return "?";
   }
@@ -308,6 +312,7 @@ void tickDiagLog() {
 }
 
 bool bootDetailsActive() { return g_boot_details_until_ms != 0; }
+bool disclaimerActive() { return g_screen == AppScreen::Disclaimer; }
 
 bool adsbFetchScreenActive() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -717,6 +722,28 @@ void showDetails(bool boot_splash = false) {
   g_radar_visible = false;
 }
 
+void showDisclaimer() {
+  ui::flightDetailReleaseSprite();
+  ui::disclaimerScreenDraw();
+  g_radar_visible = false;
+}
+
+void beginBootDetailsSplash() {
+  g_screen = AppScreen::Details;
+  g_boot_details_until_ms = millis() + config::kBootDetailsDurationMs;
+  showDetails(true);
+  Serial.println("Screen: details (boot splash)");
+  logNavContext("boot_splash");
+}
+
+void acceptDisclaimerAndContinue() {
+  hardware::buzzerClick();
+  inputDiscardPendingInteractions();
+  beginBootDetailsSplash();
+  Serial.println("[disclaimer] accepted");
+  logNavContext("disclaimer_accepted");
+}
+
 void applySettingsLive() {
   services::route::cancelDetailEnrichment();
   services::photo::cancel();
@@ -753,6 +780,9 @@ void applySettingsLive() {
       break;
     case AppScreen::Orientation:
       ui::radarDisplayDrawOrientationPreview();
+      break;
+    case AppScreen::Disclaimer:
+      showDisclaimer();
       break;
   }
   Serial.println("[settings] applied live");
@@ -989,7 +1019,7 @@ void noteSwipeNavigation() {
 }
 
 void handleNavigation() {
-  if (bootDetailsActive()) {
+  if (bootDetailsActive() || disclaimerActive()) {
     inputConsumeSwipe();
     return;
   }
@@ -1112,7 +1142,7 @@ void tickBootDetailsSplash() {
 }
 
 void tickSecondaryScreenTimeout() {
-  if (bootDetailsActive()) {
+  if (bootDetailsActive() || disclaimerActive()) {
     return;
   }
   if (g_screen == AppScreen::Clock || g_screen == AppScreen::Weather) {
@@ -1216,7 +1246,7 @@ void tickOffHours() {
 }
 
 void tickAutoIdleClock() {
-  if (bootDetailsActive()) {
+  if (bootDetailsActive() || disclaimerActive()) {
     return;
   }
   if (g_screen == AppScreen::FlightDetail || g_screen == AppScreen::Settings ||
@@ -1413,6 +1443,23 @@ void handleInput() {
       showOrientationPreview();
       hardware::buzzerClick();
     }
+    return;
+  }
+
+  if (g_screen == AppScreen::Disclaimer) {
+    int16_t tx = 0;
+    int16_t ty = 0;
+    if (inputConsumeScreenTap(&tx, &ty)) {
+      if (ui::disclaimerScreenHitAccept(tx, ty)) {
+        acceptDisclaimerAndContinue();
+      }
+      return;
+    }
+    if (inputConsumeKnobTap()) {
+      acceptDisclaimerAndContinue();
+      return;
+    }
+    (void)inputConsumeEncoderDelta();
     return;
   }
 
@@ -1844,10 +1891,10 @@ void setup() {
     settingsSetSavedCallback(applySettingsLive);
     g_last_adsb_fetch_ms = 0;
     g_last_tls_proactive_refresh_ms = millis();
-    g_screen = AppScreen::Details;
-    g_boot_details_until_ms = millis() + config::kBootDetailsDurationMs;
-    showDetails(true);
-    Serial.println("Screen: details (boot splash)");
+    g_screen = AppScreen::Disclaimer;
+    showDisclaimer();
+    Serial.println("Screen: disclaimer");
+    logNavContext("disclaimer");
     logDiagLine("boot");
   }
 }
@@ -1927,6 +1974,10 @@ void loop() {
           showClockSettings();
         } else if (g_screen == AppScreen::Details) {
           showDetails();
+        } else if (g_screen == AppScreen::Disclaimer) {
+          showDisclaimer();
+        } else if (g_screen == AppScreen::Weather) {
+          showWeather();
         } else {
           showSettings();
         }
