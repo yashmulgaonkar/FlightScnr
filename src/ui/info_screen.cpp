@@ -13,6 +13,7 @@
 #include "hardware/display_font.h"
 #include "services/adsb_client.h"
 #include "services/api_keys.h"
+#include "services/device_identity.h"
 #include "services/map_center.h"
 #include "services/wifi_setup.h"
 #include "ui/display_prefs.h"
@@ -189,7 +190,8 @@ void buildMainStrings(char* ip_line, size_t ip_len, char* wifi_line, size_t wifi
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    snprintf(web_line, web_len, "Web: %s.local", config::kPortalHostname);
+    snprintf(web_line, web_len, "Web: %s.local",
+             services::device_identity::portalHostname());
   } else {
     snprintf(web_line, web_len, "Web: —");
   }

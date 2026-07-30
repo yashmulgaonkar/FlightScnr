@@ -29,6 +29,7 @@
 #include "services/tz_lookup.h"
 #include "services/weather.h"
 #include "services/aircraft_alert.h"
+#include "services/device_identity.h"
 #include "services/off_hours.h"
 #include "services/wifi_setup.h"
 #include "services/radar_basemap.h"
@@ -1556,14 +1557,15 @@ void settingsWebStart() {
   s_server->begin();
   s_active = true;
 
-  WiFi.setHostname(config::kPortalHostname);
+  WiFi.setHostname(services::device_identity::portalHostname());
 
 #ifdef WM_MDNS
   MDNS.end();
-  if (MDNS.begin(config::kPortalHostname)) {
+  if (MDNS.begin(services::device_identity::portalHostname())) {
     MDNS.addService("http", "tcp", 80);
     Serial.printf("Settings web: http://%s.local/  http://%s/\n",
-                  config::kPortalHostname, WiFi.localIP().toString().c_str());
+                  services::device_identity::portalHostname(),
+                  WiFi.localIP().toString().c_str());
   } else {
     Serial.printf("Settings web: http://%s/  (mDNS unavailable)\n",
                   WiFi.localIP().toString().c_str());

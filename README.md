@@ -35,7 +35,7 @@ Join the [FlightScnr community on **Discord**](https://discord.gg/wjqgUjv8Re) fo
 - **Auto timezone** - Fetch Timezone + DST from your radar center ([timeapi.io](https://timeapi.io), no API key needed). Manual UTC offset on-device disables auto until re-enabled on the web portal.
 - **Tomorrow.io weather** - optional key + enable checkbox on the web portal; metric or imperial.
 - **Auto-idle clock** (default on) - empty radar (no in-range aircraft) switches to the clock; returns when traffic appears.
-- **Settings** - three on-device pages (network/API status, display/timeouts, color/beep) plus full config at [http://flightscnr.local/](http://flightscnr.local/). Web **Save** applies live - no reboot.
+- **Settings** - three on-device pages (network/API status, display/timeouts, color/beep) plus full config at the device’s unique `http://flightscnr-xxxx.local/` (or its IP). Web **Save** applies live - no reboot.
 
 Screen timeouts (configurable on web or device page 2): flight detail 10/20/30s or manual; clock/forecast 5/10/15s or manual. Settings and about auto-return to radar after 10s 
 
@@ -55,10 +55,10 @@ On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle c
 
 ## Setup
 
-1. Power on → join **FlightScnr-AP** if prompted.
-2. Open [http://4.3.2.1](http://4.3.2.1) or [http://flightscnr.local](http://flightscnr.local) → enter Wi‑Fi credentials (or manage **Saved networks**). Reboot the unit.
+1. Power on → if prompted, **scan the on-screen QR** with the phone camera (or Wi‑Fi QR scanner) to join the SoftAP (**FlightScnr-AP-XXXX**). Match the SSID on screen if several units are nearby. The captive portal often opens automatically after join; if not, open [http://4.3.2.1](http://4.3.2.1) while connected to the SoftAP.
+2. Enter Wi‑Fi credentials (or manage **Saved networks**). You can also join the SSID manually and open `http://4.3.2.1` or the unique `http://flightscnr-xxxx.local`. Reboot the unit.
 3. After connect: boot splash (~5 s) → radar.
-4. Set radar center, weather key, and optional route APIs at [http://flightscnr.local/](http://flightscnr.local/) (or device IP shown on settings page 1).
+4. Set radar center, weather key, and optional route APIs at `http://flightscnr-xxxx.local/` (or the device IP shown on settings page 1).
 5. Optional: **Radar basemap** card → pick style (**Dark Matter**, **Positron**, or **VFR Sectional** with a 35% pale wash) + **Bake coverage**, then **Generate basemap**. Zooming out past the bake needs regenerate; center/facing/style changes do too.
 
 You can save up to **3** Wi‑Fi networks. Preference order is slot order (#1 tried first). Manage them from the setup portal (**Saved networks**) or the online settings page (**Wi‑Fi networks** card: add, remove, reorder, update password).

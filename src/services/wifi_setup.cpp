@@ -18,6 +18,7 @@
 #include "config.h"
 #include "hardware/input.h"
 #include "services/adsb_client.h"
+#include "services/device_identity.h"
 #include "services/settings_web.h"
 #include "ui/boot_screens.h"
 #include "ui/flight_detail_screen.h"
@@ -385,16 +386,18 @@ void onConfigPortalApStarted(WiFiManager*) {
   // HTTP server is not up yet here — only refresh the on-device hint.
   // mDNS starts after startConfigPortal() returns (server listening).
   bootScreenShowPortalHint();
-  Serial.printf("SoftAP starting (HTTP next): %s\n", config::kPortalApName);
+  Serial.printf("SoftAP starting (HTTP next): %s\n",
+                services::device_identity::portalApName());
 }
 
 void startPortalMdns() {
 #ifdef WM_MDNS
   MDNS.end();
-  if (MDNS.begin(config::kPortalHostname)) {
+  if (MDNS.begin(services::device_identity::portalHostname())) {
     MDNS.addService("http", "tcp", 80);
     Serial.printf("Setup portal: http://%s.local (or http://%s)\n",
-                  config::kPortalHostname, WiFi.softAPIP().toString().c_str());
+                  services::device_identity::portalHostname(),
+                  WiFi.softAPIP().toString().c_str());
   } else {
     Serial.printf("Setup portal: http://%s (mDNS unavailable)\n",
                   WiFi.softAPIP().toString().c_str());
@@ -880,7 +883,7 @@ void configureWifiManager(WiFiManager& wm) {
   wm.setWiFiAPChannel(1);
   wm.setAPStaticIPConfig(IPAddress(4, 3, 2, 1), IPAddress(4, 3, 2, 1),
                          IPAddress(255, 255, 255, 0));
-  wm.setHostname(config::kPortalHostname);
+  wm.setHostname(services::device_identity::portalHostname());
   wm.setAPCallback(onConfigPortalApStarted);
   wm.setWebServerCallback(onPortalWebServerReady);
   wm.setPreSaveConfigCallback(onPortalWifiPreSave);
@@ -1028,7 +1031,7 @@ bool openConfigPortal(WiFiManager& wm) {
   prepareWifiForPortal();
   bootScreenShowPortalHint();
 
-  wm.startConfigPortal(config::kPortalApName);
+  wm.startConfigPortal(services::device_identity::portalApName());
   if (!wm.getConfigPortalActive()) {
     Serial.println("Config portal failed to start");
     return false;
@@ -1282,6 +1285,7 @@ bool wifiSoftRecycle() {
 }
 
 bool wifiSetupConnect() {
+  services::device_identity::init();
   const bool force_portal = consumeForceConfigPortal();
   WiFi.setAutoReconnect(false);
   migrateStaIntoNetsIfNeeded();

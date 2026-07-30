@@ -21,11 +21,11 @@ constexpr char kGithubRepoUrl[] =
 constexpr char kPortalAuthorUrl[] = "https://github.com/yashmulgaonkar/FlightScnr";
 
 // --- Wi-Fi portal ---
-constexpr char kPortalApName[] = "FlightScnr-AP";
+/** SoftAP SSID prefix; full name is prefix + "-" + MAC suffix (see device_identity). */
+constexpr char kPortalApNamePrefix[] = "FlightScnr-AP";
 constexpr char kPortalIp[] = "4.3.2.1";
-/** mDNS host (no ".local" suffix); browser: http://flightscnr.local */
-constexpr char kPortalHostname[] = "flightscnr";
-constexpr char kPortalHostUrl[] = "flightscnr.local";
+/** mDNS hostname prefix; full host is prefix + "-" + MAC suffix (lowercase). */
+constexpr char kPortalHostnamePrefix[] = "flightscnr";
 
 /** Per-attempt STA connect wait (ms); retried kWifiConnectAttempts times per SSID. */
 constexpr unsigned long kWifiConnectAttemptMs = 15000;

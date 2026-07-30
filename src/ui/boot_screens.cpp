@@ -8,6 +8,8 @@
 #include "config.h"
 #include "hardware/display.h"
 #include "hardware/display_font.h"
+#include "services/device_identity.h"
+#include "ui/qr_draw.h"
 
 namespace {
 
@@ -163,17 +165,62 @@ void bootScreenConnectingPulse() {
 }
 
 void bootScreenShowPortalHint() {
+  services::device_identity::init();
+  const char* ssid = services::device_identity::portalApName();
   snprintf(s_portal_ip_alt, sizeof(s_portal_ip_alt), "or %s", config::kPortalIp);
-  const TextLine lines[] = {
-      {"Network setup", displayFontTitle()},
-      {"1. Join network:", displayFontBody()},
-      {config::kPortalApName, displayFontTitle()},
-      {"2. Open in browser:", displayFontBody()},
-      {config::kPortalHostUrl, displayFontTitle()},
-      {s_portal_ip_alt, displayFontBody()},
-  };
-  drawTextBlock(config::kColorBlack, config::kTextOnBlack, lines,
-                sizeof(lines) / sizeof(lines[0]));
+
+  // Round panel: keep the whole stack inside a safe chord so wide SSID / header
+  // text is not cropped at the top/bottom bezel.
+  constexpr int kBezelInsetPx = 20;
+  constexpr int kSafeRadius = config::kDisplayWidth / 2 - kBezelInsetPx;
+  // Max |y - center| for ~180 px-wide detail text (half-width ≈ 90).
+  constexpr int kTextHalfWidthPx = 90;
+  const int max_dy =
+      static_cast<int>(sqrtf(static_cast<float>(kSafeRadius * kSafeRadius -
+                                                 kTextHalfWidthPx * kTextHalfWidthPx)));
+  const int safe_band = 2 * max_dy;
+
+  const UiTextStyle header_style = displayFontDetail();
+  const UiTextStyle detail_style = displayFontDetail();
+  const int header_h = displayFontHeight(tft, header_style);
+  const int detail_h = displayFontHeight(tft, detail_style);
+  constexpr int kGap = 8;
+  const int fixed_h = header_h + kGap + kGap + detail_h + 4 + detail_h;
+
+  // Largest module size whose QR box (version 3 + quiet zone) fits the band.
+  constexpr int kQrModules = 4 * 3 + 17 + 2 * 4;  // 37
+  int module_px = (safe_band - fixed_h) / kQrModules;
+  if (module_px < 2) {
+    module_px = 2;
+  } else if (module_px > 5) {
+    // Cap so the white square corners stay inside the round bezel.
+    module_px = 5;
+  }
+  const int qr_box_px = kQrModules * module_px;
+  const int total_h = fixed_h + qr_box_px;
+  int y = kCenterY - total_h / 2;
+
+  tft.beginOffscreen();
+  tft.fillScreen(config::kColorBlack);
+  tft.setTextColor(config::kTextOnBlack, config::kColorBlack);
+  tft.setTextDatum(TextDatum::MiddleCenter);
+
+  displayFontApply(tft, header_style);
+  tft.drawString("Scan to join Wi-Fi", kCenterX, y + header_h / 2);
+  y += header_h + kGap;
+
+  const int qr_cy = y + qr_box_px / 2;
+  if (!drawWifiJoinQr(kCenterX, qr_cy, module_px, ssid)) {
+    displayFontApply(tft, displayFontBody());
+    tft.drawString(ssid, kCenterX, qr_cy);
+  }
+  y += qr_box_px + kGap;
+
+  displayFontApply(tft, detail_style);
+  tft.drawString(ssid, kCenterX, y + detail_h / 2);
+  y += detail_h + 4;
+  tft.drawString(s_portal_ip_alt, kCenterX, y + detail_h / 2);
+  tft.endOffscreen();
 }
 
 void bootScreenShowConnectFailed() {
