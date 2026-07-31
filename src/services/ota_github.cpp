@@ -29,7 +29,6 @@ namespace services::ota_github {
 namespace {
 
 constexpr char kStoreNs[] = "fs_ota_gh";
-constexpr char kLastCheckKey[] = "chk";
 constexpr char kTagKey[] = "tag";
 constexpr char kUrlKey[] = "url";
 constexpr char kAvailKey[] = "av";
@@ -50,7 +49,6 @@ char s_latest_tag[32] = {};
 char s_asset_url[256] = {};
 bool s_available = false;
 unsigned long s_last_check_ms = 0;
-bool s_have_check = false;
 
 volatile InstallState s_install_state = InstallState::Idle;
 volatile uint8_t s_install_pct = 0;
@@ -121,7 +119,6 @@ void persistCache() {
   if (!prefs.begin(kStoreNs, false)) {
     return;
   }
-  prefs.putULong(kLastCheckKey, s_last_check_ms);
   prefs.putString(kTagKey, s_latest_tag);
   prefs.putString(kUrlKey, s_asset_url);
   prefs.putBool(kAvailKey, s_available);
@@ -133,7 +130,6 @@ void loadCache() {
   if (!prefs.begin(kStoreNs, true)) {
     return;
   }
-  s_last_check_ms = prefs.getULong(kLastCheckKey, 0);
   String tag = prefs.getString(kTagKey, "");
   String url = prefs.getString(kUrlKey, "");
   s_available = prefs.getBool(kAvailKey, false);
@@ -143,18 +139,19 @@ void loadCache() {
   s_latest_tag[sizeof(s_latest_tag) - 1] = '\0';
   strncpy(s_asset_url, url.c_str(), sizeof(s_asset_url) - 1);
   s_asset_url[sizeof(s_asset_url) - 1] = '\0';
-  s_have_check = (s_last_check_ms != 0 && s_latest_tag[0] != '\0');
-  if (s_have_check) {
+  // Recompute availability from tags; do not restore millis-based freshness —
+  // that incorrectly skipped checks after reboot.
+  if (s_latest_tag[0] != '\0') {
     s_available = isNewerThanRunning(s_latest_tag);
   }
 }
 
+/** True when a successful check already ran this boot and is still within 24h. */
 bool cacheFresh() {
-  if (!s_have_check || s_last_check_ms == 0) {
+  if (s_last_check_ms == 0) {
     return false;
   }
   const unsigned long now = millis();
-  // Handle millis wrap: treat as stale.
   if (now < s_last_check_ms) {
     return false;
   }
@@ -266,7 +263,6 @@ bool fetchLatestFromGitHub(bool wait_for_link) {
   s_asset_url[sizeof(s_asset_url) - 1] = '\0';
   s_available = isNewerThanRunning(s_latest_tag);
   s_last_check_ms = millis();
-  s_have_check = true;
   persistCache();
   Serial.printf("[ota_gh] latest=%s available=%d\n", s_latest_tag,
                 s_available ? 1 : 0);
@@ -495,7 +491,11 @@ void installTaskThunk(void*) {
 
 }  // namespace
 
-void init() { loadCache(); }
+void init() {
+  loadCache();
+  // Session freshness only — always allow a check after boot.
+  s_last_check_ms = 0;
+}
 
 void pollIfDue() {
   if (WiFi.status() != WL_CONNECTED) {

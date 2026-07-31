@@ -53,6 +53,7 @@ CATEGORY_ORDER = [
     "military-drone",
     "fighter",
     "glider",
+    "ground-veh",
     "unknown",
 ]
 
@@ -65,6 +66,7 @@ CATEGORY_SCALE_X100 = {
     "balloon": 100,
     "airship": 50,
     "glider": 150,
+    "ground-veh": 50,
 }
 
 DEFAULT_CATEGORY = "large-jet-2"

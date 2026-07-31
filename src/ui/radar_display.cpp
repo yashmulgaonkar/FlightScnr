@@ -147,7 +147,8 @@ void initPalette() {
   const bool light_map =
       services::basemap::wantsDisplay() &&
       (bm_style == services::basemap::Style::Light ||
-       bm_style == services::basemap::Style::Vfr);
+       bm_style == services::basemap::Style::Vfr ||
+       bm_style == services::basemap::Style::Voyager);
 
   if (light_map) {
     // Cream chips for compass/scale text (avoid CRT-green “black” boxes on Positron).
@@ -188,6 +189,10 @@ void initPalette() {
 constexpr int16_t kDescendRateThresholdFpm = -64;
 
 uint16_t altitudeTagColor(const services::adsb::Aircraft& plane) {
+  if (strcmp(plane.alt, "GND") == 0) {
+    // Distinct from climb/descend so surface traffic is obvious on the tag.
+    return radar::kColorTagType;
+  }
   if (plane.vert_rate_fpm != services::adsb::kVertRateUnknown &&
       plane.vert_rate_fpm < kDescendRateThresholdFpm) {
     return radar::kColorTagAltitudeDescend;
@@ -294,6 +299,8 @@ int measureTagBlockWidth(const services::adsb::Aircraft& plane) {
     char type_label[32];
     services::aircraft_type::formatRadarTagLabel(plane.type, type_label, sizeof(type_label));
     max_w = std::max(max_w, s_draw->textWidth(type_label));
+  } else if (strcmp(plane.alt, "GND") == 0) {
+    max_w = std::max(max_w, s_draw->textWidth("ground"));
   }
   if (plane.alt[0] != '\0') {
     char alt_display[20];
@@ -337,6 +344,9 @@ void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
     services::aircraft_type::formatRadarTagLabel(plane.type, type_label, sizeof(type_label));
     s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
     s_draw->drawString(type_label, anchor_x, ly);
+  } else if (strcmp(plane.alt, "GND") == 0) {
+    s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
+    s_draw->drawString("ground", anchor_x, ly);
   }
   ly += line_h;
 

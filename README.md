@@ -61,7 +61,7 @@ On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle c
 2. Enter Wi‑Fi credentials (or manage **Saved networks**). You can also join the SSID manually and open `http://4.3.2.1` or the unique `http://flightscnr-xxxx.local`. Reboot the unit.
 3. After connect: safety disclaimer (must Accept each boot) → About splash (~5 s) → radar.
 4. Set radar center, weather key, and optional route APIs at `http://flightscnr-xxxx.local/` (or the device IP shown on settings page 1).
-5. Optional: **Radar basemap** card → pick style (**Dark Matter**, **Positron**, or **VFR Sectional** with a 35% pale wash) + **Bake coverage**, then **Generate basemap**. Zooming out past the bake needs regenerate; center/facing/style changes do too.
+5. Optional: **Radar basemap** card → pick style (**Dark Matter**, **Positron**, **Voyager**, or **VFR Sectional**) + contrast/wash + **Bake coverage**, then **Generate basemap**. Zooming out past the bake needs regenerate; center/facing/style changes do too.
 
 You can save up to **3** Wi‑Fi networks. Preference order is slot order (#1 tried first). Manage them from the setup portal (**Saved networks**) or the online settings page (**Wi‑Fi networks** card: add, remove, reorder, update password).
 
@@ -114,7 +114,7 @@ Once the unit is on your network, open the web settings page (`http://flightscnr
 2. Or upload an app `.bin` manually (same card).
 3. After a successful install, **press the device reset button** (or power-cycle). Do not rely on a soft reboot.
 
-The device also checks GitHub for a newer release **at most once per day**. If one is available, the **About** screen shows a short “Update available” note (install remains on the web portal).
+The device also checks GitHub for a newer release **on every boot** and again after **24 hours of uptime**. If one is available, the **About** screen shows a short “Update available” note (install remains on the web portal).
 
 **Merged binary:** `pio run -t merge -e tencoder-pro` → `.pio/build/tencoder-pro/firmware-merged.bin`
 

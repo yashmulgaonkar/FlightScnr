@@ -51,6 +51,14 @@ void test_floor_above_ceiling_empty_band(void) {
   TEST_ASSERT_FALSE(altitudeWithinBand(true, 20000.0f, 10000, 500));
 }
 
+// (g) ground altitude (0 ft): included when floor off; excluded by a positive floor.
+void test_ground_altitude_zero(void) {
+  TEST_ASSERT_TRUE(altitudeWithinBand(true, 0.0f, 0, 0));
+  TEST_ASSERT_TRUE(altitudeWithinBand(true, 0.0f, 0, 10000));
+  TEST_ASSERT_FALSE(altitudeWithinBand(true, 0.0f, 500, 0));
+  TEST_ASSERT_TRUE(altitudeWithinBand(true, 0.0f, 0, 0));  // floor off
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_both_off_always_true);
@@ -59,5 +67,6 @@ int main(int, char**) {
   RUN_TEST(test_band);
   RUN_TEST(test_unknown_altitude_excluded_when_active);
   RUN_TEST(test_floor_above_ceiling_empty_band);
+  RUN_TEST(test_ground_altitude_zero);
   return UNITY_END();
 }

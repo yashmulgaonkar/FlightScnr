@@ -5,20 +5,21 @@
 
 namespace services::ota_github {
 
-/** Load NVS cache (last check / latest tag / available). */
+/** Load NVS cache (latest tag / URL / available). Freshness is per-boot. */
 void init();
 
 /**
- * If Wi‑Fi is up and 24h have passed since the last successful check (or never
- * checked), fetch GitHub releases/latest and update the cache. No-op when HTTPS
- * is busy or heap is tight. Safe to call from the main loop.
+ * If Wi‑Fi is up and either this boot has not checked yet, or 24h of uptime
+ * have passed since the last successful check, fetch GitHub releases/latest.
+ * No-op when HTTPS is busy or heap is tight. Safe to call from the main loop.
  */
 void pollIfDue();
 
 /**
- * Query GitHub for the latest release. When force is false, uses the daily
- * cache if still fresh. Returns true when the cache is valid after the call;
- * false on network/parse failure (previous cache retained).
+ * Query GitHub for the latest release. When force is false, skips the network
+ * if a successful check already ran this boot and is still within the daily
+ * window. Returns true when the cache is valid after the call; false on
+ * network/parse failure (previous cache retained).
  */
 bool checkLatest(bool force);
 

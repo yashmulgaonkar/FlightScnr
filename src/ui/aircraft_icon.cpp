@@ -151,6 +151,10 @@ uint8_t categoryFromAdsbEmitter(const char* cat) {
   if (strcmp(cat, "A6") == 0) {
     return static_cast<uint8_t>(C::military_fighter);
   }
+  if (strcmp(cat, "C1") == 0 || strcmp(cat, "C2") == 0 ||
+      strcmp(cat, "c1") == 0 || strcmp(cat, "c2") == 0) {
+    return static_cast<uint8_t>(C::ground_veh);
+  }
   return data::aircraft_icons::kDefaultCategory;
 }
 
@@ -167,6 +171,27 @@ uint8_t militaryFallback(const char* type) {
 uint8_t resolveCategory(const services::adsb::Aircraft& aircraft) {
   char type[5] = {};
   normalizeType(aircraft.type, type, sizeof(type));
+
+  // Surface vehicles before the ICAO type map (trucks often have no `t` code).
+  if (aircraft.classify() == services::adsb::AircraftCategory::GroundVehicle) {
+    return static_cast<uint8_t>(data::aircraft_icons::Category::ground_veh);
+  }
+  const char c0 = static_cast<char>(toupper(static_cast<unsigned char>(aircraft.category[0])));
+  const char c1 = aircraft.category[1];
+  if (c0 == 'C' && (c1 == '1' || c1 == '2') &&
+      (aircraft.category[2] == '\0' || aircraft.category[2] == ' ')) {
+    return static_cast<uint8_t>(data::aircraft_icons::Category::ground_veh);
+  }
+  if (strcmp(aircraft.alt, "GND") == 0) {
+    if (strcmp(type, "GRND") == 0 || strcmp(type, "VEH") == 0 ||
+        strcmp(type, "GTRK") == 0 || strcmp(type, "FIRE") == 0 ||
+        strcmp(type, "TOW") == 0 || strcmp(type, "RIV") == 0 ||
+        strcmp(type, "BUS") == 0 || strcmp(type, "VAN") == 0 ||
+        // Many airport trucks omit ICAO type entirely.
+        type[0] == '\0') {
+      return static_cast<uint8_t>(data::aircraft_icons::Category::ground_veh);
+    }
+  }
 
   uint8_t mapped = 0;
   const bool have_map = lookupExactType(type, &mapped) || lookupPrefixType(type, &mapped);

@@ -98,6 +98,11 @@
       "description": "Gliders / sailplanes",
       "examples": ["ULAC","SF25","GLIM","GLID","DIMO","AS16"]
     },
+    "ground-veh": {
+      "file": "ground_veh.png",
+      "description": "Airport / surface ground vehicles (trucks, service, emergency)",
+      "examples": ["GRND", "VEH", "GTRK", "FIRE", "TOW"]
+    },
     "unknown": {
       "file": "unknown.png",
       "description": "Unknown or unidentified aircraft type",
@@ -182,6 +187,7 @@
     "drone": ["JAS4"],
     "military-drone": ["Q9","BTB2","DRON"],
     "fighter": [],
-    "glider": ["ULAC","SF25","GLIM","GLID","DIMO","AS16"]
+    "glider": ["ULAC","SF25","GLIM","GLID","DIMO","AS16"],
+    "ground-veh": ["GRND", "VEH", "GTRK", "FIRE", "TOW", "RIV", "BUS", "VAN"]
   }
 }

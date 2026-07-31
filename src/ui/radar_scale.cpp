@@ -211,57 +211,21 @@ bool scaleSetMiles(uint8_t miles) {
   return true;
 }
 
-namespace {
-
-uint8_t snapMilesToPreset(float miles) {
-  uint8_t best = kRangeMileOptions[0];
-  float best_diff = 1e9f;
-  for (size_t i = 0; i < kRangeMileOptionCount; ++i) {
-    const float diff = fabsf(static_cast<float>(kRangeMileOptions[i]) - miles);
-    if (diff < best_diff) {
-      best_diff = diff;
-      best = kRangeMileOptions[i];
-    }
-  }
-  return best;
-}
-
-}  // namespace
-
 bool scaleSaveMilesFromForm(const char* range_str) {
   if (range_str == nullptr || range_str[0] == '\0') {
     return false;
   }
   char* end = nullptr;
-  const float value = strtof(range_str, &end);
-  if (end == range_str || value <= 0.0f) {
+  const long value = strtol(range_str, &end, 10);
+  if (end == range_str || value <= 0 || value > 255) {
     return false;
   }
-
-  // Optional unit suffix: km / nm / mi (default statute miles).
-  while (*end == ' ') {
-    ++end;
-  }
-  float miles = value;
-  if (end[0] != '\0') {
-    if ((end[0] == 'k' || end[0] == 'K') && (end[1] == 'm' || end[1] == 'M')) {
-      miles = value / kStatuteMileKm;
-    } else if ((end[0] == 'n' || end[0] == 'N') && (end[1] == 'm' || end[1] == 'M')) {
-      miles = value * (kNauticalMileKm / kStatuteMileKm);
-    } else if ((end[0] == 'm' || end[0] == 'M') && (end[1] == 'i' || end[1] == 'I')) {
-      miles = value;
-    } else {
-      return false;  // Unrecognized unit.
-    }
-  }
-
-  if (miles < 1.0f || miles > 60.0f) {
+  const uint8_t miles = static_cast<uint8_t>(value);
+  if (optionIndexForMiles(miles) < 0) {
     return false;
   }
-  const uint8_t snapped = snapMilesToPreset(miles);
-  applyMiles(snapped);
-  Serial.printf("Range: %u mi (from \"%s\")\n", static_cast<unsigned>(s_active_miles),
-                range_str);
+  applyMiles(miles);
+  Serial.printf("Range: %u mi\n", static_cast<unsigned>(s_active_miles));
   return true;
 }
 
@@ -402,22 +366,28 @@ void facingLabel(char* out, size_t out_len) {
 }
 
 void formatScaleTag(char* buf, size_t len, float label_km, DistanceUnit unit) {
+  float value = label_km;
+  const char* suffix = "km";
   switch (unit) {
-    case DistanceUnit::StatuteMile: {
-      const int mi = static_cast<int>(lroundf(label_km / kStatuteMileKm));
-      snprintf(buf, len, "%dmi", mi);
+    case DistanceUnit::StatuteMile:
+      value = label_km / kStatuteMileKm;
+      suffix = "mi";
       break;
-    }
-    case DistanceUnit::NauticalMile: {
-      const int nm = static_cast<int>(lroundf(label_km / kNauticalMileKm));
-      snprintf(buf, len, "%dnm", nm);
+    case DistanceUnit::NauticalMile:
+      value = label_km / kNauticalMileKm;
+      suffix = "nm";
       break;
-    }
-    default: {
-      const int km = static_cast<int>(lroundf(label_km));
-      snprintf(buf, len, "%dkm", km);
+    default:
       break;
-    }
+  }
+
+  // Integer rounding collapses nearby rings on small ranges (2mi / 3 rings →
+  // 0.67 and 1.33 both became "1mi"). Keep a tenth when not a whole number.
+  const float nearest = roundf(value);
+  if (fabsf(value - nearest) < 0.05f) {
+    snprintf(buf, len, "%d%s", static_cast<int>(nearest), suffix);
+  } else {
+    snprintf(buf, len, "%.1f%s", static_cast<double>(value), suffix);
   }
 }
 

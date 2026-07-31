@@ -49,7 +49,7 @@ AircraftCategory Aircraft::classify() const {
       case '4': return AircraftCategory::LightAircraft;  // ultralight
       case '6': return AircraftCategory::UAV;
     }
-  } else if (category[0] == 'C') {
+  } else if (category[0] == 'C' || category[0] == 'c') {
     if (category[1] >= '1' && category[1] <= '2') {
       return AircraftCategory::GroundVehicle;
     }
@@ -260,6 +260,7 @@ void logAircraftToSerial(const Aircraft* planes, size_t count, double center_lat
 
 constexpr char kPrefsNamespace[] = "flightscnr";
 constexpr char kPrefsAltFloorKey[] = "alt_floor_ft";
+constexpr char kPrefsAltFloorEnKey[] = "alt_fl_en";
 constexpr char kLegacyAltFloorKey[] = "minAltFt";
 constexpr char kPrefsAltCeilKey[] = "alt_ceil_ft";
 
@@ -298,11 +299,15 @@ float s_fetch_radius_km = 0.0f;
 float kmToNauticalMiles(float km) { return km / kKmPerNm; }
 
 bool readJsonFloat(const JsonObject& obj, const char* key, float* out) {
-  if (obj[key].is<float>() || obj[key].is<double>() || obj[key].is<int>()) {
-    *out = obj[key].as<float>();
-    return true;
+  JsonVariantConst v = obj[key];
+  // Cover the integer/float forms ArduinoJson 7 may store. Do not call as<float>()
+  // on strings — "ground" must not become 0 via conversion.
+  if (!(v.is<float>() || v.is<double>() || v.is<int>() || v.is<long>() ||
+        v.is<unsigned int>() || v.is<unsigned long>())) {
+    return false;
   }
-  return false;
+  *out = v.as<float>();
+  return true;
 }
 
 float pickNoseHeading(const JsonObject& plane) {
@@ -370,15 +375,43 @@ bool pickVerticalRateFpm(const JsonObject& plane, int16_t* out_fpm) {
 }
 
 bool isOnGround(const JsonObject& plane) {
-  if (!plane["alt_baro"].is<const char*>()) {
+  // Prefer as<> over is<>: filtered docs sometimes reject is<const char*>()
+  // even when the string value is present.
+  const char* s = plane["alt_baro"].as<const char*>();
+  if (s == nullptr || s[0] == '\0') {
     return false;
   }
-  return strcmp(plane["alt_baro"].as<const char*>(), "ground") == 0;
+  // Case-insensitive "ground" (feeds use lowercase; be tolerant).
+  if ((s[0] == 'g' || s[0] == 'G') && (s[1] == 'r' || s[1] == 'R') &&
+      (s[2] == 'o' || s[2] == 'O') && (s[3] == 'u' || s[3] == 'U') &&
+      (s[4] == 'n' || s[4] == 'N') && (s[5] == 'd' || s[5] == 'D') &&
+      s[6] == '\0') {
+    return true;
+  }
+  return false;
+}
+
+/** ADS-B emitter categories C1/C2 are surface vehicles (trucks, etc.). */
+bool isGroundVehicleCategory(const JsonObject& plane) {
+  const char* cat = plane["category"].as<const char*>();
+  if (cat == nullptr || cat[0] == '\0') {
+    return false;
+  }
+  const char c0 = static_cast<char>(toupper(static_cast<unsigned char>(cat[0])));
+  return c0 == 'C' && (cat[1] == '1' || cat[1] == '2') &&
+         (cat[2] == '\0' || cat[2] == ' ');
+}
+
+bool isGroundTraffic(const JsonObject& plane) {
+  return isOnGround(plane) || isGroundVehicleCategory(plane);
 }
 
 bool readAltitudeFt(const JsonObject& plane, float* out_ft) {
   if (isOnGround(plane)) {
-    return false;
+    // Treat ADS-B "ground" as 0 ft so min-floor 0 includes taxi/ground traffic
+    // and a positive floor still filters them out.
+    *out_ft = 0.0f;
+    return true;
   }
   if (readJsonFloat(plane, "alt_baro", out_ft)) {
     return true;
@@ -387,6 +420,12 @@ bool readAltitudeFt(const JsonObject& plane, float* out_ft) {
 }
 
 bool passesAltitudeBand(const JsonObject& plane) {
+  // Ground / surface vehicles: included only when the min floor is off (0).
+  // Do this before the generic band check so a missing numeric altitude cannot
+  // drop trucks when the user explicitly disabled the floor.
+  if (isGroundTraffic(plane)) {
+    return s_altitude_floor_ft <= 0;
+  }
   if (s_altitude_floor_ft <= 0 && s_altitude_ceiling_ft <= 0) {
     return true;
   }
@@ -399,10 +438,14 @@ bool passesAltitudeBand(const JsonObject& plane) {
 void copyJsonStringTrimmed(const JsonObject& obj, const char* key, char* out,
                            size_t out_len) {
   out[0] = '\0';
-  if (out_len == 0 || !obj[key].is<const char*>()) {
+  if (out_len == 0) {
     return;
   }
+  // Prefer as<> — is<const char*>() can fail on filtered JsonDocuments.
   const char* s = obj[key].as<const char*>();
+  if (s == nullptr || s[0] == '\0') {
+    return;
+  }
   while (*s == ' ') {
     ++s;
   }
@@ -420,13 +463,10 @@ void formatAltitudeTag(const JsonObject& plane, char* out, size_t out_len) {
     return;
   }
 
-  if (plane["alt_baro"].is<const char*>()) {
-    const char* s = plane["alt_baro"].as<const char*>();
-    if (strcmp(s, "ground") == 0) {
-      strncpy(out, "GND", out_len - 1);
-      out[out_len - 1] = '\0';
-      return;
-    }
+  if (isGroundTraffic(plane)) {
+    strncpy(out, "GND", out_len - 1);
+    out[out_len - 1] = '\0';
+    return;
   }
 
   float alt = 0.0f;
@@ -656,8 +696,21 @@ void trafficFilterBootLoad() {
     s_altitude_ceiling_ft = config::kFactoryAltitudeCeilingFt;
     return;
   }
-  if (prefs.isKey(kPrefsAltFloorKey)) {
-    s_altitude_floor_ft = prefs.getInt(kPrefsAltFloorKey, config::kFactoryAltitudeFloorFt);
+  // Use an explicit enable flag so floor=0 cannot be confused with a missing
+  // NVS key (which previously fell back to the legacy/default 500 ft).
+  if (prefs.isKey(kPrefsAltFloorEnKey)) {
+    if (!prefs.getBool(kPrefsAltFloorEnKey, true)) {
+      s_altitude_floor_ft = 0;
+    } else {
+      s_altitude_floor_ft =
+          prefs.getInt(kPrefsAltFloorKey, config::kFactoryAltitudeFloorFt);
+      if (s_altitude_floor_ft <= 0) {
+        s_altitude_floor_ft = config::kFactoryAltitudeFloorFt;
+      }
+    }
+  } else if (prefs.isKey(kPrefsAltFloorKey)) {
+    s_altitude_floor_ft =
+        prefs.getInt(kPrefsAltFloorKey, config::kFactoryAltitudeFloorFt);
   } else {
     s_altitude_floor_ft =
         prefs.getInt(kLegacyAltFloorKey, config::kFactoryAltitudeFloorFt);
@@ -672,9 +725,9 @@ void trafficFilterBootLoad() {
   }
   prefs.end();
 
-  if (s_altitude_floor_ft > 0) {
-    Serial.printf("Traffic altitude floor: %d ft\n", s_altitude_floor_ft);
-  }
+  Serial.printf("Traffic altitude floor: %s (%d ft)\n",
+                s_altitude_floor_ft > 0 ? "on" : "off/include-ground",
+                s_altitude_floor_ft);
   if (s_altitude_ceiling_ft > 0) {
     Serial.printf("Traffic altitude ceiling: %d ft\n", s_altitude_ceiling_ft);
   }
@@ -693,16 +746,26 @@ void saveAltitudeFloorFromForm(const char* value) {
     min_ft = 0;
   }
   Preferences prefs;
+  bool stored = false;
   if (prefs.begin(kPrefsNamespace, false)) {
-    prefs.putInt(kPrefsAltFloorKey, min_ft);
+    // Explicit enable flag: floor 0 must survive reboot (NVS int alone is easy
+    // to mis-read as "unset" → legacy default 500).
+    const bool en = min_ft > 0;
+    stored = prefs.putBool(kPrefsAltFloorEnKey, en);
+    if (en) {
+      stored = prefs.putInt(kPrefsAltFloorKey, min_ft) > 0 && stored;
+    } else {
+      prefs.putInt(kPrefsAltFloorKey, 0);
+    }
+    if (prefs.isKey(kLegacyAltFloorKey)) {
+      prefs.remove(kLegacyAltFloorKey);
+    }
     prefs.end();
   }
   s_altitude_floor_ft = min_ft;
-  if (min_ft > 0) {
-    Serial.printf("Traffic altitude floor: %d ft\n", min_ft);
-  } else {
-    Serial.println("Traffic altitude floor off");
-  }
+  Serial.printf("Traffic altitude floor: %s (%d ft) nvs=%d raw=\"%s\"\n",
+                min_ft > 0 ? "on" : "off/include-ground", min_ft, stored ? 1 : 0,
+                value != nullptr ? value : "");
 }
 
 void saveAltitudeCeilingFromForm(const char* value) {
@@ -726,38 +789,91 @@ void saveAltitudeCeilingFromForm(const char* value) {
   }
 }
 
-bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count) {
+float distSqFromCenterKm(double center_lat, double center_lon, float lat,
+                         float lon) {
+  float east_km = 0.0f;
+  float north_km = 0.0f;
+  geo::localOffsetKm(center_lat, center_lon, lat, lon, &east_km, &north_km,
+                     nullptr);
+  return east_km * east_km + north_km * north_km;
+}
+
+bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count,
+                      double center_lat, double center_lon) {
   JsonArray ac = doc["ac"].as<JsonArray>();
   if (ac.isNull()) {
     *out_count = 0;
     return true;
   }
 
+  // Keep the nearest kMaxAircraft. The feed is not distance-sorted; with the
+  // altitude floor off, a large radius can exceed the cap and a naive first-N
+  // take drops nearby taxi/ground traffic (including trucks).
+  float dist_sq[kMaxAircraft];
   size_t n = 0;
+  size_t considered = 0;
+  size_t ground_kept = 0;
+  size_t farthest_i = 0;
+  float farthest_d2 = 0.0f;
+
   for (JsonObject plane : ac) {
-    if (n >= kMaxAircraft) {
-      break;
-    }
-    if (!plane["lat"].is<float>() || !plane["lon"].is<float>()) {
-      continue;
-    }
-    if (isOnGround(plane) && !config::kTrafficIncludeGround) {
+    float lat = 0.0f;
+    float lon = 0.0f;
+    if (!readJsonFloat(plane, "lat", &lat) || !readJsonFloat(plane, "lon", &lon)) {
       continue;
     }
     if (!passesAltitudeBand(plane)) {
       continue;
     }
+    ++considered;
 
-    out[n].lat = plane["lat"].as<float>();
-    out[n].lon = plane["lon"].as<float>();
-    out[n].nose_deg = pickNoseHeading(plane);
-    out[n].track_deg = pickTrackHeading(plane);
-    out[n].gs_knots = pickGroundSpeed(plane);
-    fillTagFields(&out[n], plane);
-    ++n;
+    const float d2 = distSqFromCenterKm(center_lat, center_lon, lat, lon);
+    size_t slot = n;
+    if (n < kMaxAircraft) {
+      dist_sq[n] = d2;
+      if (n == 0 || d2 > farthest_d2) {
+        farthest_d2 = d2;
+        farthest_i = n;
+      }
+      ++n;
+    } else if (d2 < farthest_d2) {
+      slot = farthest_i;
+      dist_sq[slot] = d2;
+      farthest_d2 = dist_sq[0];
+      farthest_i = 0;
+      for (size_t i = 1; i < kMaxAircraft; ++i) {
+        if (dist_sq[i] > farthest_d2) {
+          farthest_d2 = dist_sq[i];
+          farthest_i = i;
+        }
+      }
+    } else {
+      continue;
+    }
+
+    out[slot].lat = lat;
+    out[slot].lon = lon;
+    out[slot].nose_deg = pickNoseHeading(plane);
+    out[slot].track_deg = pickTrackHeading(plane);
+    out[slot].gs_knots = pickGroundSpeed(plane);
+    fillTagFields(&out[slot], plane);
+  }
+
+  for (size_t i = 0; i < n; ++i) {
+    if (strcmp(out[i].alt, "GND") == 0 ||
+        (out[i].category[0] == 'C' &&
+         (out[i].category[1] == '1' || out[i].category[1] == '2') &&
+         out[i].category[2] == '\0')) {
+      ++ground_kept;
+    }
   }
 
   *out_count = n;
+  // Always log so serial can confirm floor + ground ingestion after a flash.
+  Serial.printf("[adsb] floor=%d ceil=%d kept=%u/%u ground=%u\n",
+                s_altitude_floor_ft, s_altitude_ceiling_ft,
+                static_cast<unsigned>(n), static_cast<unsigned>(considered),
+                static_cast<unsigned>(ground_kept));
   return true;
 }
 
@@ -790,7 +906,8 @@ AdsbJsonAllocator s_adsb_json_allocator;
 // Parse a buffered response body with a field filter, so only the ~10 keys we use
 // are materialized in the JsonDocument (keeps peak heap low on big responses).
 bool parseAircraftPayload(const char* payload, size_t payload_len, Aircraft* out,
-                          size_t* out_count) {
+                          size_t* out_count, double center_lat,
+                          double center_lon) {
   JsonDocument filter(&s_adsb_json_allocator);
   buildAircraftFilter(filter);
 
@@ -801,7 +918,7 @@ bool parseAircraftPayload(const char* payload, size_t payload_len, Aircraft* out
     Serial.printf("[adsb] JSON parse error: %s\n", err.c_str());
     return false;
   }
-  return parseAircraftDoc(doc, out, out_count);
+  return parseAircraftDoc(doc, out, out_count, center_lat, center_lon);
 }
 
 bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radius_km,
@@ -891,7 +1008,8 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
 
   services::https::drainTlsHeapAfterSession();
   workerYield();
-  if (!parseAircraftPayload(payload.data, payload.len, out, out_count)) {
+  if (!parseAircraftPayload(payload.data, payload.len, out, out_count, center_lat,
+                            center_lon)) {
     if (config::kSerialTraceDebug) {
       Serial.printf("[fetch] fail parse (%lums)\n", millis() - fetch_start_ms);
     }

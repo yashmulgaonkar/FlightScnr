@@ -371,12 +371,20 @@ void appendAccentOptions(char* buf, size_t len, size_t* used) {
   }
 }
 
-void appendRangeMileHint(char* buf, size_t len, size_t* used) {
-  const int n = snprintf(buf + *used, len - *used,
-                         "<p class=\"hint\">Number with optional unit (mi, km, nm; default mi). "
-                         "Snaps to nearest preset: 2, 3, 6, 8, 10, 20, or 30 mi.</p>");
-  if (n > 0) {
-    appendClamped(buf, len, used, n);
+void appendRangeOptions(char* buf, size_t len, size_t* used) {
+  const uint8_t active = ui::radar::scaleActiveMiles();
+  for (size_t i = 0; i < ui::radar::kRangeMileOptionCount; ++i) {
+    const unsigned mi = ui::radar::kRangeMileOptions[i];
+    const float km = static_cast<float>(mi) * ui::radar::kStatuteMileKm;
+    const float nm = static_cast<float>(mi) * ui::radar::kStatuteMileKm / ui::radar::kNauticalMileKm;
+    const int n = snprintf(
+        buf + *used, len - *used,
+        "<option value=\"%u\"%s>%u mi &middot; %.1f km &middot; %.1f nm</option>", mi,
+        mi == active ? " selected" : "", mi, static_cast<double>(km),
+        static_cast<double>(nm));
+    if (n > 0) {
+      appendClamped(buf, len, used, n);
+    }
   }
 }
 
@@ -462,35 +470,36 @@ void handleSettingsPage() {
   appendClamped(page, kSettingsPageCap, &used, center_n);
 
   const ui::radar::DistanceUnit unit = ui::radar::distanceUnit();
-  const int range_units_n = snprintf(
+  appendRaw(page, kSettingsPageCap, &used,
+            "<label for=\"range_mi\">Range</label>"
+            "<select id=\"range_mi\" name=\"range_mi\">");
+  appendRangeOptions(page, kSettingsPageCap, &used);
+  const int units_n = snprintf(
       page + used, kSettingsPageCap - used,
-      "<div class=\"row2\"><div>"
-      "<label for=\"range_mi\">Range</label>"
-      "<input id=\"range_mi\" name=\"range_mi\" type=\"text\" required autocomplete=\"off\" "
-      "placeholder=\"e.g. 30mi, 48km, 26nm\" value=\"%umi\">"
-      "</div><div>"
+      "</select>"
       "<label for=\"dist_unit\">Distance units</label>"
       "<select id=\"dist_unit\" name=\"dist_unit\">"
       "<option value=\"km\"%s>kilometers</option>"
       "<option value=\"mi\"%s>statute miles</option>"
       "<option value=\"nm\"%s>nautical miles</option>"
-      "</select></div></div>",
-      static_cast<unsigned>(ui::radar::scaleActiveMiles()),
+      "</select>",
       unit == ui::radar::DistanceUnit::Km ? " selected" : "",
       unit == ui::radar::DistanceUnit::StatuteMile ? " selected" : "",
       unit == ui::radar::DistanceUnit::NauticalMile ? " selected" : "");
-  appendClamped(page, kSettingsPageCap, &used, range_units_n);
-  appendRangeMileHint(page, kSettingsPageCap, &used);
+  appendClamped(page, kSettingsPageCap, &used, units_n);
 
   const int min_n = snprintf(
       page + used, kSettingsPageCap - used,
       "<div class=\"row2\"><div>"
-      "<label for=\"min_height\">Min altitude floor (ft, 0 = off)</label>"
-      "<input id=\"min_height\" name=\"min_height\" type=\"number\" min=\"0\" step=\"100\" "
+      "<label for=\"min_height\">Min altitude floor (feet AGL)</label>"
+      "<input id=\"min_height\" name=\"min_height\" type=\"number\" min=\"0\" step=\"1\" "
       "value=\"%d\">"
+      "<p class=\"hint\">0 = off (show taxi + ground vehicles). Units are feet, not miles. "
+      "Default 500 hides surface traffic. After Save, About should read "
+      "<em>Min alt: off</em>.</p>"
       "</div><div>"
       "<label for=\"max_height\">Max altitude ceiling (ft, 0 = off)</label>"
-      "<input id=\"max_height\" name=\"max_height\" type=\"number\" min=\"0\" step=\"100\" "
+      "<input id=\"max_height\" name=\"max_height\" type=\"number\" min=\"0\" step=\"1\" "
       "value=\"%d\">"
       "</div></div>",
       services::adsb::altitudeFloorFt(), services::adsb::altitudeCeilingFt());
@@ -534,6 +543,7 @@ void handleSettingsPage() {
     const bool dark_sel = bm_style == services::basemap::Style::Dark;
     const bool light_sel = bm_style == services::basemap::Style::Light;
     const bool vfr_sel = bm_style == services::basemap::Style::Vfr;
+    const bool voyager_sel = bm_style == services::basemap::Style::Voyager;
     const uint8_t live_mi = ui::radar::scaleActiveMiles();
     const uint8_t max_mi =
         ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1];
@@ -544,10 +554,12 @@ void handleSettingsPage() {
         "<span class=\"chev\">&#9656;</span></summary><div class=\"body\">"
         "<p class=\"note\">Optional map under the radar grid. "
         "Generated in your browser from <a href=\"https://carto.com/basemaps/\" "
-        "target=\"_blank\" rel=\"noopener\">CARTO</a> (OSM, no city labels) or "
+        "target=\"_blank\" rel=\"noopener\">CARTO</a> (OSM, no city labels: Dark Matter, "
+        "Positron, Voyager) or "
         "FAA <a href=\"https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/\" "
         "target=\"_blank\" rel=\"noopener\">VFR Sectional</a> charts "
-        "(35%% pale wash), then stored on device flash (~50&ndash;120&nbsp;KB). "
+        "(dark/light/Voyager: contrast; VFR: pale wash toward white — set %% below), "
+        "then stored on device flash (~50&ndash;120&nbsp;KB). "
         "<b>Current range</b> bakes sharper detail (best when zoomed in). "
         "<b>Maximum range</b> lets you zoom in without regenerating, but upscales and "
         "softens. Zooming out past the bake requires regenerate. "
@@ -558,16 +570,34 @@ void handleSettingsPage() {
         "<select id=\"basemap_style\">"
         "<option value=\"dark\"%s>Dark Matter (dark)</option>"
         "<option value=\"light\"%s>Positron (light)</option>"
+        "<option value=\"voyager\"%s>Voyager (light, richer)</option>"
         "<option value=\"vfr\"%s>VFR Sectional (FAA)</option>"
         "</select>"
+        "<div class=\"row2\"><div>"
+        "<label for=\"bm_contrast_dark\">Dark contrast (%%)</label>"
+        "<input id=\"bm_contrast_dark\" name=\"bm_contrast_dark\" type=\"number\" "
+        "min=\"0\" max=\"200\" step=\"5\" value=\"%u\">"
+        "</div><div>"
+        "<label for=\"bm_contrast_light\">Light / Voyager contrast (%%)</label>"
+        "<input id=\"bm_contrast_light\" name=\"bm_contrast_light\" type=\"number\" "
+        "min=\"0\" max=\"200\" step=\"5\" value=\"%u\">"
+        "</div></div>"
+        "<label for=\"bm_wash_vfr\">VFR wash toward white (%%)</label>"
+        "<input id=\"bm_wash_vfr\" name=\"bm_wash_vfr\" type=\"number\" min=\"0\" max=\"100\" "
+        "step=\"1\" value=\"%u\">"
+        "<p class=\"hint\">Contrast 100 = normal; lower flattens, higher boosts. "
+        "Adjustments apply when you Generate basemap. Save stores the values.</p>"
         "<label for=\"basemap_coverage\">Bake coverage</label>"
         "<select id=\"basemap_coverage\">"
         "<option value=\"current\" selected>Current range (%u mi) — sharper</option>"
         "<option value=\"max\">Maximum range (%u mi) — zoom-friendly</option>"
         "</select>",
         bm_status, dark_sel ? " selected" : "", light_sel ? " selected" : "",
-        vfr_sel ? " selected" : "", static_cast<unsigned>(live_mi),
-        static_cast<unsigned>(max_mi));
+        voyager_sel ? " selected" : "", vfr_sel ? " selected" : "",
+        static_cast<unsigned>(services::basemap::contrastPercentDark()),
+        static_cast<unsigned>(services::basemap::contrastPercentLight()),
+        static_cast<unsigned>(services::basemap::washPercentVfr()),
+        static_cast<unsigned>(live_mi), static_cast<unsigned>(max_mi));
     appendClamped(page, kSettingsPageCap, &used, bm_n);
   }
   appendToggle(page, kSettingsPageCap, &used, "use_basemap", "Show basemap on radar",
@@ -588,20 +618,38 @@ void handleSettingsPage() {
         "var covEl=document.getElementById('basemap_coverage');"
         "function styleKey(){"
         "var v=styleEl&&styleEl.value;"
-        "if(v==='light')return'light';if(v==='vfr')return'vfr';return'dark';}"
+        "if(v==='light')return'light';if(v==='vfr')return'vfr';"
+        "if(v==='voyager')return'voyager';return'dark';}"
         "function styleLabel(){"
         "var k=styleKey();"
         "if(k==='light')return'Positron (light)';"
+        "if(k==='voyager')return'Voyager';"
         "if(k==='vfr')return'VFR Sectional';"
         "return'Dark Matter (dark)';}"
         "function bakeMiles(){return(covEl&&covEl.value==='max')?maxMiles:curMiles;}"
         "function fillRgb(){"
         "var k=styleKey();"
         "if(k==='light')return[240,240,240];"
+        "if(k==='voyager')return[242,239,230];"
         "if(k==='vfr')return[248,248,242];"
         "return[2,15,3];}"
         "function fillCss(){var c=fillRgb();return'rgb('+c[0]+','+c[1]+','+c[2]+')';}"
-        "function paleWash(){return styleKey()==='vfr'?0.35:0;}"
+        "function readPct(id,defPct,maxPct){"
+        "var el=document.getElementById(id);var v=el?parseFloat(el.value):defPct;"
+        "if(isNaN(v))v=defPct;return Math.max(0,Math.min(maxPct,v));}"
+        "function contrastFactor(){"
+        "var k=styleKey();"
+        "if(k==='dark')return readPct('bm_contrast_dark',%u,200)/100;"
+        "if(k==='light'||k==='voyager')return readPct('bm_contrast_light',%u,200)/100;"
+        "return 1;}"
+        "function washAmount(){"
+        "return styleKey()==='vfr'?readPct('bm_wash_vfr',%u,100)/100:0;}"
+        "function washTarget(){return 255;}"
+        "function persistBakeAdjust(){"
+        "var fd=new FormData();"
+        "['bm_contrast_dark','bm_contrast_light','bm_wash_vfr'].forEach(function(id){"
+        "var el=document.getElementById(id);if(el)fd.append(id,el.value);});"
+        "return fetch('/basemap/adjust',{method:'POST',body:fd}).catch(function(){});}"
         "function mercX(L){return(L+180)/360;}"
         "function mercY(A){var s=Math.sin(A*Math.PI/180);return.5-Math.log((1+s)/(1-s))/(4*Math.PI);}"
         "function tileXY(A,L,z){var n=Math.pow(2,z);return[mercX(L)*n,mercY(A)*n];}"
@@ -613,7 +661,9 @@ void handleSettingsPage() {
         "if(styleKey()==='vfr')"
         "return'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/"
         "VFR_Sectional/MapServer/tile/'+z+'/'+y+'/'+x;"
-        "var path=styleKey()==='light'?'light_nolabels':'dark_nolabels';"
+        "var path='dark_nolabels';"
+        "if(styleKey()==='light')path='light_nolabels';"
+        "else if(styleKey()==='voyager')path='rastertiles/voyager_nolabels';"
         "return'https://a.basemaps.cartocdn.com/'+path+'/'+z+'/'+x+'/'+y+'.png';}"
         "function loadTile(z,x,y){return new Promise(function(res,rej){"
         "var i=new Image();i.crossOrigin='anonymous';"
@@ -623,6 +673,7 @@ void handleSettingsPage() {
         "else rej(new Error('tile '+z+'/'+x+'/'+y));};"
         "i.src=tileUrl(z,x,y);});}"
         "async function bake(){"
+        "await persistBakeAdjust();"
         "var miles=bakeMiles(),labelKm=miles*1.609344,ppm=OUTER/labelKm;"
         "var coverR=Math.ceil(Math.hypot(CX,CY))+2;"
         "msg.textContent='Fetching '+styleLabel()+' @ '+miles+' mi\\u2026';"
@@ -651,7 +702,7 @@ void handleSettingsPage() {
         "var src=mg.getImageData(0,0,tw,th).data;"
         "var c=document.createElement('canvas');c.width=SIZE;c.height=SIZE;"
         "var g=c.getContext('2d');var out=g.createImageData(SIZE,SIZE),d=out.data;"
-        "var fr=fillRgb(),wash=paleWash(),keep=1-wash;"
+        "var fr=fillRgb(),wash=washAmount(),keep=1-wash,wt=washTarget(),cfac=contrastFactor();"
         "for(var i=0;i<d.length;i+=4){d[i]=fr[0];d[i+1]=fr[1];d[i+2]=fr[2];d[i+3]=255;}"
         "for(var py=0;py<SIZE;py++)for(var px=0;px<SIZE;px++){"
         "var dx=px-CX,dy=CY-py;"
@@ -666,7 +717,10 @@ void handleSettingsPage() {
         "var p00=samp(x0i,y0i),p10=samp(x0i+1,y0i),p01=samp(x0i,y0i+1),p11=samp(x0i+1,y0i+1);"
         "var di=(py*SIZE+px)*4;"
         "for(var k=0;k<3;k++){var v0=p00[k]+(p10[k]-p00[k])*tx,v1=p01[k]+(p11[k]-p01[k])*tx;"
-        "var v=v0+(v1-v0)*ty;d[di+k]=Math.round(v*keep+255*wash);}d[di+3]=255;}"
+        "var v=v0+(v1-v0)*ty;"
+        "if(wash>0){v=v*keep+wt*wash;}"
+        "else if(cfac!==1){v=(v-128)*cfac+128;}"
+        "d[di+k]=Math.max(0,Math.min(255,Math.round(v)));}d[di+3]=255;}"
         "g.putImageData(out,0,0);"
         "msg.textContent='Uploading\\u2026';"
         "var blob=await new Promise(function(r){c.toBlob(r,'image/jpeg',0.88);});"
@@ -696,7 +750,10 @@ void handleSettingsPage() {
         static_cast<unsigned>(ui::radar::scaleActiveMiles()),
         static_cast<unsigned>(
             ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1]),
-        static_cast<unsigned>(ui::radar::facingDeg()));
+        static_cast<unsigned>(ui::radar::facingDeg()),
+        static_cast<unsigned>(services::basemap::contrastPercentDark()),
+        static_cast<unsigned>(services::basemap::contrastPercentLight()),
+        static_cast<unsigned>(services::basemap::washPercentVfr()));
     appendClamped(page, kSettingsPageCap, &used, bm2);
   }
 
@@ -1273,6 +1330,9 @@ void handleSave() {
   ui::displayPrefsSaveHideBlipDetailsFromForm(s_server->arg("hide_blip_details").c_str());
   ui::displayPrefsSaveAutoIdleClockFromForm(s_server->arg("idle_clock").c_str());
   services::basemap::saveEnabledFromForm(s_server->arg("use_basemap").c_str());
+  services::basemap::saveBakeAdjustFromForm(s_server->arg("bm_contrast_dark").c_str(),
+                                            s_server->arg("bm_contrast_light").c_str(),
+                                            s_server->arg("bm_wash_vfr").c_str());
   ui::radar::saveFacingDegFromForm(s_server->arg("facing_deg").c_str());
   services::clock::saveHourFormatFromForm(s_server->arg("clock_24h").c_str());
   services::clock::saveDateFormatFromForm(s_server->arg("date_numeric").c_str());
@@ -1398,6 +1458,8 @@ void handleBasemapUpload() {
           style = services::basemap::Style::Light;
         } else if (sty == "vfr") {
           style = services::basemap::Style::Vfr;
+        } else if (sty == "voyager") {
+          style = services::basemap::Style::Voyager;
         }
       }
       uint8_t mi = ui::radar::scaleActiveMiles();
@@ -1429,6 +1491,17 @@ void handleBasemapClear() {
   }
   const bool ok = services::basemap::clear();
   redirectToSettings(ok ? "saved=1" : "error=basemap");
+}
+
+void handleBasemapAdjust() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  services::basemap::saveBakeAdjustFromForm(s_server->arg("bm_contrast_dark").c_str(),
+                                            s_server->arg("bm_contrast_light").c_str(),
+                                            s_server->arg("bm_wash_vfr").c_str());
+  s_server->send(200, "text/plain", "ok");
 }
 
 void handleWifiAdd() {
@@ -1693,6 +1766,7 @@ void registerRoutes() {
   s_server->on("/route_cache/clear", HTTP_POST, handleRouteCacheClear);
   s_server->on("/basemap/upload", HTTP_POST, handleBasemapUploadDone, handleBasemapUpload);
   s_server->on("/basemap/clear", HTTP_POST, handleBasemapClear);
+  s_server->on("/basemap/adjust", HTTP_POST, handleBasemapAdjust);
   s_server->on("/wifi/add", HTTP_POST, handleWifiAdd);
   s_server->on("/wifi/remove", HTTP_POST, handleWifiRemove);
   s_server->on("/wifi/up", HTTP_POST, handleWifiUp);

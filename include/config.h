@@ -111,9 +111,7 @@ constexpr unsigned kRouteLookupCacheTtlSec = 3600;
 /** Debounced write of /route_cache.csv to the ~3.4 MB LittleFS partition. */
 constexpr unsigned long kRouteCacheFlushIntervalMs = 600000UL;
 constexpr size_t kRouteCacheFileMaxEntries = 1500;
-/** Include aircraft reporting ground baro altitude. */
-constexpr bool kTrafficIncludeGround = false;
-/** Minimum altitude (ft); 0 disables the filter. */
+/** Minimum altitude (ft); 0 disables the floor and includes ground traffic. */
 constexpr int kFactoryAltitudeFloorFt = 500;
 /** Maximum altitude (ft); 0 disables the filter. */
 constexpr int kFactoryAltitudeCeilingFt = 0;

@@ -7,9 +7,10 @@ namespace services::basemap {
 
 /** Raster style used when the basemap JPEG was baked. */
 enum class Style : uint8_t {
-  Dark = 0,  // CARTO Dark Matter, no place labels
-  Light = 1, // CARTO Positron, no place labels
-  Vfr = 2,   // FAA VFR Sectional (pale-washed)
+  Dark = 0,     // CARTO Dark Matter, no place labels
+  Light = 1,    // CARTO Positron, no place labels
+  Vfr = 2,      // FAA VFR Sectional
+  Voyager = 3,  // CARTO Voyager, no place labels (richer light map)
 };
 
 /** Call after LittleFS is mountable (route_cache::mount). Loads NVS prefs. */
@@ -20,6 +21,17 @@ bool enabled();
 
 /** Persist enable checkbox from settings form ("T"/missing). */
 void saveEnabledFromForm(const char* checkbox_value);
+
+/**
+ * Bake adjustments (browser-side when generating; stored in NVS for the portal).
+ * Dark/light: contrast 0–200% (100 = unchanged, lower flattens, higher boosts).
+ * VFR: wash 0–100% toward white.
+ */
+uint8_t contrastPercentDark();
+uint8_t contrastPercentLight();
+uint8_t washPercentVfr();
+void saveBakeAdjustFromForm(const char* dark_contrast_pct, const char* light_contrast_pct,
+                            const char* vfr_wash_pct);
 
 /** Drop cached decode; next blit reloads from LittleFS. */
 void invalidateCache();

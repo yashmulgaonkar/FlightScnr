@@ -7,6 +7,7 @@
 #include <Preferences.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 #include <esp_heap_caps.h>
@@ -31,6 +32,14 @@ constexpr char kMiKey[] = "mi";
 constexpr char kFacingKey[] = "fac";
 constexpr char kStyleKey[] = "sty";
 constexpr char kValidKey[] = "ok";
+constexpr char kContrastDarkKey[] = "ctr_d";
+constexpr char kContrastLightKey[] = "ctr_l";
+constexpr char kWashVfrKey[] = "wsh_v";
+
+constexpr uint8_t kDefaultContrastDarkPct = 100;
+constexpr uint8_t kDefaultContrastLightPct = 100;
+constexpr uint8_t kDefaultWashVfrPct = 55;
+constexpr uint8_t kMaxContrastPct = 200;
 
 /** Skip JPEG decode on the loop task when memory/TLS is tight (decode can stall
  *  the UI for seconds and fights ADS-B for internal heap). */
@@ -39,6 +48,9 @@ constexpr uint32_t kMinContigHeapToDecode = 10000;
 
 bool s_enabled = false;
 Meta s_meta{};
+uint8_t s_contrast_dark_pct = kDefaultContrastDarkPct;
+uint8_t s_contrast_light_pct = kDefaultContrastLightPct;
+uint8_t s_wash_vfr_pct = kDefaultWashVfrPct;
 
 uint16_t* s_cache = nullptr;
 bool s_cache_valid = false;
@@ -103,6 +115,18 @@ void loadPrefs() {
     return;
   }
   s_enabled = prefs.getBool(kEnKey, false);
+  s_contrast_dark_pct = prefs.getUChar(kContrastDarkKey, kDefaultContrastDarkPct);
+  s_contrast_light_pct = prefs.getUChar(kContrastLightKey, kDefaultContrastLightPct);
+  s_wash_vfr_pct = prefs.getUChar(kWashVfrKey, kDefaultWashVfrPct);
+  if (s_contrast_dark_pct > kMaxContrastPct) {
+    s_contrast_dark_pct = kMaxContrastPct;
+  }
+  if (s_contrast_light_pct > kMaxContrastPct) {
+    s_contrast_light_pct = kMaxContrastPct;
+  }
+  if (s_wash_vfr_pct > 100) {
+    s_wash_vfr_pct = 100;
+  }
   s_meta.valid = prefs.getBool(kValidKey, false);
   if (s_meta.valid) {
     s_meta.lat = prefs.getDouble(kLatKey, 0);
@@ -114,6 +138,8 @@ void loadPrefs() {
       s_meta.style = Style::Light;
     } else if (sty == static_cast<uint8_t>(Style::Vfr)) {
       s_meta.style = Style::Vfr;
+    } else if (sty == static_cast<uint8_t>(Style::Voyager)) {
+      s_meta.style = Style::Voyager;
     } else {
       s_meta.style = Style::Dark;
     }
@@ -335,6 +361,55 @@ void saveEnabledFromForm(const char* checkbox_value) {
   }
 }
 
+namespace {
+
+uint8_t parsePct(const char* value, uint8_t fallback, uint8_t max_pct) {
+  if (value == nullptr || value[0] == '\0') {
+    return fallback;
+  }
+  char* end = nullptr;
+  const long v = strtol(value, &end, 10);
+  if (end == value) {
+    return fallback;
+  }
+  if (v < 0) {
+    return 0;
+  }
+  if (v > static_cast<long>(max_pct)) {
+    return max_pct;
+  }
+  return static_cast<uint8_t>(v);
+}
+
+void persistBakeAdjust() {
+  Preferences prefs;
+  if (!prefs.begin(kStoreNs, false)) {
+    return;
+  }
+  prefs.putUChar(kContrastDarkKey, s_contrast_dark_pct);
+  prefs.putUChar(kContrastLightKey, s_contrast_light_pct);
+  prefs.putUChar(kWashVfrKey, s_wash_vfr_pct);
+  prefs.end();
+}
+
+}  // namespace
+
+uint8_t contrastPercentDark() { return s_contrast_dark_pct; }
+uint8_t contrastPercentLight() { return s_contrast_light_pct; }
+uint8_t washPercentVfr() { return s_wash_vfr_pct; }
+
+void saveBakeAdjustFromForm(const char* dark_contrast_pct, const char* light_contrast_pct,
+                            const char* vfr_wash_pct) {
+  s_contrast_dark_pct = parsePct(dark_contrast_pct, s_contrast_dark_pct, kMaxContrastPct);
+  s_contrast_light_pct = parsePct(light_contrast_pct, s_contrast_light_pct, kMaxContrastPct);
+  s_wash_vfr_pct = parsePct(vfr_wash_pct, s_wash_vfr_pct, 100);
+  persistBakeAdjust();
+  Serial.printf("[basemap] contrast dark=%u%% light=%u%% vfr_wash=%u%%\n",
+                static_cast<unsigned>(s_contrast_dark_pct),
+                static_cast<unsigned>(s_contrast_light_pct),
+                static_cast<unsigned>(s_wash_vfr_pct));
+}
+
 void invalidateCache() { freeCache(); }
 
 Meta storedMeta() { return s_meta; }
@@ -514,6 +589,8 @@ void statusText(char* buf, size_t len) {
     style_name = "light";
   } else if (s_meta.style == Style::Vfr) {
     style_name = "vfr";
+  } else if (s_meta.style == Style::Voyager) {
+    style_name = "voyager";
   }
   if (!metaMatchesLive()) {
     const uint8_t live_mi = ui::radar::scaleActiveMiles();
@@ -653,6 +730,8 @@ bool uploadFinish(size_t total_bytes, Style style, uint8_t range_miles) {
     s_meta.style = Style::Light;
   } else if (style == Style::Vfr) {
     s_meta.style = Style::Vfr;
+  } else if (style == Style::Voyager) {
+    s_meta.style = Style::Voyager;
   } else {
     s_meta.style = Style::Dark;
   }
