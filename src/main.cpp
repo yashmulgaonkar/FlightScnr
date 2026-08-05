@@ -33,6 +33,7 @@
 #include "services/wifi_setup.h"
 #include "services/off_hours.h"
 #include "services/aircraft_alert.h"
+#include "services/disclaimer_acceptance.h"
 #include "services/ota_github.h"
 #include "ui/alert_flash.h"
 #include "ui/clock_screen.h"
@@ -83,6 +84,9 @@ bool g_hold_empty_radar = false;
 bool g_manual_radar_timed_visit = false;
 unsigned long g_ignore_swipes_until_ms = 0;
 unsigned long g_boot_details_until_ms = 0;
+/** Non-zero while a remembered disclaimer is counting down to auto-continue. */
+unsigned long g_disclaimer_auto_until_ms = 0;
+int g_disclaimer_last_countdown_sec = -1;
 uint32_t g_last_clock_minute_stamp = UINT32_MAX;
 unsigned long g_last_heap_log_ms = 0;
 unsigned long g_loop_max_ms = 0;
@@ -725,7 +729,16 @@ void showDetails(bool boot_splash = false) {
 
 void showDisclaimer() {
   ui::flightDetailReleaseSprite();
-  ui::disclaimerScreenDraw();
+  int countdown_sec = -1;
+  if (g_disclaimer_auto_until_ms != 0) {
+    const long remaining_ms =
+        static_cast<long>(g_disclaimer_auto_until_ms - millis());
+    countdown_sec = remaining_ms > 0
+                        ? static_cast<int>((remaining_ms + 999L) / 1000L)
+                        : 0;
+  }
+  g_disclaimer_last_countdown_sec = countdown_sec;
+  ui::disclaimerScreenDraw(countdown_sec);
   g_radar_visible = false;
 }
 
@@ -740,9 +753,42 @@ void beginBootDetailsSplash() {
 void acceptDisclaimerAndContinue() {
   hardware::buzzerClick();
   inputDiscardPendingInteractions();
+  g_disclaimer_auto_until_ms = 0;
+  g_disclaimer_last_countdown_sec = -1;
+  // Persistence only when the touchscreen Accept path left the checkbox on.
+  if (ui::disclaimerScreenRememberChecked()) {
+    services::disclaimer::rememberCurrent();
+    Serial.println("[disclaimer] accepted (remembered)");
+  } else {
+    // One-time Accept: clear any prior remembered version if the user unchecked.
+    if (services::disclaimer::storedVersion() != 0) {
+      services::disclaimer::clear();
+    }
+    Serial.println("[disclaimer] accepted (once)");
+  }
   beginBootDetailsSplash();
-  Serial.println("[disclaimer] accepted");
   logNavContext("disclaimer_accepted");
+}
+
+void continueAfterRememberedDisclaimer() {
+  inputDiscardPendingInteractions();
+  g_disclaimer_auto_until_ms = 0;
+  g_disclaimer_last_countdown_sec = -1;
+  beginBootDetailsSplash();
+  logNavContext("disclaimer_timeout");
+}
+
+void beginDisclaimerScreen() {
+  const bool remembered = services::disclaimer::isRemembered();
+  ui::disclaimerScreenReset(remembered);
+  g_disclaimer_auto_until_ms =
+      remembered ? (millis() + config::kDisclaimerRememberedTimeoutMs) : 0;
+  g_disclaimer_last_countdown_sec = -1;
+  g_screen = AppScreen::Disclaimer;
+  showDisclaimer();
+  Serial.printf("Screen: disclaimer (%s)\n",
+                remembered ? "remembered countdown" : "wait for Accept");
+  logNavContext(remembered ? "disclaimer_countdown" : "disclaimer");
 }
 
 void applySettingsLive() {
@@ -783,6 +829,11 @@ void applySettingsLive() {
       ui::radarDisplayDrawOrientationPreview();
       break;
     case AppScreen::Disclaimer:
+      if (!services::disclaimer::isRemembered()) {
+        ui::disclaimerScreenSetRememberChecked(false);
+        g_disclaimer_auto_until_ms = 0;
+        g_disclaimer_last_countdown_sec = -1;
+      }
       showDisclaimer();
       break;
   }
@@ -1147,6 +1198,27 @@ void tickBootDetailsSplash() {
   logNavContext("boot_splash_done");
 }
 
+void tickDisclaimerCountdown() {
+  if (g_screen != AppScreen::Disclaimer || g_disclaimer_auto_until_ms == 0) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (static_cast<long>(now - g_disclaimer_auto_until_ms) >= 0) {
+    Serial.println("[disclaimer] auto-continue after remembered timeout");
+    continueAfterRememberedDisclaimer();
+    return;
+  }
+
+  const long remaining_ms = static_cast<long>(g_disclaimer_auto_until_ms - now);
+  const int countdown_sec =
+      remaining_ms > 0 ? static_cast<int>((remaining_ms + 999L) / 1000L) : 0;
+  if (countdown_sec != g_disclaimer_last_countdown_sec) {
+    g_disclaimer_last_countdown_sec = countdown_sec;
+    ui::disclaimerScreenUpdateCountdown(countdown_sec);
+  }
+}
+
 void tickSecondaryScreenTimeout() {
   if (bootDetailsActive() || disclaimerActive()) {
     return;
@@ -1481,32 +1553,35 @@ void handleInput() {
     int16_t tx = 0;
     int16_t ty = 0;
     if (inputConsumeScreenTap(&tx, &ty)) {
-      // Waveshare has no knob button — accept on any tap so a missed hit-box
-      // (touch/display orientation) cannot trap the user on this screen.
-#if !FLIGHTSCNR_HAS_KNOB_BUTTON
-      Serial.printf("[disclaimer] tap @ %d,%d — accept\n", tx, ty);
-      acceptDisclaimerAndContinue();
-#else
-      if (ui::disclaimerScreenHitAccept(tx, ty)) {
-        acceptDisclaimerAndContinue();
+      if (ui::disclaimerScreenHitRemember(tx, ty)) {
+        ui::disclaimerScreenToggleRemember();
+        if (!ui::disclaimerScreenRememberChecked()) {
+          // Unchecking cancels auto-continue and clears any stored acceptance.
+          if (services::disclaimer::isRemembered()) {
+            services::disclaimer::clear();
+          }
+          g_disclaimer_auto_until_ms = 0;
+          g_disclaimer_last_countdown_sec = -1;
+          Serial.println("[disclaimer] remember cleared — waiting for Accept");
+        } else {
+          Serial.println("[disclaimer] remember checked (touch)");
+        }
+        hardware::buzzerClick();
+        showDisclaimer();
+        return;
       }
-#endif
+      if (ui::disclaimerScreenHitAccept(tx, ty)) {
+        Serial.printf("[disclaimer] tap Accept @ %d,%d\n", tx, ty);
+        acceptDisclaimerAndContinue();
+        return;
+      }
+      Serial.printf("[disclaimer] tap @ %d,%d ignored (outside controls)\n", tx, ty);
       return;
     }
-    if (inputConsumeKnobTap()) {
-      acceptDisclaimerAndContinue();
-      return;
-    }
-#if !FLIGHTSCNR_HAS_KNOB_BUTTON
-    // Encoder click (detent) is the only physical control on Waveshare.
-    if (inputConsumeEncoderDelta() != 0) {
-      Serial.println("[disclaimer] encoder — accept");
-      acceptDisclaimerAndContinue();
-      return;
-    }
-#else
+    // Knob/encoder must never accept or toggle remember — accidental nudge risk.
+    (void)inputConsumeKnobPress();
+    (void)inputConsumeKnobTap();
     (void)inputConsumeEncoderDelta();
-#endif
     return;
   }
 
@@ -1929,6 +2004,7 @@ void setup() {
   services::tzlookup::bootLoad();
   services::offhours::bootLoad();
   services::alert::bootLoad();
+  services::disclaimer::bootLoad();
   services::ota_github::init();
 
   if (wifiSetupConnect()) {
@@ -1942,10 +2018,7 @@ void setup() {
     settingsSetSavedCallback(applySettingsLive);
     g_last_adsb_fetch_ms = 0;
     g_last_tls_proactive_refresh_ms = millis();
-    g_screen = AppScreen::Disclaimer;
-    showDisclaimer();
-    Serial.println("Screen: disclaimer");
-    logNavContext("disclaimer");
+    beginDisclaimerScreen();
     logDiagLine("boot");
   }
 }
@@ -1978,6 +2051,7 @@ void loop() {
     }
   }
   tickBootDetailsSplash();
+  tickDisclaimerCountdown();
   handleInput();
   if (bootScreenWifiResetCountdownActive()) {
     settingsWebPoll();

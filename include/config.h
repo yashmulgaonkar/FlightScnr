@@ -81,6 +81,8 @@ constexpr unsigned long kFlightDetailEnrichFailsafeMs = 30000;
 constexpr unsigned long kRadarMinVisibleMs = 5000;
 /** Details splash shown at boot before radar (ms). */
 constexpr unsigned long kBootDetailsDurationMs = 5000;
+/** When disclaimer acceptance is remembered, show it this long then continue. */
+constexpr unsigned long kDisclaimerRememberedTimeoutMs = 5000;
 
 // --- Map center factory defaults (portal can override) ---
 constexpr double kFactoryLatitude = 37.61977;

@@ -71,6 +71,12 @@ class PlaneGfx {
    *  panel write session is open, or the canvas allocation fails. */
   bool beginOffscreen();
   void endOffscreen();
+  /**
+   * Finish an offscreen compose but flush only one region. The cached canvas
+   * retains the rest of the previous frame, allowing small dynamic labels to
+   * update without a full-screen redraw.
+   */
+  void endOffscreenRegion(int16_t x, int16_t y, int16_t w, int16_t h);
 
   void draw16bitRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, int16_t w,
                           int16_t h);

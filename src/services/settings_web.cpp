@@ -31,6 +31,7 @@
 #include "services/weather.h"
 #include "services/aircraft_alert.h"
 #include "services/device_identity.h"
+#include "services/disclaimer_acceptance.h"
 #include "services/off_hours.h"
 #include "services/wifi_setup.h"
 #include "services/radar_basemap.h"
@@ -440,6 +441,11 @@ void handleSettingsPage() {
               "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33\">"
               "<b>Could not clear route cache.</b> Try again in a moment."
               "</div>");
+  }
+  if (s_server->hasArg("disclaimer_cleared")) {
+    appendRaw(page, kSettingsPageCap, &used,
+              "<div class=\"banner\"><b>Disclaimer acceptance cleared.</b> The next boot will "
+              "wait for on-screen Accept (no auto-continue).</div>");
   }
   if (services::ota_github::updateAvailable()) {
     const char* latest = services::ota_github::latestTag();
@@ -1277,6 +1283,38 @@ void handleSettingsPage() {
             "<button class=\"sm\" type=\"submit\">Clear route cache</button>"
             "</form></div></details>");
 
+  // ---------- Disclaimer card (clear only; enable is touchscreen-only) ----------
+  {
+    const bool remembered = services::disclaimer::isRemembered();
+    const int disc_n = snprintf(
+        page + used, kSettingsPageCap - used,
+        "<details class=\"card\"><summary><span class=\"ico\">&#9878;</span>Disclaimer"
+        "<span class=\"sum\">%s</span><span class=\"chev\">&#9656;</span>"
+        "</summary><div class=\"body\">"
+        "<p class=\"note\">The safety disclaimer always appears on boot. "
+        "<b>Don&rsquo;t show again</b> can only be enabled on the device touchscreen "
+        "(tap the checkbox, then tap <b>Accept</b>). When remembered, the screen shows "
+        "a five-second countdown with no Accept button before continuing. "
+        "Knob/encoder cannot accept or remember."
+        "</p>"
+        "<p id=\"disclaimer_status\">Status: <b>%s</b></p>",
+        remembered ? "remembered" : "ask every boot",
+        remembered ? "Remembered on this device (5&nbsp;s countdown)"
+                   : "Not remembered &mdash; wait for Accept each boot");
+    if (disc_n > 0) {
+      used += static_cast<size_t>(disc_n);
+    }
+    if (remembered) {
+      appendRaw(page, kSettingsPageCap, &used,
+                "<form method=\"POST\" action=\"/disclaimer/clear\" style=\"margin-top:.75rem\""
+                " onsubmit=\"return confirm('Clear saved disclaimer acceptance? "
+                "The next boot will wait for on-screen Accept.');\">"
+                "<button class=\"sm\" type=\"submit\">Clear saved disclaimer acceptance</button>"
+                "</form>");
+    }
+    appendRaw(page, kSettingsPageCap, &used, "</div></details>");
+  }
+
   appendFirmwareUpdateCard(page, &used);
 
   const int tail_n = snprintf(
@@ -1354,6 +1392,11 @@ void handleSettingsPage() {
       "setVal('use_weather',j.use_weather);"
       "setVal('use_openmeteo',j.use_openmeteo);"
       "setVal('weather_units',j.weather_units);"
+      "var ds=document.getElementById('disclaimer_status');"
+      "if(ds&&typeof j.disclaimer_remembered==='boolean'){"
+      "ds.innerHTML=j.disclaimer_remembered"
+      "?'Status: <b>Remembered on this device (5&nbsp;s countdown)</b>'"
+      ":'Status: <b>Not remembered &mdash; wait for Accept each boot</b>';}"
       "if(!first){var n=document.getElementById('sync_note');if(n){"
       "n.style.display='block';clearTimeout(n._t);"
       "n._t=setTimeout(function(){n.style.display='none';},1200);}}"
@@ -1514,6 +1557,16 @@ void handleRouteCacheClear() {
   services::route::clearRamCache();
   const bool ok = services::route_cache::clear();
   redirectToSettings(ok ? "cache_cleared=1" : "cache_err=1");
+}
+
+void handleDisclaimerClear() {
+  if (s_server->method() != HTTP_POST) {
+    s_server->send(405, "text/plain", "Method Not Allowed");
+    return;
+  }
+  services::disclaimer::clear();
+  redirectToSettings("disclaimer_cleared=1");
+  settingsNotifySaved();
 }
 
 bool s_basemap_upload_failed = false;
@@ -2082,7 +2135,8 @@ void handleSettingsApi() {
       "\"fr24_cost_usd\":\"%s\","
       "\"use_weather\":%s,"
       "\"use_openmeteo\":%s,"
-      "\"weather_units\":\"%s\""
+      "\"weather_units\":\"%s\","
+      "\"disclaimer_remembered\":%s"
       "}",
       services::apikeys::useAirLabs() ? "true" : "false",
       services::apikeys::useFlightAware() ? "true" : "false",
@@ -2091,7 +2145,8 @@ void handleSettingsApi() {
       static_cast<unsigned>(services::apikeys::airLabsMaxCalls()), fa_budget, fa_cost,
       fr_budget, fr_cost, services::apikeys::useWeather() ? "true" : "false",
       services::apikeys::useOpenMeteo() ? "true" : "false",
-      services::weather::useImperial() ? "imperial" : "metric");
+      services::weather::useImperial() ? "imperial" : "metric",
+      services::disclaimer::isRemembered() ? "true" : "false");
   if (tail_n <= 0 || static_cast<size_t>(tail_n) >= kApiCap - used) {
     s_server->send(500, "text/plain", "json overflow");
     return;
@@ -2110,6 +2165,7 @@ void registerRoutes() {
   s_server->on("/save", HTTP_POST, handleSave);
   s_server->on("/route_cache.csv", HTTP_GET, handleRouteCacheDownload);
   s_server->on("/route_cache/clear", HTTP_POST, handleRouteCacheClear);
+  s_server->on("/disclaimer/clear", HTTP_POST, handleDisclaimerClear);
   s_server->on("/basemap/upload", HTTP_POST, handleBasemapUploadDone, handleBasemapUpload);
   s_server->on("/basemap/clear", HTTP_POST, handleBasemapClear);
   s_server->on("/basemap/adjust", HTTP_POST, handleBasemapAdjust);

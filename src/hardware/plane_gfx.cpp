@@ -784,6 +784,32 @@ void PlaneGfx::endOffscreen() {
   blitRegionFromBuffer(0, 0, w, h, offscreen_buf_, w);
 }
 
+void PlaneGfx::endOffscreenRegion(int16_t x, int16_t y, int16_t w, int16_t h) {
+  if (!offscreen_active_) {
+    return;
+  }
+  gfx_ = saved_gfx_;
+  hardware_panel_ = saved_hardware_panel_;
+  setFramebuffer(nullptr, 0, 0);
+  offscreen_active_ = false;
+  if (offscreen_buf_ == nullptr || w <= 0 || h <= 0) {
+    return;
+  }
+
+  const int16_t screen_w = static_cast<int16_t>(gfx_->width());
+  const int16_t screen_h = static_cast<int16_t>(gfx_->height());
+  const int16_t x0 = std::max<int16_t>(0, x);
+  const int16_t y0 = std::max<int16_t>(0, y);
+  const int16_t x1 = std::min<int16_t>(screen_w, static_cast<int16_t>(x + w));
+  const int16_t y1 = std::min<int16_t>(screen_h, static_cast<int16_t>(y + h));
+  if (x1 <= x0 || y1 <= y0) {
+    return;
+  }
+  const uint16_t* src =
+      offscreen_buf_ + static_cast<size_t>(y0) * screen_w + x0;
+  blitRegionFromBuffer(x0, y0, x1 - x0, y1 - y0, src, screen_w);
+}
+
 void PlaneGfx::panelFlushBitmap(int16_t x, int16_t y, int16_t w, int16_t h,
                                 const uint16_t* src) {
   if (gfx_ == nullptr || src == nullptr || w <= 0 || h <= 0) {
