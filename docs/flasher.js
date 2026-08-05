@@ -49,6 +49,10 @@ let releaseChoices = [];
 let releaseLoadWarning = "";
 let detectedBoard = null;
 let detectedPortInfo = null;
+let detectedChip = null;
+
+const WAVESHARE_FLIP_USB_MSG =
+  "Wrong chip connected on Waveshare: the secondary ESP32 is selected, not the ESP32-S3. Unplug the USB-C cable, flip the plug 180°, plug it back in, then click Connect again.";
 
 function log(line) {
   const ts = new Date().toLocaleTimeString();
@@ -117,22 +121,53 @@ function detectBoardFromPortInfo(info) {
   return null;
 }
 
+function isEsp32S3Chip(chipName) {
+  return /ESP32-S3/i.test(String(chipName || ""));
+}
+
+/** Classic ESP32 (not S2/S3/C3/…); Waveshare exposes this on the wrong USB-C orientation. */
+function isClassicEsp32Chip(chipName) {
+  const name = String(chipName || "");
+  if (!/ESP32/i.test(name)) {
+    return false;
+  }
+  return !/ESP32-(S2|S3|C2|C3|C6|H2|P4)/i.test(name);
+}
+
+function needsWaveshareCableFlip(chipName = detectedChip) {
+  if (!isClassicEsp32Chip(chipName)) {
+    return false;
+  }
+  const board = resolvedBoard() || detectedBoard;
+  return (
+    board === BOARD_WAVESHARE ||
+    board == null ||
+    els.boardSelect.value === BOARD_AUTO
+  );
+}
+
 function updateBoardStatus() {
   const selected = els.boardSelect.value;
+  const chipNote = detectedChip ? ` Chip: ${detectedChip}.` : "";
+  if (needsWaveshareCableFlip()) {
+    els.boardStatus.textContent = WAVESHARE_FLIP_USB_MSG;
+    return;
+  }
   if (selected !== BOARD_AUTO) {
-    els.boardStatus.textContent = `Manual override: ${BOARD_LABELS[selected]}.`;
+    els.boardStatus.textContent =
+      `Manual override: ${BOARD_LABELS[selected]}.${chipNote}`;
     return;
   }
   if (detectedBoard) {
     const vid = formatUsbId(detectedPortInfo?.usbVendorId);
     const pid = formatUsbId(detectedPortInfo?.usbProductId);
     els.boardStatus.textContent =
-      `Auto detected: ${BOARD_LABELS[detectedBoard]} (USB ${vid}:${pid}). Confirm before flashing.`;
+      `Auto detected: ${BOARD_LABELS[detectedBoard]} (USB ${vid}:${pid}).${chipNote} Confirm before flashing.`;
     return;
   }
   if (port) {
     els.boardStatus.textContent =
-      "Auto could not identify this USB port. Select the board manually before Install.";
+      `Auto could not identify this USB port.${chipNote} Select the board manually before Install.`;
     return;
   }
   els.boardStatus.textContent =
@@ -518,8 +553,37 @@ async function connect() {
     });
 
     log("Connecting…");
-    await esploader.main();
-    log("Chip detected - ready to flash after board confirmation.");
+    detectedChip = String((await esploader.main()) || "");
+    log(`Chip detected: ${detectedChip || "unknown"}`);
+    updateBoardStatus();
+
+    if (needsWaveshareCableFlip(detectedChip)) {
+      log(WAVESHARE_FLIP_USB_MSG);
+      alert(WAVESHARE_FLIP_USB_MSG);
+      await disconnect();
+      els.status.className = "";
+      setStatus("Wrong chip — flip USB-C");
+      els.boardStatus.textContent = WAVESHARE_FLIP_USB_MSG;
+      return;
+    }
+
+    if (
+      (resolvedBoard() === BOARD_WAVESHARE || detectedBoard === BOARD_WAVESHARE) &&
+      !isEsp32S3Chip(detectedChip)
+    ) {
+      const msg =
+        `Waveshare firmware needs ESP32-S3, but connected chip is ${detectedChip || "unknown"}. ` +
+        "If flashing fails, unplug, flip the USB-C plug 180°, and Connect again.";
+      log(msg);
+      alert(msg);
+      await disconnect();
+      els.status.className = "";
+      setStatus("Wrong chip");
+      els.boardStatus.textContent = msg;
+      return;
+    }
+
+    log("Ready to flash after board confirmation.");
     els.status.className = "ok";
     setStatus("Connected");
   } catch (err) {
@@ -546,6 +610,7 @@ async function disconnect() {
   esploader = null;
   detectedBoard = null;
   detectedPortInfo = null;
+  detectedChip = null;
   els.status.className = "";
   setStatus("Not connected");
   setBusy(false);
@@ -699,6 +764,7 @@ navigator.serial?.addEventListener("disconnect", () => {
   esploader = null;
   detectedBoard = null;
   detectedPortInfo = null;
+  detectedChip = null;
   els.status.className = "";
   setStatus("Not connected");
   els.connectBtn.disabled = false;
@@ -716,4 +782,4 @@ updateInstallModeUI();
 loadReleaseOptions();
 log("Ready. Use Chrome or Edge on desktop.");
 log("Auto detection uses USB VID/PID hints; always confirm the board before Install.");
-log("T-Encoder: if the port is missing, hold BOOT and tap RESET. Waveshare: select the CH343 port.");
+log("T-Encoder: if the port is missing, hold BOOT and tap RESET. Waveshare: select the CH343 port; flip USB-C 180° if the secondary ESP32 is detected.");
