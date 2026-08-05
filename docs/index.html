@@ -5,7 +5,7 @@
     <title>FlightScnr Firmware Installer</title>
     <meta
       name="description"
-      content="FlightScnr firmware installer for LilyGO T-Encoder Pro"
+      content="FlightScnr firmware installer for LilyGO T-Encoder Pro and Waveshare Knob Touch LCD 1.8"
     />
     <meta name="viewport" content="width=device-width" />
     <meta name="color-scheme" content="dark light" />
@@ -41,6 +41,18 @@
           Update app only
         </label>
       </fieldset>
+
+      <div class="board-picker">
+        <label for="board-select">Board</label>
+        <select id="board-select">
+          <option value="auto" selected>Auto-detect after Connect</option>
+          <option value="tencoder-pro">LilyGO T-Encoder Pro</option>
+          <option value="waveshare-knob-18">Waveshare Knob Touch LCD 1.8</option>
+        </select>
+      </div>
+      <p class="meta board-status" id="board-status">
+        Auto: connect a board to detect it. You can always override this selection.
+      </p>
 
       <div class="release-picker">
         <label for="release-select">Firmware version</label>
@@ -90,20 +102,25 @@
       <h2>Before you start</h2>
       <ol class="steps">
         <li>Use <strong>Chrome</strong> on a desktop computer or laptop.</li>
-        <li>Connect the <a href="https://www.lilygo.cc/zo4apl">LILYGO T-Encoder Pro</a> board to your computer with a USB cable.</li>
         <li>
-          If the USB port does not appear: push the screen down (<strong>BOOT</strong>) and hold, tap <strong>RESET</strong> on the back of the board,
-          then click <strong>Connect</strong>.
+          Connect either the
+          <a href="https://www.lilygo.cc/zo4apl">LILYGO T-Encoder Pro</a>
+          or the
+          <a href="https://www.waveshare.com/wiki/ESP32-S3-Knob-Touch-LCD-1.8">Waveshare Knob Touch LCD 1.8</a>.
         </li>
         <li>
-          If <strong>Connect</strong> or <strong>Install</strong> fails: hold the screen
-          pressed in (<strong>BOOT</strong>), click <strong>Connect</strong> or
-          <strong>Install</strong> again, and release once flashing begins.
+          T-Encoder: if the USB port does not appear, push the screen down
+          (<strong>BOOT</strong>) and hold, tap <strong>RESET</strong>, then click
+          <strong>Connect</strong>.
         </li>
         <li>
-          Do not hold the screen in while plugging in USB - it is the
-          <strong>BOOT</strong> button (GPIO&nbsp;0) and can enter download mode
-          unintentionally.
+          Waveshare: select its WCH CH343 serial port. If Auto cannot identify it,
+          choose <strong>Waveshare Knob Touch LCD 1.8</strong> manually before Install.
+        </li>
+        <li>
+          Confirm the detected/selected board before flashing. Both use ESP32-S3,
+          so flashing the wrong binary can complete successfully but the display
+          and controls will not work until reflashed correctly.
         </li>
       </ol>
       <br>

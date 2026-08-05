@@ -92,17 +92,22 @@ jobs:
           export PLATFORMIO_BUILD_FLAGS="-D FLIGHTSCNR_FIRMWARE_VERSION=\\\"${RELEASE_TAG}\\\""
           pio run -e tencoder-pro
           pio run -t merge -e tencoder-pro
+          pio run -e waveshare-knob-18
+          pio run -t merge -e waveshare-knob-18
 
       - name: Package release artifacts
         if: steps.tag.outputs.skip != 'true'
         run: |
-          BUILD=".pio/build/tencoder-pro"
+          TENCODER_BUILD=".pio/build/tencoder-pro"
+          WAVESHARE_BUILD=".pio/build/waveshare-knob-18"
           OUT="release"
           mkdir -p "$OUT"
-          cp "$BUILD/firmware-merged.bin" "$OUT/FlightScnr-tencoder-pro-merged.bin"
-          cp "$BUILD/firmware.bin" "$OUT/FlightScnr-tencoder-pro-app.bin"
-          cp "$BUILD/bootloader.bin" "$OUT/bootloader.bin"
-          cp "$BUILD/partitions.bin" "$OUT/partitions.bin"
+          cp "$TENCODER_BUILD/firmware-merged.bin" "$OUT/FlightScnr-tencoder-pro-merged.bin"
+          cp "$TENCODER_BUILD/firmware.bin" "$OUT/FlightScnr-tencoder-pro-app.bin"
+          cp "$WAVESHARE_BUILD/firmware-merged.bin" "$OUT/FlightScnr-waveshare-knob-18-merged.bin"
+          cp "$WAVESHARE_BUILD/firmware.bin" "$OUT/FlightScnr-waveshare-knob-18-app.bin"
+          cp "$TENCODER_BUILD/bootloader.bin" "$OUT/bootloader.bin"
+          cp "$TENCODER_BUILD/partitions.bin" "$OUT/partitions.bin"
           (
             cd "$OUT"
             sha256sum *.bin > SHA256SUMS.txt
@@ -120,40 +125,43 @@ jobs:
           files: |
             release/FlightScnr-tencoder-pro-merged.bin
             release/FlightScnr-tencoder-pro-app.bin
+            release/FlightScnr-waveshare-knob-18-merged.bin
+            release/FlightScnr-waveshare-knob-18-app.bin
             release/bootloader.bin
             release/partitions.bin
             release/SHA256SUMS.txt
           body: |
-            Firmware for **LilyGO T-Encoder Pro** (ESP32-S3, 16 MB flash).
+            Firmware for **LilyGO T-Encoder Pro** and **Waveshare ESP32-S3 Knob Touch LCD 1.8** (ESP32-S3, 16 MB flash).
 
             ### Web install (recommended)
-            Open the [FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/) in **Chrome** or **Edge**, connect USB, and click **Install**. This flashes the full factory image at **0x0** (bootloader, partitions, and app). Wi‑Fi and saved settings are cleared.
+            Open the [FlightScnr WebFlasher](https://yashmulgaonkar.github.io/FlightScnr/) in **Chrome** or **Edge**, connect USB, confirm the auto-detected board (or select it manually), and click **Install**. A full install flashes the factory image at **0x0** and clears Wi-Fi and saved settings.
 
             ### Manual flash
-            **Full factory image** (recommended — WebFlasher **Install**):
+            **Full factory image** (replace `<board>` with `tencoder-pro` or `waveshare-knob-18`):
             ```bash
-            esptool.py --chip esp32s3 write_flash 0x0 FlightScnr-tencoder-pro-merged.bin
+            esptool.py --chip esp32s3 write_flash 0x0 FlightScnr-<board>-merged.bin
             ```
 
             **App-only update** (keeps settings if bootloader/partitions already match):
             ```bash
-            esptool.py --chip esp32s3 write_flash 0x10000 FlightScnr-tencoder-pro-app.bin
+            esptool.py --chip esp32s3 write_flash 0x10000 FlightScnr-<board>-app.bin
             ```
 
             | File | Use |
             | --- | --- |
             | `FlightScnr-tencoder-pro-merged.bin` | Full factory image — flash at **0x0** (WebFlasher **Install**) |
             | `FlightScnr-tencoder-pro-app.bin` | App-only update — flash at **0x10000** (advanced) |
+            | `FlightScnr-waveshare-knob-18-merged.bin` | Waveshare full factory image — flash at **0x0** |
+            | `FlightScnr-waveshare-knob-18-app.bin` | Waveshare app-only update — flash at **0x10000** |
             | `bootloader.bin` / `partitions.bin` | Individual components (advanced) |
             | `SHA256SUMS.txt` | Checksums |
 
-            **Note:** Push the screen in (BOOT) while connecting USB if the port does not appear.
+            **Note:** T-Encoder: push the screen in (BOOT) while connecting if the port does not appear. Waveshare: use its CH343 USB serial port and select the board manually if Auto is uncertain.
 
       - name: Bundle WebFlasher site
         if: steps.tag.outputs.skip != 'true'
         env:
-          MERGED_ASSET: FlightScnr-tencoder-pro-merged.bin
-          APP_ASSET: FlightScnr-tencoder-pro-app.bin
+          BOARDS: tencoder-pro waveshare-knob-18
           RELEASE_NAME: ${{ steps.tag.outputs.name }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
           RELEASE_DIR: release
@@ -192,6 +200,8 @@ jobs:
           test -f site/firmware/archive-index.json
           test -f site/firmware/FlightScnr-tencoder-pro-merged.bin
           test -f site/firmware/FlightScnr-tencoder-pro-app.bin
+          test -f site/firmware/FlightScnr-waveshare-knob-18-merged.bin
+          test -f site/firmware/FlightScnr-waveshare-knob-18-app.bin
           ls -la site/firmware/
           ls -la site/firmware/archive || true
           head -c 400 site/firmware/archive-index.json; echo

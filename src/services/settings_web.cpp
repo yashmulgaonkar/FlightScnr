@@ -207,7 +207,7 @@ void appendFirmwareUpdateCard(char* page, size_t* used) {
       "<button id=\"fw_install\" class=\"sm\" type=\"button\"%s>Install latest</button></p>"
       "<div class=\"banner\" style=\"background:#3d1414;border-color:#c33;margin-top:.75rem\">"
       "<b>Warning.</b> Installs the published <b>app image</b> only "
-      "(<code>FlightScnr-tencoder-pro-app.bin</code>) &mdash; not the merged factory "
+      "(<code>FlightScnr-" FLIGHTSCNR_BOARD_NAME "-app.bin</code>) &mdash; not the merged factory "
       "image. Keep power connected. After success, press the device&rsquo;s "
       "<b>reset button</b> (or unplug/replug) to boot the new firmware.</div>"
       "<label for=\"fw_file\" style=\"margin-top:.6rem\">Manual upload (optional)</label>"

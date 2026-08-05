@@ -1,3 +1,8 @@
+:root {
+  /* Let native controls (select popups) follow the page theme. */
+  color-scheme: light dark;
+}
+
 body {
   font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto,
     Ubuntu, sans-serif;
@@ -87,7 +92,8 @@ a {
   margin: 1.5em 0 0.75em;
 }
 
-.release-picker {
+.release-picker,
+.board-picker {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
@@ -96,11 +102,13 @@ a {
   margin: 1.1em 0 0;
 }
 
-.release-picker label {
+.release-picker label,
+.board-picker label {
   font-size: 0.95rem;
 }
 
-.release-picker select {
+.release-picker select,
+.board-picker select {
   min-width: min(24rem, calc(100vw - 40px));
   max-width: 100%;
   font: inherit;
@@ -112,9 +120,15 @@ a {
   color: inherit;
 }
 
-.release-picker select:disabled {
+.release-picker select:disabled,
+.board-picker select:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.board-status {
+  text-align: center;
+  margin: 0.45em auto 0;
 }
 
 button,
@@ -298,9 +312,16 @@ progress {
     color: #fff;
   }
 
-  .release-picker select {
+  .release-picker select,
+  .board-picker select {
     border-color: #555;
     background: #444;
+    color: #fff;
+  }
+
+  .release-picker select option,
+  .board-picker select option {
+    background: #333;
     color: #fff;
   }
 

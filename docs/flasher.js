@@ -1,7 +1,13 @@
 import { ESPLoader, Transport } from "./vendor/esptool-js.bundle.js";
 
-const MERGED_ASSET = "FlightScnr-tencoder-pro-merged.bin";
-const APP_ASSET = "FlightScnr-tencoder-pro-app.bin";
+const BOARD_AUTO = "auto";
+const BOARD_TENCODER = "tencoder-pro";
+const BOARD_WAVESHARE = "waveshare-knob-18";
+const BOARD_LABELS = {
+  [BOARD_TENCODER]: "LilyGO T-Encoder Pro",
+  [BOARD_WAVESHARE]: "Waveshare Knob Touch LCD 1.8",
+};
+const BOARD_STORAGE_KEY = "flightscnr-webflasher-board";
 const FULL_FLASH_OFFSET = 0;
 const APP_FLASH_OFFSET = 0x10000;
 const FIRMWARE_BASE = "./firmware";
@@ -20,6 +26,8 @@ const els = {
   installModeFull: document.getElementById("install-mode-full"),
   installModeApp: document.getElementById("install-mode-app"),
   installModeAppLabel: document.getElementById("install-mode-app-label"),
+  boardSelect: document.getElementById("board-select"),
+  boardStatus: document.getElementById("board-status"),
   releaseSelect: document.getElementById("release-select"),
   status: document.getElementById("status"),
   releaseMeta: document.getElementById("release-meta"),
@@ -39,6 +47,8 @@ let chipErased = false;
 let bundledManifestPromise = null;
 let releaseChoices = [];
 let releaseLoadWarning = "";
+let detectedBoard = null;
+let detectedPortInfo = null;
 
 function log(line) {
   const ts = new Date().toLocaleTimeString();
@@ -77,12 +87,62 @@ function selectedRelease() {
   );
 }
 
+function resolvedBoard() {
+  return els.boardSelect.value === BOARD_AUTO ? detectedBoard : els.boardSelect.value;
+}
+
+function selectedBoardParts(release = selectedRelease()) {
+  const board = resolvedBoard();
+  return board && release?.boards ? release.boards[board] ?? null : null;
+}
+
 function releaseAllowsAppInstall(release = selectedRelease()) {
-  return Boolean(release?.allowAppOnly && release?.appPart);
+  const parts = selectedBoardParts(release);
+  return Boolean(parts?.allowAppOnly && parts?.appPart);
+}
+
+function formatUsbId(value) {
+  return typeof value === "number"
+    ? `0x${value.toString(16).toUpperCase().padStart(4, "0")}`
+    : "unknown";
+}
+
+function detectBoardFromPortInfo(info) {
+  if (info?.usbVendorId === 0x1a86) {
+    return BOARD_WAVESHARE;
+  }
+  if (info?.usbVendorId === 0x303a) {
+    return BOARD_TENCODER;
+  }
+  return null;
+}
+
+function updateBoardStatus() {
+  const selected = els.boardSelect.value;
+  if (selected !== BOARD_AUTO) {
+    els.boardStatus.textContent = `Manual override: ${BOARD_LABELS[selected]}.`;
+    return;
+  }
+  if (detectedBoard) {
+    const vid = formatUsbId(detectedPortInfo?.usbVendorId);
+    const pid = formatUsbId(detectedPortInfo?.usbProductId);
+    els.boardStatus.textContent =
+      `Auto detected: ${BOARD_LABELS[detectedBoard]} (USB ${vid}:${pid}). Confirm before flashing.`;
+    return;
+  }
+  if (port) {
+    els.boardStatus.textContent =
+      "Auto could not identify this USB port. Select the board manually before Install.";
+    return;
+  }
+  els.boardStatus.textContent =
+    "Auto: connect a board to detect it. You can always override this selection.";
 }
 
 function updateReleaseMeta() {
   const release = selectedRelease();
+  const board = resolvedBoard();
+  const boardParts = selectedBoardParts(release);
   if (!release) {
     els.releaseMeta.textContent = "Loading firmware releases...";
     els.releaseHelp.textContent = "";
@@ -94,7 +154,10 @@ function updateReleaseMeta() {
   const details = [
     release.name || release.version,
     formatPublishedDate(release.publishedAt),
-    `${formatSizeMb(release.fullPart?.size)} full image`,
+    board ? BOARD_LABELS[board] : "board not resolved",
+    boardParts?.fullPart
+      ? `${formatSizeMb(boardParts.fullPart.size)} full image`
+      : null,
   ].filter(Boolean);
   els.releaseMeta.textContent = `${prefix}: ${details.join(" | ")}`;
 
@@ -102,34 +165,50 @@ function updateReleaseMeta() {
   if (chipErased) {
     notes.push("Chip erase in this session requires Full install.");
   }
-  if (isLatest) {
+  if (isLatest && boardParts?.appPart) {
     notes.push("Latest release supports both Full install and Update app only.");
-  } else if (release.appPart) {
+  } else if (isLatest && boardParts?.fullPart) {
+    notes.push("This board only has a Full installer in the selected release.");
+  } else if (!isLatest && boardParts?.fullPart) {
     notes.push("Historical releases use Full install only for safety.");
   } else {
-    notes.push("This historical release only includes a full-image installer.");
+    notes.push("Choose another board or firmware version.");
   }
   if (releaseLoadWarning) {
     notes.push(releaseLoadWarning);
+  }
+  if (!board) {
+    notes.push("Connect for Auto detection or choose a board manually.");
+  } else if (!boardParts?.fullPart) {
+    notes.push(`This release has no ${BOARD_LABELS[board]} firmware.`);
   }
   els.releaseHelp.textContent = notes.join(" ");
 }
 
 function getInstallMode() {
-  if (chipErased || els.installModeApp.disabled) {
+  if (chipErased || !releaseAllowsAppInstall()) {
     return "full";
   }
   return els.installModeApp.checked ? "app" : "full";
 }
 
 function updateInstallModeUI() {
-  const appDisabled = busy || chipErased || !releaseAllowsAppInstall();
+  const parts = selectedBoardParts();
+  const boardReady = Boolean(resolvedBoard() && parts?.fullPart);
+  const appUnavailable = chipErased || !releaseAllowsAppInstall();
   els.installModeFull.disabled = busy;
-  els.installModeApp.disabled = appDisabled;
-  els.installModeAppLabel.classList.toggle("disabled", appDisabled);
-  if (appDisabled) {
+  els.installModeApp.disabled = busy || appUnavailable;
+  els.installModeAppLabel.classList.toggle(
+    "disabled",
+    busy || appUnavailable,
+  );
+  // Only fall back to Full when app-only is genuinely unavailable; a busy flash
+  // must keep showing the mode the user picked.
+  if (appUnavailable) {
     els.installModeFull.checked = true;
   }
+  els.flashLatestBtn.disabled = busy || port === null || !boardReady;
+  updateBoardStatus();
   updateReleaseMeta();
 }
 
@@ -137,9 +216,10 @@ function setBusy(value) {
   busy = value;
   els.connectBtn.disabled = value || port !== null;
   els.disconnectBtn.disabled = value || port === null;
-  els.flashLatestBtn.disabled = value || port === null;
+  els.flashLatestBtn.disabled = value || port === null || !selectedBoardParts()?.fullPart;
   els.eraseBtn.disabled = value || port === null;
   els.releaseSelect.disabled = value || releaseChoices.length <= 1;
+  els.boardSelect.disabled = value;
   if (value) {
     setStatus("Working…");
     els.status.className = "";
@@ -165,19 +245,20 @@ function clearProgress() {
   els.progressLabel.textContent = "";
 }
 
-function manifestPart(manifest, mode) {
-  const parts = manifest.builds?.[0]?.parts ?? [];
+function manifestPart(build, mode) {
+  const parts = build?.parts ?? [];
   if (mode === "app") {
     return (
       parts.find((part) => part.role === "app") ??
       parts.find((part) => /app/i.test(part.path ?? "")) ??
-      { path: APP_ASSET, offset: APP_FLASH_OFFSET }
+      null
     );
   }
   return (
     parts.find((part) => part.role === "full") ??
     parts.find((part) => /merged/i.test(part.path ?? "")) ??
-    parts[0] ?? { path: MERGED_ASSET, offset: FULL_FLASH_OFFSET }
+    parts[0] ??
+    null
   );
 }
 
@@ -195,35 +276,80 @@ async function loadFirmwareManifest() {
 }
 
 function buildBundledRelease(manifest) {
-  const fullPart = manifestPart(manifest, "full");
-  const appPart = manifestPart(manifest, "app");
+  const manifestBoards = manifest.boards ?? {};
+  // Backward compatibility with the old single-board manifest.
+  if (!manifestBoards[BOARD_TENCODER] && manifest.builds?.[0]) {
+    manifestBoards[BOARD_TENCODER] = manifest.builds[0];
+  }
+  const boards = {};
+  for (const board of [BOARD_TENCODER, BOARD_WAVESHARE]) {
+    const build =
+      manifestBoards[board] ??
+      manifest.builds?.find((candidate) => candidate.board === board);
+    const fullPart = manifestPart(build, "full");
+    const appPart = manifestPart(build, "app");
+    if (!fullPart?.path) {
+      continue;
+    }
+    boards[board] = {
+      allowAppOnly: Boolean(appPart?.path),
+      fullPart: {
+        url: `${FIRMWARE_BASE}/${fullPart.path}`,
+        offset: fullPart.offset ?? FULL_FLASH_OFFSET,
+        size: fullPart.size ?? manifest.size ?? null,
+        label: fullPart.path,
+      },
+      appPart: appPart?.path
+        ? {
+            url: `${FIRMWARE_BASE}/${appPart.path}`,
+            offset: appPart.offset ?? APP_FLASH_OFFSET,
+            size: appPart.size ?? null,
+            label: appPart.path,
+          }
+        : null,
+    };
+  }
   return {
     id: BUNDLED_RELEASE_ID,
     source: "bundled",
     name: manifest.name || manifest.version || "Latest release",
     version: manifest.version || "",
     publishedAt: null,
-    allowAppOnly: Boolean(appPart?.path),
-    fullPart: {
-      url: `${FIRMWARE_BASE}/${fullPart.path}`,
-      offset: fullPart.offset ?? FULL_FLASH_OFFSET,
-      size: fullPart.size ?? manifest.size ?? null,
-      label: fullPart.path,
-    },
-    appPart: appPart?.path
-      ? {
-          url: `${FIRMWARE_BASE}/${appPart.path}`,
-          offset: appPart.offset ?? APP_FLASH_OFFSET,
-          size: appPart.size ?? null,
-          label: appPart.path,
-        }
-      : null,
+    boards,
   };
 }
 
 /** Historical builds must be same-origin; GitHub release CDN blocks browser CORS. */
 function buildArchivedRelease(entry) {
-  if (!entry?.version || !entry?.merged) {
+  if (!entry?.version) {
+    return null;
+  }
+  const archivedBoards = entry.boards ?? {};
+  // Backward compatibility with old archive-index.json.
+  if (!archivedBoards[BOARD_TENCODER] && entry.merged) {
+    archivedBoards[BOARD_TENCODER] = {
+      merged: entry.merged,
+      merged_size: entry.merged_size,
+    };
+  }
+  const boards = {};
+  for (const board of [BOARD_TENCODER, BOARD_WAVESHARE]) {
+    const archived = archivedBoards[board];
+    if (!archived?.merged) {
+      continue;
+    }
+    boards[board] = {
+      allowAppOnly: false,
+      fullPart: {
+        url: `${FIRMWARE_BASE}/${archived.merged}`,
+        offset: FULL_FLASH_OFFSET,
+        size: archived.merged_size ?? null,
+        label: `FlightScnr-${board}-merged.bin`,
+      },
+      appPart: null,
+    };
+  }
+  if (Object.keys(boards).length === 0) {
     return null;
   }
   return {
@@ -232,14 +358,7 @@ function buildArchivedRelease(entry) {
     name: entry.version,
     version: entry.version,
     publishedAt: entry.published_at || null,
-    allowAppOnly: false,
-    fullPart: {
-      url: `${FIRMWARE_BASE}/${entry.merged}`,
-      offset: FULL_FLASH_OFFSET,
-      size: entry.merged_size ?? null,
-      label: MERGED_ASSET,
-    },
-    appPart: null,
+    boards,
   };
 }
 
@@ -325,17 +444,24 @@ async function loadReleaseOptions() {
 
 async function fetchFirmwareForInstall(mode) {
   const release = selectedRelease();
+  const board = resolvedBoard();
   if (!release) {
     throw new Error("No firmware release is selected");
   }
-  const part = mode === "app" ? release.appPart : release.fullPart;
+  if (!board) {
+    throw new Error("Auto could not identify the board; select it manually");
+  }
+  const boardParts = selectedBoardParts(release);
+  const part = mode === "app" ? boardParts?.appPart : boardParts?.fullPart;
   if (!part?.url) {
-    throw new Error("Selected release does not have the requested installer");
+    throw new Error(
+      `Selected release does not have the requested ${BOARD_LABELS[board]} installer`,
+    );
   }
 
   const releaseLabel = release.version || release.name || part.label;
   log(
-    `Downloading ${releaseLabel} (${mode === "app" ? "app-only" : "full install"})…`,
+    `Downloading ${releaseLabel} for ${BOARD_LABELS[board]} (${mode === "app" ? "app-only" : "full install"})…`,
   );
   const resp = await fetch(part.url, { cache: "no-store" });
   if (!resp.ok) {
@@ -364,6 +490,21 @@ async function connect() {
   try {
     log("Requesting serial port…");
     port = await navigator.serial.requestPort();
+    detectedPortInfo =
+      typeof port.getInfo === "function" ? port.getInfo() : {};
+    detectedBoard = detectBoardFromPortInfo(detectedPortInfo);
+    const vid = formatUsbId(detectedPortInfo?.usbVendorId);
+    const pid = formatUsbId(detectedPortInfo?.usbProductId);
+    if (detectedBoard) {
+      log(
+        `USB ${vid}:${pid} suggests ${BOARD_LABELS[detectedBoard]}. Confirm the board before Install.`,
+      );
+    } else {
+      log(
+        `USB ${vid}:${pid} is ambiguous. Select T-Encoder Pro or Waveshare manually.`,
+      );
+    }
+    updateBoardStatus();
     transport = new Transport(port, true);
     esploader = new ESPLoader({
       transport,
@@ -378,12 +519,12 @@ async function connect() {
 
     log("Connecting…");
     await esploader.main();
-    log("Chip detected - ready to flash.");
+    log("Chip detected - ready to flash after board confirmation.");
     els.status.className = "ok";
     setStatus("Connected");
   } catch (err) {
     log(`Connect failed: ${err.message || err}`);
-    log("Push the screen down (BOOT) and hold, tap RESET on the back of the board, then try Connect again.");
+    log("T-Encoder: hold BOOT and tap RESET. Waveshare: confirm the CH343 serial port, then try Connect again.");
     await disconnect();
   } finally {
     setBusy(false);
@@ -403,9 +544,12 @@ async function disconnect() {
   port = null;
   transport = null;
   esploader = null;
+  detectedBoard = null;
+  detectedPortInfo = null;
   els.status.className = "";
   setStatus("Not connected");
   setBusy(false);
+  updateBoardStatus();
   log("Disconnected.");
 }
 
@@ -458,13 +602,13 @@ async function runFlash(getData, label) {
   try {
     const payload = await getData();
     if (payload && typeof payload === "object" && payload.data) {
-      await flashBinary(payload.data, label, payload.offset);
+      await flashBinary(payload.data, payload.label || label, payload.offset);
     } else {
       await flashBinary(payload, label);
     }
   } catch (err) {
     log(`Flash failed: ${err.message || err}`);
-    log("Push the screen down (BOOT) and hold, tap RESET on the back of the board, then try Install again.");
+    log("Confirm the selected board. T-Encoder: hold BOOT and tap RESET. Waveshare: confirm the CH343 port, then retry.");
     clearProgress();
   } finally {
     setBusy(false);
@@ -506,10 +650,23 @@ async function runErase() {
 els.connectBtn.addEventListener("click", connect);
 els.disconnectBtn.addEventListener("click", disconnect);
 els.releaseSelect.addEventListener("change", updateInstallModeUI);
+els.boardSelect.addEventListener("change", () => {
+  const selected = els.boardSelect.value;
+  if (selected === BOARD_AUTO) {
+    localStorage.removeItem(BOARD_STORAGE_KEY);
+  } else {
+    localStorage.setItem(BOARD_STORAGE_KEY, selected);
+    log(`Board override: ${BOARD_LABELS[selected]}.`);
+  }
+  updateInstallModeUI();
+});
 
 els.flashLatestBtn.addEventListener("click", () => {
   const mode = getInstallMode();
-  const label = mode === "app" ? APP_ASSET : MERGED_ASSET;
+  const board = resolvedBoard();
+  const label = board
+    ? `FlightScnr-${board}-${mode === "app" ? "app" : "merged"}.bin`
+    : "FlightScnr firmware";
   runFlash(() => fetchFirmwareForInstall(mode), label);
 });
 
@@ -540,16 +697,23 @@ navigator.serial?.addEventListener("disconnect", () => {
   port = null;
   transport = null;
   esploader = null;
+  detectedBoard = null;
+  detectedPortInfo = null;
   els.status.className = "";
   setStatus("Not connected");
   els.connectBtn.disabled = false;
   els.disconnectBtn.disabled = true;
   els.flashLatestBtn.disabled = true;
   els.eraseBtn.disabled = true;
+  updateBoardStatus();
 });
 
+const savedBoard = localStorage.getItem(BOARD_STORAGE_KEY);
+if (savedBoard === BOARD_TENCODER || savedBoard === BOARD_WAVESHARE) {
+  els.boardSelect.value = savedBoard;
+}
 updateInstallModeUI();
 loadReleaseOptions();
 log("Ready. Use Chrome or Edge on desktop.");
-log("If the port is missing: push the screen down (BOOT) and hold, tap RESET on the back of the board, then Connect.");
-log("If Connect or Install fails: hold the screen in (BOOT) and retry until flashing starts.");
+log("Auto detection uses USB VID/PID hints; always confirm the board before Install.");
+log("T-Encoder: if the port is missing, hold BOOT and tap RESET. Waveshare: select the CH343 port.");

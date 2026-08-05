@@ -109,13 +109,13 @@ pio run -e waveshare-knob-18 -t upload   # Waveshare Knob Touch LCD 1.8
 
 On Waveshare, USB-C plug **orientation** matters (CH334 hub). If esptool reports the wrong chip, flip the cable.
 
-**WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) - Connect → choose the latest or an older release → Install. Older releases are offered as full installs for safer downgrades. Hold screen (**BOOT**) if the port doesn’t appear.
+**WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) supports both boards. Connect → confirm the Auto-detected board (or select it manually) → choose a release → Install. Browser Auto uses USB VID/PID hints and can be uncertain, so always confirm the board. Older releases may be T-Encoder-only and are offered as full installs for safer downgrades.
 
 ### Firmware update over Wi‑Fi (OTA)
 
 Once the unit is on your network, open the web settings page (`http://flightscnr-xxxx.local/` or the device IP):
 
-1. **Firmware update** card → **Check GitHub** / **Install latest** to pull `FlightScnr-tencoder-pro-app.bin` from the latest [GitHub release](https://github.com/yashmulgaonkar/FlightScnr/releases) (app image only — not the merged factory file).
+1. **Firmware update** card → **Check GitHub** / **Install latest** to pull the board-specific app image (`FlightScnr-tencoder-pro-app.bin` or `FlightScnr-waveshare-knob-18-app.bin`) from the latest [GitHub release](https://github.com/yashmulgaonkar/FlightScnr/releases) (app image only — not the merged factory file).
 2. Or upload an app `.bin` manually (same card).
 3. After a successful install, **press the device reset button** (or power-cycle). Do not rely on a soft reboot.
 

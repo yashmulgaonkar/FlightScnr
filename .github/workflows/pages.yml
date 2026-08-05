@@ -33,8 +33,7 @@ jobs:
 
       - name: Download latest release firmware
         env:
-          MERGED_ASSET: FlightScnr-tencoder-pro-merged.bin
-          APP_ASSET: FlightScnr-tencoder-pro-app.bin
+          BOARDS: tencoder-pro waveshare-knob-18
           ARCHIVE_COUNT: "12"
         run: |
           set -euo pipefail
