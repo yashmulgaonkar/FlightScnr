@@ -12,6 +12,7 @@
 #include "config.h"
 #include "services/route_cache_store.h"
 #include "hardware/buzzer.h"
+#include "hardware/board_marker.h"
 #include "hardware/display.h"
 #include "hardware/plane_gfx.h"
 #include "hardware/display_brightness.h"
@@ -1980,7 +1981,7 @@ void setup() {
                 resetReasonName(), config::kFirmwareVersion, config::kOvernightPerfLog ? 1 : 0,
                 config::kRadarResumeDebug ? 1 : 0, config::kDiagLogIntervalMs / 1000UL,
                 config::kDiagSlowLoopMs);
-  Serial.printf("FlightScnr (%s)\n", FLIGHTSCNR_BOARD_NAME);
+  Serial.printf("FlightScnr (%s)\n", kFlightScnrBoardMarker + 8);
 
   // The ADS-B fetch worker is pinned to core 0 so its CPU-bound mbedTLS handshake
   // never stalls the render loop on core 1. That heavy crypto, together with the

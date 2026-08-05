@@ -45,14 +45,15 @@
       <div class="board-picker">
         <label for="board-select">Board</label>
         <select id="board-select">
-          <option value="auto" selected>Auto (both boards share one USB ID — pick manually)</option>
+          <option value="auto" selected>Auto (detect from flash / FlightScnr marker)</option>
           <option value="tencoder-pro">LilyGO T-Encoder Pro</option>
           <option value="waveshare-knob-18">Waveshare Knob Touch LCD 1.8</option>
         </select>
       </div>
       <p class="meta board-status" id="board-status">
-        Select your board. Both boards expose the same ESP32-S3 USB ID, so Auto cannot
-        tell them apart; your choice is remembered.
+        Auto probes the connected chip after Connect (FlightScnr board marker, then
+        flash manufacturer). Confirm before Install — USB IDs alone cannot tell the
+        boards apart.
       </p>
 
       <div class="release-picker">
@@ -120,10 +121,11 @@
           <strong>ESP32</strong>, unplug, flip the cable 180°, and Connect again.
         </li>
         <li>
-          Pick your board in the <strong>Board</strong> list. Both boards identify as the
-          same ESP32-S3 USB device, so this cannot be detected automatically. Flashing
-          the wrong binary can succeed but leaves the display and controls dead until
-          reflashed correctly.
+          Leave <strong>Board</strong> on Auto, or pick manually. USB IDs alone cannot
+          tell the boards apart; after Connect, Auto looks for a FlightScnr board marker
+          in flash, then suggests a board from the SPI flash manufacturer. Always confirm
+          before Install — flashing the wrong binary can succeed but leaves the display
+          and controls dead until reflashed correctly.
         </li>
       </ol>
       <br>

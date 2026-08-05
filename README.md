@@ -109,7 +109,7 @@ pio run -e waveshare-knob-18 -t upload   # Waveshare Knob Touch LCD 1.8
 
 On Waveshare, USB-C plug **orientation** matters (CH334 hub). If esptool reports the wrong chip, flip the cable.
 
-**WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) supports both boards. Connect → confirm the Auto-detected board (or select it manually) → choose a release → Install. Browser Auto uses USB VID/PID hints and can be uncertain, so always confirm the board. Older releases may be T-Encoder-only and are offered as full installs for safer downgrades.
+**WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) supports both boards. Connect → confirm the Auto-detected board (or select it manually) → choose a release → Install. USB VID/PID alone cannot tell the boards apart (both use Espressif native USB `0x303A:0x1001`). Auto instead looks for a FlightScnr board marker already in flash, then falls back to the SPI flash manufacturer as a hint (Boya → Waveshare, Winbond → T-Encoder on known units). Always confirm before Install. Older releases may be T-Encoder-only and are offered as full installs for safer downgrades.
 
 ### Firmware update over Wi‑Fi (OTA)
 

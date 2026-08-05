@@ -10,6 +10,24 @@ const BOARD_LABELS = {
 const BOARD_STORAGE_KEY = "flightscnr-webflasher-board";
 const FULL_FLASH_OFFSET = 0;
 const APP_FLASH_OFFSET = 0x10000;
+/** Must match the magic in src/hardware/board_marker.cpp. */
+const BOARD_MARKER_MAGIC = "FSBRDMK:";
+/** How far into the app partition to search for the board marker. */
+const BOARD_MARKER_SEARCH_BYTES = 1024 * 1024;
+const BOARD_MARKER_CHUNK = 64 * 1024;
+/**
+ * SPI flash manufacturer ID → board hint. Observed on known units; suppliers
+ * can change between production runs, so this is never treated as definitive.
+ * 0x68 = Boya (Waveshare Knob 1.8), 0xEF = Winbond (LilyGO T-Encoder Pro).
+ */
+const FLASH_MFG_BOARD_HINT = {
+  0x68: BOARD_WAVESHARE,
+  0xef: BOARD_TENCODER,
+};
+const FLASH_MFG_NAMES = {
+  0x68: "Boya",
+  0xef: "Winbond",
+};
 const FIRMWARE_BASE = "./firmware";
 const MANIFEST_URL = `${FIRMWARE_BASE}/manifest.json`;
 const ARCHIVE_INDEX_URL = `${FIRMWARE_BASE}/archive-index.json`;
@@ -48,6 +66,9 @@ let bundledManifestPromise = null;
 let releaseChoices = [];
 let releaseLoadWarning = "";
 let detectedBoard = null;
+/** How detectedBoard was chosen: "marker" | "flash" | "usb" | null. */
+let detectedBoardSource = null;
+let detectedFlashMfg = null;
 let detectedPortInfo = null;
 let detectedChip = null;
 
@@ -128,6 +149,85 @@ function isEspressifNativeUsb(info) {
   return info?.usbVendorId === 0x303a;
 }
 
+function isKnownBoardId(id) {
+  return id === BOARD_TENCODER || id === BOARD_WAVESHARE;
+}
+
+/** Scan a Uint8Array for "FSBRDMK:<board-id>" written by board_marker.cpp. */
+function parseBoardMarker(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    return null;
+  }
+  const magic = BOARD_MARKER_MAGIC;
+  outer: for (let i = 0; i + magic.length < bytes.length; i++) {
+    for (let j = 0; j < magic.length; j++) {
+      if (bytes[i + j] !== magic.charCodeAt(j)) {
+        continue outer;
+      }
+    }
+    let id = "";
+    for (
+      let k = i + magic.length;
+      k < bytes.length && k < i + magic.length + 24;
+      k++
+    ) {
+      const c = bytes[k];
+      if (c === 0) {
+        break;
+      }
+      if (c < 32 || c > 126) {
+        break;
+      }
+      id += String.fromCharCode(c);
+    }
+    if (isKnownBoardId(id)) {
+      return id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Read the app partition looking for a FlightScnr board marker. Returns the
+ * board id, or null when the chip is blank / running non-FlightScnr firmware.
+ */
+async function detectBoardFromMarker(loader) {
+  if (!loader || typeof loader.readFlash !== "function") {
+    return null;
+  }
+  const overlap = BOARD_MARKER_MAGIC.length;
+  let offset = 0;
+  while (offset < BOARD_MARKER_SEARCH_BYTES) {
+    const len = Math.min(BOARD_MARKER_CHUNK, BOARD_MARKER_SEARCH_BYTES - offset);
+    const chunk = await loader.readFlash(APP_FLASH_OFFSET + offset, len);
+    const board = parseBoardMarker(chunk);
+    if (board) {
+      return board;
+    }
+    if (offset + len >= BOARD_MARKER_SEARCH_BYTES) {
+      break;
+    }
+    offset += Math.max(1, len - overlap);
+  }
+  return null;
+}
+
+/**
+ * Map SPI flash manufacturer byte to a board hint. Non-authoritative — see
+ * FLASH_MFG_BOARD_HINT.
+ */
+async function detectBoardFromFlashId(loader) {
+  if (!loader || typeof loader.readFlashId !== "function") {
+    return { board: null, mfg: null };
+  }
+  const flashId = await loader.readFlashId();
+  const mfg = flashId & 0xff;
+  return {
+    board: FLASH_MFG_BOARD_HINT[mfg] ?? null,
+    mfg,
+  };
+}
+
 function isEsp32S3Chip(chipName) {
   return /ESP32-S3/i.test(String(chipName || ""));
 }
@@ -165,7 +265,20 @@ function updateBoardStatus() {
       `Manual override: ${BOARD_LABELS[selected]}.${chipNote}`;
     return;
   }
-  if (detectedBoard) {
+  if (detectedBoard && detectedBoardSource === "marker") {
+    els.boardStatus.textContent =
+      `Auto detected: ${BOARD_LABELS[detectedBoard]} (FlightScnr board marker in flash).${chipNote} Confirm before flashing.`;
+    return;
+  }
+  if (detectedBoard && detectedBoardSource === "flash") {
+    const mfgName =
+      FLASH_MFG_NAMES[detectedFlashMfg] ||
+      `0x${(detectedFlashMfg ?? 0).toString(16).toUpperCase()}`;
+    els.boardStatus.textContent =
+      `Auto suggests: ${BOARD_LABELS[detectedBoard]} (${mfgName} flash chip — suppliers can vary).${chipNote} Confirm before flashing.`;
+    return;
+  }
+  if (detectedBoard && detectedBoardSource === "usb") {
     const vid = formatUsbId(detectedPortInfo?.usbVendorId);
     const pid = formatUsbId(detectedPortInfo?.usbProductId);
     els.boardStatus.textContent =
@@ -176,16 +289,16 @@ function updateBoardStatus() {
     const vid = formatUsbId(detectedPortInfo?.usbVendorId);
     const pid = formatUsbId(detectedPortInfo?.usbProductId);
     els.boardStatus.textContent =
-      `Both boards report the same ESP32-S3 native USB (${vid}:${pid}), so Auto cannot tell them apart.${chipNote} Select your board manually before Install.`;
+      `Both boards report the same ESP32-S3 native USB (${vid}:${pid}), so USB alone cannot tell them apart.${chipNote} Select your board manually before Install.`;
     return;
   }
   if (port) {
     els.boardStatus.textContent =
-      `Auto could not identify this USB port.${chipNote} Select the board manually before Install.`;
+      `Auto could not identify this board.${chipNote} Select the board manually before Install.`;
     return;
   }
   els.boardStatus.textContent =
-    "Auto: connect a board to detect it. You can always override this selection.";
+    "Auto: connect a board to detect it from the FlightScnr marker or flash chip. You can always override this selection.";
 }
 
 function updateReleaseMeta() {
@@ -541,20 +654,25 @@ async function connect() {
     port = await navigator.serial.requestPort();
     detectedPortInfo =
       typeof port.getInfo === "function" ? port.getInfo() : {};
-    detectedBoard = detectBoardFromPortInfo(detectedPortInfo);
+    detectedBoard = null;
+    detectedBoardSource = null;
+    detectedFlashMfg = null;
+    const usbBoard = detectBoardFromPortInfo(detectedPortInfo);
     const vid = formatUsbId(detectedPortInfo?.usbVendorId);
     const pid = formatUsbId(detectedPortInfo?.usbProductId);
-    if (detectedBoard) {
+    if (usbBoard) {
+      detectedBoard = usbBoard;
+      detectedBoardSource = "usb";
       log(
-        `USB ${vid}:${pid} suggests ${BOARD_LABELS[detectedBoard]}. Confirm the board before Install.`,
+        `USB ${vid}:${pid} suggests ${BOARD_LABELS[usbBoard]}. Confirm the board before Install.`,
       );
     } else if (isEspressifNativeUsb(detectedPortInfo)) {
       log(
-        `USB ${vid}:${pid} is the ESP32-S3 native USB used by both boards. Select T-Encoder Pro or Waveshare manually.`,
+        `USB ${vid}:${pid} is the ESP32-S3 native USB used by both boards — probing flash for identity…`,
       );
     } else {
       log(
-        `USB ${vid}:${pid} is ambiguous. Select T-Encoder Pro or Waveshare manually.`,
+        `USB ${vid}:${pid} is ambiguous — probing flash for identity…`,
       );
     }
     updateBoardStatus();
@@ -601,7 +719,54 @@ async function connect() {
       return;
     }
 
-    log("Ready to flash after board confirmation.");
+    // Fast hint from SPI flash vendor, then upgrade to definitive board marker.
+    try {
+      const { board, mfg } = await detectBoardFromFlashId(esploader);
+      detectedFlashMfg = mfg;
+      const mfgHex =
+        typeof mfg === "number"
+          ? `0x${mfg.toString(16).toUpperCase().padStart(2, "0")}`
+          : "unknown";
+      const mfgName = FLASH_MFG_NAMES[mfg] || mfgHex;
+      if (board && !detectedBoard) {
+        detectedBoard = board;
+        detectedBoardSource = "flash";
+        log(
+          `Flash manufacturer ${mfgName} (${mfgHex}) suggests ${BOARD_LABELS[board]}. ` +
+            "Confirm before Install — flash vendors can vary between units.",
+        );
+        updateBoardStatus();
+      } else if (!board) {
+        log(
+          `Flash manufacturer ${mfgName} (${mfgHex}) is not mapped to a board.`,
+        );
+      }
+    } catch (err) {
+      log(`Flash ID read failed: ${err.message || err}`);
+    }
+
+    try {
+      log("Looking for FlightScnr board marker in flash (may take a few seconds)…");
+      const markerBoard = await detectBoardFromMarker(esploader);
+      if (markerBoard) {
+        detectedBoard = markerBoard;
+        detectedBoardSource = "marker";
+        log(
+          `Found board marker: ${BOARD_LABELS[markerBoard]}. Confirm before Install.`,
+        );
+      } else {
+        log("No FlightScnr board marker found (blank chip or older firmware).");
+      }
+    } catch (err) {
+      log(`Board marker read failed: ${err.message || err}`);
+    }
+
+    updateBoardStatus();
+    log(
+      detectedBoard
+        ? "Ready to flash after board confirmation."
+        : "Ready — select your board manually, then Install.",
+    );
     els.status.className = "ok";
     setStatus("Connected");
   } catch (err) {
@@ -627,6 +792,8 @@ async function disconnect() {
   transport = null;
   esploader = null;
   detectedBoard = null;
+  detectedBoardSource = null;
+  detectedFlashMfg = null;
   detectedPortInfo = null;
   detectedChip = null;
   els.status.className = "";
@@ -781,6 +948,8 @@ navigator.serial?.addEventListener("disconnect", () => {
   transport = null;
   esploader = null;
   detectedBoard = null;
+  detectedBoardSource = null;
+  detectedFlashMfg = null;
   detectedPortInfo = null;
   detectedChip = null;
   els.status.className = "";
