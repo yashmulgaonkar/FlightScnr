@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "services/settings_state.h"
 #include "ui/radar_display.h"
 
 namespace ui {
@@ -70,6 +71,7 @@ void persistDetailTimeout() {
     prefs.putUChar(kDetailTimeoutKey, s_flight_detail_timeout_sec);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 void persistClockTimeout() {
@@ -78,6 +80,7 @@ void persistClockTimeout() {
     prefs.putUChar(kClockTimeoutKey, s_clock_weather_timeout_sec);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 void persistSweepLine() {
@@ -86,6 +89,7 @@ void persistSweepLine() {
     prefs.putBool(kSweepLineKey, s_sweep_line_enabled);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 void persistHideBlipDetails() {
@@ -94,6 +98,7 @@ void persistHideBlipDetails() {
     prefs.putBool(kHideBlipDetailsKey, s_hide_blip_details);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 void persistAutoIdleClock() {
@@ -102,6 +107,7 @@ void persistAutoIdleClock() {
     prefs.putBool(kIdleClockKey, s_auto_idle_clock_enabled);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 int timeoutOptionIndex(uint8_t sec) {

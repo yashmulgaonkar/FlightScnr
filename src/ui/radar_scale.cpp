@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "services/settings_state.h"
+
 namespace ui::radar {
 
 namespace {
@@ -84,6 +86,7 @@ void persistU8(const char* key, uint8_t v) {
 
 void persistDistanceUnit(DistanceUnit unit) {
   persistU8(kDistUnitKey, static_cast<uint8_t>(unit));
+  settingsStateBump();
 }
 
 bool isAllowedMile(uint8_t miles) {
@@ -116,6 +119,7 @@ void applyMiles(uint8_t miles) {
   s_active_miles = miles;
   recomputeActiveBand();
   persistU8(kRangeMiKey, s_active_miles);
+  settingsStateBump();
 }
 
 uint8_t migrateLegacyRangeIndex(uint8_t legacy_index) {
@@ -288,6 +292,7 @@ void toggleCompassRose() {
     prefs.putBool(kRoseKey, s_compass_rose);
     prefs.end();
   }
+  settingsStateBump();
   Serial.printf("Compass rose: %s\n", s_compass_rose ? "on" : "off");
 }
 
@@ -298,6 +303,7 @@ void saveCompassRoseFromForm(const char* checkbox_value) {
     prefs.putBool(kRoseKey, s_compass_rose);
     prefs.end();
   }
+  settingsStateBump();
   Serial.printf("Compass rose: %s\n", s_compass_rose ? "on" : "off");
 }
 
@@ -322,6 +328,7 @@ void persistFacingDeg() {
     prefs.putUShort(kFacingKey, s_facing_deg);
     prefs.end();
   }
+  settingsStateBump();
   Serial.printf("Radar facing: %u deg\n", static_cast<unsigned>(s_facing_deg));
 }
 

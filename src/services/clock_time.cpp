@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include "services/clock_format.h"
+#include "services/settings_state.h"
 
 namespace services::clock {
 
@@ -88,6 +89,7 @@ void persistOffset() {
     prefs.putInt(kTzOffsetKey, s_tz_offset_sec);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 void persistFormat() {
@@ -96,6 +98,7 @@ void persistFormat() {
     prefs.putBool(kUse24hKey, s_use_24h);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 void persistDateFormat() {
@@ -104,6 +107,7 @@ void persistDateFormat() {
     prefs.putBool(kDateFmtKey, s_use_numeric_date);
     prefs.end();
   }
+  settingsStateBump();
 }
 
 void persistAutoState() {
@@ -117,6 +121,7 @@ void persistAutoState() {
   prefs.putDouble(kResolvedLatKey, s_resolved_lat);
   prefs.putDouble(kResolvedLonKey, s_resolved_lon);
   prefs.end();
+  settingsStateBump();
 }
 
 void applyManualNtpConfig() {
@@ -278,6 +283,7 @@ void saveAutoTimezoneFromForm(const char* auto_timezone) {
   prefs.putBool(kAutoTzKey, s_auto_timezone);
   prefs.end();
   applyNtpConfig();
+  settingsStateBump();
 }
 
 void stepTimezoneHours(int8_t delta) {

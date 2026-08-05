@@ -7,7 +7,7 @@ Resolution order (for env `auto` only):
   3. Last successful selection in .pio/last_board
   4. Default: tencoder-pro
 
-Explicit envs (`tencoder-pro`, `waveshare-knob-1.8`) keep their platformio.ini macros.
+Explicit envs (`tencoder-pro`, `waveshare-knob-18`) keep their platformio.ini macros.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ PIO_DIR = PROJECT_DIR / ".pio"
 LAST_BOARD_PATH = PIO_DIR / "last_board"
 
 BOARD_TENCODER = "tencoder-pro"
-BOARD_WAVESHARE = "waveshare-knob-1.8"
+BOARD_WAVESHARE = "waveshare-knob-18"
 VALID_BOARDS = {BOARD_TENCODER, BOARD_WAVESHARE}
 
 BOARD_MACROS = {
@@ -41,8 +41,10 @@ def _normalize(name: str | None) -> str | None:
         "lilygo": BOARD_TENCODER,
         "waveshare": BOARD_WAVESHARE,
         "waveshare-knob": BOARD_WAVESHARE,
-        "waveshare-knob-1.8": BOARD_WAVESHARE,
+        "waveshare-knob-18": BOARD_WAVESHARE,
+        "waveshare-knob-1.8": BOARD_WAVESHARE,  # legacy alias
         "knob-1.8": BOARD_WAVESHARE,
+        "knob-18": BOARD_WAVESHARE,
     }
     resolved = aliases.get(name, name)
     return resolved if resolved in VALID_BOARDS else None

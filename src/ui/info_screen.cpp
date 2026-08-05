@@ -13,6 +13,7 @@
 #include "hardware/display_font.h"
 #include "hardware/pin_config.h"
 #include "services/adsb_client.h"
+#include "services/aircraft_alert.h"
 #include "services/api_keys.h"
 #include "services/device_identity.h"
 #include "services/map_center.h"
@@ -55,7 +56,9 @@ enum class ColorsAdjustRow : uint8_t {
   IdleClock,
   Color,
   BeepOn,
+#if !FLIGHTSCNR_HAS_HAPTIC
   BeepTone,
+#endif
 };
 
 ColorsAdjustRow s_colors_focus = ColorsAdjustRow::Sweep;
@@ -215,8 +218,12 @@ void buildColorsStrings(char* sweep_line, size_t sweep_len, char* blip_line,
                         size_t blip_len, char* detail_line, size_t detail_len,
                         char* clock_line, size_t clock_len, char* idle_line,
                         size_t idle_len, char* color_line, size_t color_len,
-                        char* beep_line, size_t beep_len, char* beep_tone_line,
-                        size_t beep_tone_len) {
+                        char* beep_line, size_t beep_len
+#if !FLIGHTSCNR_HAS_HAPTIC
+                        ,
+                        char* beep_tone_line, size_t beep_tone_len
+#endif
+) {
   snprintf(sweep_line, sweep_len, "Radar Sweep: %s",
            ui::displayPrefsSweepLineEnabled() ? "on" : "off");
   snprintf(blip_line, blip_len, "Hide Blip Details: %s",
@@ -231,8 +238,6 @@ void buildColorsStrings(char* sweep_line, size_t sweep_len, char* blip_line,
 #if FLIGHTSCNR_HAS_HAPTIC
   snprintf(beep_line, beep_len, "Vibration: %s",
            hardware::buzzerEnabled() ? "on" : "off");
-  snprintf(beep_tone_line, beep_tone_len, "Intensity: %s",
-           hardware::buzzerIntensityLabel());
 #else
   snprintf(beep_line, beep_len, "UI Beep: %s",
            hardware::buzzerEnabled() ? "on" : "off");
@@ -385,12 +390,18 @@ void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg) {
   char idle_line[24];
   char color_line[28];
   char beep_line[24];
+#if !FLIGHTSCNR_HAS_HAPTIC
   char beep_tone_line[28];
+#endif
   buildColorsStrings(sweep_line, sizeof(sweep_line), blip_line, sizeof(blip_line),
                      detail_line, sizeof(detail_line), clock_line, sizeof(clock_line),
                      idle_line, sizeof(idle_line), color_line, sizeof(color_line),
-                     beep_line, sizeof(beep_line), beep_tone_line,
-                     sizeof(beep_tone_line));
+                     beep_line, sizeof(beep_line)
+#if !FLIGHTSCNR_HAS_HAPTIC
+                     ,
+                     beep_tone_line, sizeof(beep_tone_line)
+#endif
+  );
 
   const uint16_t active_fg = settingsActiveFg();
   const uint16_t sweep_fg =
@@ -407,8 +418,10 @@ void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg) {
       (s_colors_focus == ColorsAdjustRow::Color) ? active_fg : label_fg;
   const uint16_t beep_fg =
       (s_colors_focus == ColorsAdjustRow::BeepOn) ? active_fg : label_fg;
+#if !FLIGHTSCNR_HAS_HAPTIC
   const uint16_t beep_tone_fg =
       (s_colors_focus == ColorsAdjustRow::BeepTone) ? active_fg : label_fg;
+#endif
 
   const int title_h = displayFontHeight(tft, displayFontTitle());
   const InfoLine option_lines[] = {
@@ -419,7 +432,9 @@ void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg) {
       {idle_line, displayFontBody(), idle_fg},
       {color_line, displayFontBody(), color_fg},
       {beep_line, displayFontBody(), beep_fg},
+#if !FLIGHTSCNR_HAS_HAPTIC
       {beep_tone_line, displayFontBody(), beep_tone_fg},
+#endif
   };
   const int options_h = measureBlockHeight(option_lines, sizeof(option_lines) / sizeof(option_lines[0]));
   const int block_h = title_h + kTitleGap + options_h;
@@ -432,8 +447,7 @@ void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg) {
   displayFontApply(tft, displayFontTitle());
   tft.setTextDatum(TextDatum::TopCenter);
   tft.setTextColor(fg, bg);
-  tft.drawString("Settings 3/3", kCenterX, y);
-  y += title_h + kTitleGap;
+  tft.drawString("Settings 3/3", kCenterX, y);  y += title_h + kTitleGap;
 
   for (const InfoLine& line : option_lines) {
     drawCenterLine(line.text, &y, line.style, line.color, bg);
@@ -498,7 +512,11 @@ void infoScreenCycleColorsFocus() {
       s_colors_focus = ColorsAdjustRow::BeepOn;
       break;
     case ColorsAdjustRow::BeepOn:
+#if FLIGHTSCNR_HAS_HAPTIC
+      s_colors_focus = ColorsAdjustRow::Sweep;
+#else
       s_colors_focus = ColorsAdjustRow::BeepTone;
+#endif
       break;
     default:
       s_colors_focus = ColorsAdjustRow::Sweep;
@@ -559,9 +577,11 @@ void infoScreenHandleKnob(int8_t delta) {
       case ColorsAdjustRow::BeepOn:
         hardware::buzzerSetEnabled(!hardware::buzzerEnabled());
         break;
+#if !FLIGHTSCNR_HAS_HAPTIC
       case ColorsAdjustRow::BeepTone:
         hardware::buzzerToneStep(delta);
         break;
+#endif
     }
     infoScreenDraw();
     return;
@@ -580,6 +600,7 @@ void infoScreenHandleKnob(int8_t delta) {
       break;
     case DisplayAdjustRow::Range:
       ui::radar::scaleStep(delta);
+      services::alert::notifyRangeChanged();
       break;
     case DisplayAdjustRow::Compass:
       ui::radar::toggleCompassRose();

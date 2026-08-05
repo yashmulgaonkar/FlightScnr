@@ -18,6 +18,7 @@
 #include "geo/flat_earth.h"
 #include "services/map_center.h"
 #include "ui/aircraft_symbol.h"
+#include "ui/alert_flash.h"
 #include "ui/radar_accent.h"
 #include "ui/radar_scale.h"
 #include "ui/radar_theme.h"
@@ -155,7 +156,7 @@ void initPalette() {
     radar::kColorBackground = tft.color565(245, 245, 238);
     // Darken accent grid/labels for contrast on pale land/water tiles.
     auto darken = [](uint8_t c) -> uint8_t {
-      return static_cast<uint8_t>((static_cast<unsigned>(c) * 45u) / 100u);
+      return static_cast<uint8_t>((static_cast<unsigned>(c) * 20u) / 100u);
     };
     radar::kColorGrid =
         tft.color565(darken(accent.grid_r), darken(accent.grid_g), darken(accent.grid_b));
@@ -526,31 +527,46 @@ void drawScaleLabelWithBackground(const char* text, int x, int y) {
   s_draw->drawString(text, x, y);
 }
 
-void pointOnRadarArc(int cx, int cy, int r, float arc_len_px, int* x, int* y) {
-  const float angle = arc_len_px / static_cast<float>(r);
-  *x = cx + static_cast<int>(lroundf(sinf(angle) * static_cast<float>(r)));
-  *y = cy - static_cast<int>(lroundf(cosf(angle) * static_cast<float>(r)));
+/** Convert degrees CW-from-top (12 o'clock) to Arduino_GFX fillArc degrees
+ *  (0° = 3 o'clock, clockwise). */
+float radarArcToGfxDeg(float deg_cw_from_top) {
+  float a = deg_cw_from_top + 270.0f;
+  while (a >= 360.0f) {
+    a -= 360.0f;
+  }
+  while (a < 0.0f) {
+    a += 360.0f;
+  }
+  return a;
 }
 
-void drawArcDash(int cx, int cy, int r, float arc_start_px, float arc_end_px, float half_width,
-                 uint16_t color) {
-  const float dash_len = arc_end_px - arc_start_px;
-  if (dash_len < 0.5f) {
+void fillRadarArcDeg(int cx, int cy, int r_outer, int r_inner, float start_cw_from_top,
+                     float end_cw_from_top, uint16_t color) {
+  if (end_cw_from_top <= start_cw_from_top + 0.05f || r_outer <= 0) {
     return;
   }
-  const int steps = std::max(2, static_cast<int>(lroundf(dash_len / 3.0f)));
-  int px = 0;
-  int py = 0;
-  pointOnRadarArc(cx, cy, r, arc_start_px, &px, &py);
-  for (int i = 1; i <= steps; ++i) {
-    const float t = static_cast<float>(i) / static_cast<float>(steps);
-    const float s = arc_start_px + dash_len * t;
-    int nx = 0;
-    int ny = 0;
-    pointOnRadarArc(cx, cy, r, s, &nx, &ny);
-    s_draw->drawWideLine(px, py, nx, ny, half_width, color);
-    px = nx;
-    py = ny;
+  if (r_inner < 0) {
+    r_inner = 0;
+  }
+  if (r_inner >= r_outer) {
+    r_inner = r_outer - 1;
+  }
+  const float gs = radarArcToGfxDeg(start_cw_from_top);
+  const float ge = radarArcToGfxDeg(end_cw_from_top);
+  // fillArc fmods to [0,360); split when the sector crosses 3 o'clock.
+  if (ge < gs) {
+    s_draw->fillArc(static_cast<int16_t>(cx), static_cast<int16_t>(cy),
+                    static_cast<int16_t>(r_outer), static_cast<int16_t>(r_inner), gs, 360.0f,
+                    color);
+    if (ge > 0.05f) {
+      s_draw->fillArc(static_cast<int16_t>(cx), static_cast<int16_t>(cy),
+                      static_cast<int16_t>(r_outer), static_cast<int16_t>(r_inner), 0.0f, ge,
+                      color);
+    }
+  } else {
+    s_draw->fillArc(static_cast<int16_t>(cx), static_cast<int16_t>(cy),
+                    static_cast<int16_t>(r_outer), static_cast<int16_t>(r_inner), gs, ge,
+                    color);
   }
 }
 
@@ -578,18 +594,26 @@ void drawDashedWideLine(int x0, int y0, int x1, int y1, float half_width, uint16
   }
 }
 
-void drawDashedCircle(int cx, int cy, int r, float half_width, uint16_t color) {
+void drawDashedCircle(int cx, int cy, int r, uint16_t color) {
   if (r <= 0) {
     return;
   }
 
+  const int thickness =
+      std::max(1, static_cast<int>(radar::kGridStrokeHalfWidth * 2.0f));
+  const int r_outer = r;
+  const int r_inner = std::max(0, r - thickness);
+
+  constexpr float kRadToDeg = 180.0f / 3.14159265f;
   const float circumference = 2.0f * 3.14159265f * static_cast<float>(r);
   const float dash = static_cast<float>(radar::kGridDashLenPx);
   const float gap = static_cast<float>(radar::kGridDashGapPx);
   const float period = dash + gap;
 
   for (float arc_pos = 0.0f; arc_pos + dash <= circumference; arc_pos += period) {
-    drawArcDash(cx, cy, r, arc_pos, arc_pos + dash, half_width, color);
+    const float start_deg = (arc_pos / static_cast<float>(r)) * kRadToDeg;
+    const float end_deg = ((arc_pos + dash) / static_cast<float>(r)) * kRadToDeg;
+    fillRadarArcDeg(cx, cy, r_outer, r_inner, start_deg, end_deg, color);
   }
 }
 
@@ -597,12 +621,7 @@ void drawGridRing(int cx, int cy, int r, uint16_t color) {
   if (r <= 0) {
     return;
   }
-  const float hw = radar::kGridStrokeHalfWidth;
-  const int thickness =
-      std::max(1, static_cast<int>(radar::kGridStrokeHalfWidth * 2.0f));
-  for (int i = 0; i < thickness && r - i > 0; ++i) {
-    drawDashedCircle(cx, cy, r - i, hw, color);
-  }
+  drawDashedCircle(cx, cy, r, color);
 }
 
 void drawRings(int cx, int cy, int outer_radius) {
@@ -1014,6 +1033,9 @@ bool rebuildContentBase() {
   {
     const DrawScope scope(s_content.gfx());
     drawAircraft();
+  }
+  if (alertFlashActive()) {
+    alertFlashPaintBuffer(s_content.bufferMut(), s_content.width(), s_content.height());
   }
 
   s_content_base_valid = true;

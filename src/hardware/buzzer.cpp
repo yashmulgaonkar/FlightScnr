@@ -8,6 +8,7 @@
 #include <cstdlib>
 
 #include "hardware/pin_config.h"
+#include "services/settings_state.h"
 
 #if FLIGHTSCNR_HAS_HAPTIC
 #include "SensorDRV2605.hpp"
@@ -48,13 +49,7 @@ static_assert(sizeof(kBeepProfiles) / sizeof(kBeepProfiles[0]) == kToneLevelCoun
               "beep profiles must match tone levels");
 
 #if FLIGHTSCNR_HAS_HAPTIC
-// Waveshare demo library 1 effect IDs (soft → strong). Skip Soft Bump — easy to miss.
-constexpr uint8_t kHapticClickEffects[] = {3, 2, 1, 14, 15};
-static_assert(sizeof(kHapticClickEffects) / sizeof(kHapticClickEffects[0]) ==
-                  kToneLevelCount,
-              "haptic click effects must match tone levels");
-constexpr uint8_t kHapticAlertEffect = 14;  // Strong Buzz 100%
-constexpr uint8_t kHapticBootEffect = 1;    // Strong Click — hardware self-test
+constexpr uint8_t kHapticClickEffect = 1;  // Strong Click - 100% (UI only)
 #endif
 
 constexpr uint8_t kLegacyTonePercents[] = {20, 40, 60, 80, 100};
@@ -67,7 +62,7 @@ unsigned long s_stop_at_ms = 0;
 constexpr uint16_t kAlertFreqHz = 2500;
 constexpr uint8_t kAlertDuty = 127;
 constexpr uint8_t kAlertBeepMs = 60;
-constexpr uint8_t kAlertIntervalMs = 280;  // buzz needs more gap than a click
+constexpr uint16_t kAlertIntervalMs = 140;
 constexpr uint8_t kAlertBeepCount = 3;
 
 uint8_t s_alert_beeps_remaining = 0;
@@ -77,30 +72,24 @@ unsigned long s_alert_next_ms = 0;
 SensorDRV2605 s_drv;
 bool s_haptic_ready = false;
 
-void hapticPlayEffect(uint8_t effect, bool require_ui_beep) {
-  if (!s_haptic_ready || effect == 0) {
-    return;
-  }
-  if (require_ui_beep && !s_enabled) {
-    return;
-  }
-  // Same sequence as Waveshare 03_DRV2605_Test.
+void hapticFireClick() {
   s_drv.stop();
   s_drv.setMode(DRV2605_MODE_INTTRIG);
-  s_drv.setWaveform(0, effect);
+  s_drv.selectLibrary(1);
+  s_drv.setWaveform(0, kHapticClickEffect);
   s_drv.setWaveform(1, 0);
   s_drv.run();
 }
 
 bool hapticInit() {
-  // Match Waveshare demo: SensorDRV2605 init (ERM open-loop) + library 1 + INTTRIG.
   if (!s_drv.init(Wire, IIC_SDA, IIC_SCL, DRV2605_SLAVE_ADDRESS)) {
     Serial.println("Haptic: DRV2605 not found");
     return false;
   }
+  s_drv.useERM();
   s_drv.selectLibrary(1);
   s_drv.setMode(DRV2605_MODE_INTTRIG);
-  Serial.println("Haptic: DRV2605 ready (lib 1)");
+  Serial.printf("Haptic: DRV2605 ready (UI click effect %u)\n", kHapticClickEffect);
   return true;
 }
 #endif
@@ -158,9 +147,12 @@ void persistSettings() {
   Preferences prefs;
   if (prefs.begin(kStoreNs, false)) {
     prefs.putBool(kEnabledKey, s_enabled);
+#if !FLIGHTSCNR_HAS_HAPTIC
     prefs.putUChar(kToneKey, s_tone_index);
+#endif
     prefs.end();
   }
+  settingsStateBump();
 }
 
 const BeepProfile& beepProfileForIndex(size_t index) {
@@ -174,8 +166,7 @@ void startTone() {
 
 #if FLIGHTSCNR_HAS_HAPTIC
   if (s_haptic_ready) {
-    const uint8_t effect = kHapticClickEffects[s_tone_index];
-    hapticPlayEffect(effect, /*require_ui_beep=*/true);
+    hapticFireClick();
     return;
   }
 #endif
@@ -210,15 +201,15 @@ void buzzerBootLoad() {
     return;
   }
   s_enabled = prefs.getBool(kEnabledKey, true);
+#if !FLIGHTSCNR_HAS_HAPTIC
   const uint8_t stored = prefs.getUChar(kToneKey, kDefaultToneIndex);
-  prefs.end();
   s_tone_index = static_cast<uint8_t>(toneIndexFromStored(stored));
+#endif
+  prefs.end();
 #if FLIGHTSCNR_HAS_HAPTIC
-  Serial.printf("Haptic: UI vibe %s intensity %s\n", s_enabled ? "on" : "off",
-                buzzerIntensityLabel());
-  // Always pulse once at boot so a muted UI vibe can't hide a dead motor.
+  Serial.printf("Haptic: UI click %s\n", s_enabled ? "on" : "off");
   if (s_haptic_ready) {
-    hapticPlayEffect(kHapticBootEffect, /*require_ui_beep=*/false);
+    hapticFireClick();
   }
 #endif
 }
@@ -226,15 +217,6 @@ void buzzerBootLoad() {
 bool buzzerEnabled() { return s_enabled; }
 
 char buzzerToneLetter() { return kToneLetters[s_tone_index]; }
-
-uint8_t buzzerIntensityLevel() {
-  return static_cast<uint8_t>(s_tone_index + 1);
-}
-
-const char* buzzerIntensityLabel() {
-  static constexpr const char* kLabels[] = {"20%", "40%", "60%", "80%", "100%"};
-  return kLabels[s_tone_index < kToneLevelCount ? s_tone_index : 0];
-}
 
 void buzzerSetEnabled(bool enabled) {
   if (s_enabled == enabled) {
@@ -250,6 +232,10 @@ void buzzerSetEnabled(bool enabled) {
 }
 
 void buzzerToneStep(int8_t delta) {
+#if FLIGHTSCNR_HAS_HAPTIC
+  (void)delta;
+  return;
+#else
   if (delta == 0) {
     return;
   }
@@ -262,12 +248,9 @@ void buzzerToneStep(int8_t delta) {
   }
   s_tone_index = static_cast<uint8_t>(idx);
   persistSettings();
-#if FLIGHTSCNR_HAS_HAPTIC
-  Serial.printf("Vibration intensity: %s\n", buzzerIntensityLabel());
-#else
   Serial.printf("Beep tone: %c\n", buzzerToneLetter());
-#endif
   buzzerClick();
+#endif
 }
 
 void buzzerClick() {
@@ -289,16 +272,6 @@ void buzzerPoll() {
     return;
   }
 
-#if FLIGHTSCNR_HAS_HAPTIC
-  if (s_haptic_ready) {
-    // Alerts always vibrate — UI Beep only gates clicks, not watch/mil/emrg.
-    hapticPlayEffect(kHapticAlertEffect, /*require_ui_beep=*/false);
-    --s_alert_beeps_remaining;
-    s_alert_next_ms = millis() + kAlertIntervalMs;
-    return;
-  }
-#endif
-
 #if FLIGHTSCNR_HAS_BUZZER
   ledcChangeFrequency(kLedcChannel, kAlertFreqHz, kLedcResolution);
   ledcWrite(kLedcChannel, kAlertDuty);
@@ -313,11 +286,8 @@ void buzzerPoll() {
 
 void buzzerAlert() {
 #if FLIGHTSCNR_HAS_HAPTIC
-  if (s_haptic_ready) {
-    s_alert_beeps_remaining = kAlertBeepCount;
-    s_alert_next_ms = 0;
-    return;
-  }
+  // Aircraft alerts use a red screen flash, not the vibration motor.
+  return;
 #endif
   if (!s_enabled) {
     return;
@@ -337,12 +307,16 @@ void saveBeepEnabledFromForm(const char* checkbox_value) {
 }
 
 void saveBeepToneFromForm(const char* value) {
+#if FLIGHTSCNR_HAS_HAPTIC
+  (void)value;
+#else
   s_tone_index = static_cast<uint8_t>(toneIndexFromForm(value));
   Preferences prefs;
   if (prefs.begin(kStoreNs, false)) {
     prefs.putUChar(kToneKey, s_tone_index);
     prefs.end();
   }
+#endif
 }
 
 }  // namespace hardware

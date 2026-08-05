@@ -34,6 +34,7 @@
 #include "services/off_hours.h"
 #include "services/aircraft_alert.h"
 #include "services/ota_github.h"
+#include "ui/alert_flash.h"
 #include "ui/clock_screen.h"
 #include "ui/clock_settings_screen.h"
 #include "ui/details_screen.h"
@@ -836,6 +837,10 @@ void returnToRadar(bool from_idle_timeout = false, bool manual_navigation = fals
   if (WiFi.status() == WL_CONNECTED) {
     showRadar();
   }
+  // Settings / detail / clock leave: re-alert any watch targets still in range.
+  if (from_screen != AppScreen::Radar) {
+    services::alert::notifyRadarResumed();
+  }
   if (from_screen == AppScreen::FlightDetail && config::kRadarResumeDebug) {
     logRadarDebugState(from_idle_timeout ? "resume_timeout" : "resume");
   }
@@ -999,6 +1004,7 @@ void onRangeStep(int8_t delta) {
   ui::radar::formatActiveScaleTag(range_label, sizeof(range_label));
   Serial.printf("Scale: %s (coverage ~%.0f km)\n", range_label,
                 ui::radar::scaleActive().coverage_km);
+  services::alert::notifyRangeChanged();
 
   if (g_radar_visible && WiFi.status() == WL_CONNECTED) {
     recoverRadarHeapPressure("range_change", 400);
@@ -2079,6 +2085,11 @@ void loop() {
         services::adsb::fetchInProgress() ? 1 : 0, services::weather::fetchInProgress() ? 1 : 0,
         services::tzlookup::lookupInProgress() ? 1 : 0,
         g_radar_full_draw_pending ? 1 : 0, free_heap, ESP.getMaxAllocHeap());
+  }
+
+  // Alert ring is baked into the radar framebuffer; just clear when it ends.
+  if (ui::alertFlashPoll()) {
+    applySettingsLive();
   }
 
   delay(1);

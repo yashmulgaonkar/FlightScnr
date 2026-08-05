@@ -6,8 +6,16 @@ namespace services::alert {
 
 void bootLoad();
 
-/** Check aircraft list for new alert-worthy entries; fires buzzer if matched. */
+/** Check aircraft list for new alert-worthy entries; fires buzzer if matched.
+ *  Alerts on rising edge: alert-target enters the visible radar ring. Leaving
+ *  the ring (or a range change) clears memory so re-entry alerts again. */
 void checkNewAircraft(const services::adsb::Aircraft* list, size_t count);
+
+/** Call after the radar range changes so in-range alert aircraft can fire again. */
+void notifyRangeChanged();
+
+/** Call when returning to the radar screen so on-screen alert aircraft vibe again. */
+void notifyRadarResumed();
 
 /** True if this aircraft should be drawn with alert highlight on radar. */
 bool isHighlighted(const services::adsb::Aircraft& ac);

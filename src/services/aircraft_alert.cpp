@@ -6,9 +6,12 @@
 #include <cstring>
 
 #include "hardware/buzzer.h"
+#include "hardware/pin_config.h"
 #include "services/watch_reg_parse.h"
 #include "services/watch_type_parse.h"
+#include "ui/alert_flash.h"
 #include "ui/radar_display.h"
+#include "ui/radar_scale.h"
 
 namespace services::alert {
 namespace {
@@ -50,12 +53,22 @@ struct SeenEntry {
 
 SeenEntry s_seen[kSeenCapacity];
 size_t s_seen_write = 0;
+uint8_t s_seen_range_mi = 0;
 
 uint32_t hashCallsign(const char* cs) {
   uint32_t h = 2166136261u;
   for (const char* p = cs; *p != '\0'; ++p) {
     h ^= static_cast<uint8_t>(*p);
     h *= 16777619u;
+  }
+  return h;
+}
+
+uint32_t hashAircraft(const services::adsb::Aircraft& ac) {
+  // Prefer Mode S hex so empty/shared callsigns still get distinct alerts.
+  uint32_t h = hashCallsign(ac.hex[0] != '\0' ? ac.hex : ac.callsign);
+  if (ac.hex[0] != '\0' && ac.callsign[0] != '\0') {
+    h ^= hashCallsign(ac.callsign);
   }
   return h;
 }
@@ -73,6 +86,39 @@ void markSeen(uint32_t h) {
   s_seen[s_seen_write].hash = h;
   s_seen[s_seen_write].occupied = true;
   s_seen_write = (s_seen_write + 1) % kSeenCapacity;
+}
+
+void clearSeen() {
+  for (size_t i = 0; i < kSeenCapacity; ++i) {
+    s_seen[i].occupied = false;
+    s_seen[i].hash = 0;
+  }
+  s_seen_write = 0;
+}
+
+bool shouldAlert(const services::adsb::Aircraft& ac);
+
+/** Drop hashes for aircraft that left the ring or the ADS-B list. */
+void pruneSeenOutsideRange(const services::adsb::Aircraft* list, size_t count) {
+  for (size_t i = 0; i < kSeenCapacity; ++i) {
+    if (!s_seen[i].occupied) {
+      continue;
+    }
+    bool still_in_range = false;
+    for (size_t j = 0; j < count; ++j) {
+      if (!shouldAlert(list[j]) || !ui::radarDisplayIsInRange(list[j])) {
+        continue;
+      }
+      if (hashAircraft(list[j]) == s_seen[i].hash) {
+        still_in_range = true;
+        break;
+      }
+    }
+    if (!still_in_range) {
+      s_seen[i].occupied = false;
+      s_seen[i].hash = 0;
+    }
+  }
 }
 
 bool isValidWatchCallsign(const char* cs) {
@@ -295,23 +341,35 @@ void checkNewAircraft(const services::adsb::Aircraft* list, size_t count) {
   if (!alertsActive()) {
     return;
   }
+
+  // Range change = new visible ring: forget prior entries so anyone inside the
+  // new range (or who later flies into it) can alert again.
+  const uint8_t range_mi = ui::radar::scaleActiveMiles();
+  if (range_mi != s_seen_range_mi) {
+    clearSeen();
+    s_seen_range_mi = range_mi;
+    Serial.printf("[alert] range→%umi (seen cleared)\n", static_cast<unsigned>(range_mi));
+  } else {
+    pruneSeenOutsideRange(list, count);
+  }
+
   bool fired = false;
+  bool fired_military = false;
   for (size_t i = 0; i < count; ++i) {
     if (!shouldAlert(list[i])) {
       continue;
     }
-    // Beep only when the alert target is inside the range ring (full plane on
-    // grid). Beyond-ring edge blips are ignored; if it later enters range, we
-    // beep then (not marked seen while still off-screen).
+    // Rising edge only: inside the visible ring (full plane, not edge blip).
     if (!ui::radarDisplayIsInRange(list[i])) {
       continue;
     }
-    const uint32_t h = hashCallsign(list[i].callsign);
+    const uint32_t h = hashAircraft(list[i]);
     if (alreadySeen(h)) {
       continue;
     }
     markSeen(h);
     fired = true;
+    fired_military = fired_military || list[i].isMilitary();
     Serial.printf("[alert] %s type=%s reg=%s mil=%d emrg=%d watch=%d wtype=%d wreg=%d squawk=%s\n",
                   list[i].callsign, list[i].type, list[i].registration,
                   list[i].isMilitary() ? 1 : 0, list[i].isEmergencySquawk() ? 1 : 0,
@@ -320,8 +378,26 @@ void checkNewAircraft(const services::adsb::Aircraft* list, size_t count) {
                   watchRegContains(list[i].registration) ? 1 : 0, list[i].squawk);
   }
   if (fired) {
+    ui::alertFlashStart(fired_military ? ui::AlertFlashKind::Military
+                                      : ui::AlertFlashKind::Tracked);
+#if !FLIGHTSCNR_HAS_HAPTIC
     hardware::buzzerAlert();
+#endif
   }
+}
+
+void notifyRangeChanged() {
+  clearSeen();
+  s_seen_range_mi = ui::radar::scaleActiveMiles();
+  Serial.printf("[alert] range→%umi (seen cleared)\n",
+                static_cast<unsigned>(s_seen_range_mi));
+  checkNewAircraft(services::adsb::aircraftList(), services::adsb::aircraftCount());
+}
+
+void notifyRadarResumed() {
+  clearSeen();
+  Serial.println("[alert] radar resumed (seen cleared)");
+  checkNewAircraft(services::adsb::aircraftList(), services::adsb::aircraftCount());
 }
 
 bool isHighlighted(const services::adsb::Aircraft& ac) {

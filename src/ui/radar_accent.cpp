@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "services/settings_state.h"
+
 namespace ui::radar {
 
 namespace {
@@ -32,6 +34,7 @@ void persistAccent() {
     prefs.putUChar(kAccentKey, static_cast<uint8_t>(s_accent));
     prefs.end();
   }
+  settingsStateBump();
 }
 
 }  // namespace

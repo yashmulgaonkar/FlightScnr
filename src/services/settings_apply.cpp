@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "services/adsb_client.h"
+#include "services/aircraft_alert.h"
 #include "services/api_keys.h"
 #include "services/map_center.h"
 #include "services/weather.h"
@@ -11,6 +12,7 @@
 #include "hardware/display_brightness.h"
 #include "ui/display_prefs.h"
 #include "ui/radar_scale.h"
+#include "services/settings_state.h"
 
 namespace {
 
@@ -62,6 +64,7 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
   ui::displayPrefsSaveFlightDetailTimeoutFromForm(detail_timeout_str);
 
   ui::radar::scaleSaveMilesFromForm(range_mi_str);
+  services::alert::notifyRangeChanged();
 
   return loc_ok;
 }
@@ -69,6 +72,7 @@ bool settingsApplyFromForm(const char* radar_center_str, const char* lat_str,
 void settingsSetSavedCallback(SettingsSavedCallback cb) { s_saved_callback = cb; }
 
 void settingsNotifySaved() {
+  settingsStateBump();
   if (s_saved_callback != nullptr) {
     s_saved_callback();
   }

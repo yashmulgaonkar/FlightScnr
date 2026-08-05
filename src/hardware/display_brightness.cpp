@@ -5,6 +5,7 @@
 
 #include "hardware/display.h"
 #include "hardware/pin_config.h"
+#include "services/settings_state.h"
 
 namespace hardware {
 
@@ -100,6 +101,7 @@ void displayBrightnessStep(int8_t delta) {
   }
 
   displayApplyBrightness();
+  settingsStateBump();
   Serial.printf("Brightness: %u%%\n", static_cast<unsigned>(s_percent));
 }
 
@@ -122,6 +124,7 @@ void displayBrightnessSaveFromForm(const char* percent_str) {
     prefs.putUChar(kBrightPctKey, s_percent);
     prefs.end();
   }
+  settingsStateBump();
   Serial.printf("Brightness: %u%%\n", static_cast<unsigned>(s_percent));
 }
 

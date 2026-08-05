@@ -2,29 +2,28 @@
 
 #include <cstdint>
 
+#include "hardware/pin_config.h"
+
 namespace hardware {
 
-/** Configure buzzer PWM (call once from setup). */
+/** Configure buzzer / haptic (call once from setup). */
 void buzzerInit();
 
 /** Load beep on/off and tone from flash. */
 void buzzerBootLoad();
 
 bool buzzerEnabled();
-/** Current tone step A (quietest) through E (loudest). Piezo boards. */
+/** Current tone step A (quietest) through E (loudest). Piezo boards only. */
 char buzzerToneLetter();
-/** Intensity 1–5 (same storage as tone A–E). Prefer for haptic boards. */
-uint8_t buzzerIntensityLevel();
-/** "20%" … "100%" for the current intensity step. */
-const char* buzzerIntensityLabel();
 
 void buzzerSetEnabled(bool enabled);
+/** Step beep tone A–E (no-op on haptic / Waveshare boards). */
 void buzzerToneStep(int8_t delta);
 
-/** Start a short non-blocking click if beeps are enabled. */
+/** Start a short non-blocking click if beeps/vibration are enabled. */
 void buzzerClick();
 
-/** Play a 3x beep alert pattern (non-blocking, higher frequency). */
+/** Play alert feedback (piezo boards only — haptic boards use screen flash). */
 void buzzerAlert();
 
 /** Stop an in-progress beep; call from loop. */

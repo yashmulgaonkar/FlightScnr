@@ -9,7 +9,7 @@
  * available; there is no piezo buzzer.
  */
 
-#define FLIGHTSCNR_BOARD_NAME "waveshare-knob-1.8"
+#define FLIGHTSCNR_BOARD_NAME "waveshare-knob-18"
 #define FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18 1
 
 #define FLIGHTSCNR_HAS_KNOB_BUTTON 0

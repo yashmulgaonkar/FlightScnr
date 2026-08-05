@@ -26,6 +26,7 @@
 #include "services/route_cache_store.h"
 #include "services/route_lookup.h"
 #include "services/settings_apply.h"
+#include "services/settings_state.h"
 #include "services/tz_lookup.h"
 #include "services/weather.h"
 #include "services/aircraft_alert.h"
@@ -867,20 +868,9 @@ void handleSettingsPage() {
             "</summary><div class=\"body\">");
   appendToggle(page, kSettingsPageCap, &used, "ui_beep", "Vibration on touch and knob",
                hardware::buzzerEnabled());
-  const char beep_tone = hardware::buzzerToneLetter();
-  const int beep_n = snprintf(
-      page + used, kSettingsPageCap - used,
-      "<label for=\"beep_tone\">Vibration intensity</label>"
-      "<select id=\"beep_tone\" name=\"beep_tone\">"
-      "<option value=\"A\"%s>20%%</option>"
-      "<option value=\"B\"%s>40%%</option>"
-      "<option value=\"C\"%s>60%%</option>"
-      "<option value=\"D\"%s>80%%</option>"
-      "<option value=\"E\"%s>100%%</option>"
-      "</select>",
-      beep_tone == 'A' ? " selected" : "", beep_tone == 'B' ? " selected" : "",
-      beep_tone == 'C' ? " selected" : "", beep_tone == 'D' ? " selected" : "",
-      beep_tone == 'E' ? " selected" : "");
+  appendRaw(page, kSettingsPageCap, &used,
+            "<p class=\"hint\">Aircraft alerts show a thick red ring on the outer "
+            "edge for 10 seconds. Vibration is only for taps and knob turns.</p>");
 #else
   appendRaw(page, kSettingsPageCap, &used,
             "<details class=\"card\"><summary><span class=\"ico\">&#9835;</span>Sound"
@@ -902,8 +892,8 @@ void handleSettingsPage() {
       beep_tone == 'A' ? " selected" : "", beep_tone == 'B' ? " selected" : "",
       beep_tone == 'C' ? " selected" : "", beep_tone == 'D' ? " selected" : "",
       beep_tone == 'E' ? " selected" : "");
-#endif
   appendClamped(page, kSettingsPageCap, &used, beep_n);
+#endif
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
   // ---------- Alerts card ----------
@@ -1296,6 +1286,91 @@ void handleSettingsPage() {
       "</div>"
       "<div class=\"savebar\"><div class=\"inner\">"
       "<button class=\"save\" type=\"submit\" form=\"fs-save\">Save</button></div></div>"
+      "<div id=\"sync_note\" style=\"display:none;position:fixed;left:50%%;bottom:4.6rem;"
+      "transform:translateX(-50%%);z-index:25;background:#143d22;border:1px solid #1a9c3c;"
+      "color:#d8ffe4;border-radius:999px;padding:.35rem .75rem;font-size:.78rem\">"
+      "Updated from device</div>"
+      "<script>"
+      "(function(){"
+      "var lastRev=null,timer=null,PASSWORD_IDS={"
+      "airlabs_key:1,flightaware_key:1,fr24_key:1,weather_key:1"
+      "};"
+      "function setVal(id,v){"
+      "var el=document.getElementById(id);if(!el||PASSWORD_IDS[id])return;"
+      "if(el.type==='checkbox'){el.checked=!!v;return;}"
+      "if(v===null||v===undefined)return;"
+      "el.value=String(v);"
+      "}"
+      "function apply(j){"
+      "if(!j||typeof j.rev!=='number')return;"
+      "if(lastRev!==null&&j.rev===lastRev)return;"
+      "var first=lastRev===null;lastRev=j.rev;"
+      "setVal('radar_center',j.radar_center);"
+      "setVal('range_mi',j.range_mi);"
+      "setVal('dist_unit',j.dist_unit);"
+      "setVal('min_height',j.min_height);"
+      "setVal('max_height',j.max_height);"
+      "setVal('radar_accent',j.radar_accent);"
+      "setVal('show_cardinals',j.show_cardinals);"
+      "setVal('facing_deg',j.facing_deg);"
+      "setVal('show_sweep',j.show_sweep);"
+      "setVal('hide_blip_details',j.hide_blip_details);"
+      "setVal('use_basemap',j.use_basemap);"
+      "setVal('basemap_style',j.basemap_style);"
+      "setVal('bm_contrast_dark',j.bm_contrast_dark);"
+      "setVal('bm_contrast_light',j.bm_contrast_light);"
+      "setVal('bm_wash_vfr',j.bm_wash_vfr);"
+      "setVal('bright_pct',j.bright_pct);"
+      "setVal('detail_timeout',j.detail_timeout);"
+      "setVal('clock_timeout',j.clock_timeout);"
+      "setVal('idle_clock',j.idle_clock);"
+      "setVal('clock_24h',j.clock_24h);"
+      "setVal('date_numeric',j.date_numeric);"
+      "setVal('auto_timezone',j.auto_timezone);"
+      "setVal('night_en',j.night_en);"
+      "setVal('night_mode',j.night_mode);"
+      "setVal('night_start',j.night_start);"
+      "setVal('night_end',j.night_end);"
+      "setVal('ui_beep',j.ui_beep);"
+      "setVal('beep_tone',j.beep_tone);"
+      "setVal('alert_mil',j.alert_mil);"
+      "setVal('alert_emrg',j.alert_emrg);"
+      "setVal('alert_hide',j.alert_hide);"
+      "setVal('alert_watch',j.alert_watch);"
+      "setVal('alert_watch_type',j.alert_watch_type);"
+      "setVal('alert_watch_reg',j.alert_watch_reg);"
+      "setVal('alert_watch_post',j.alert_watch);"
+      "setVal('alert_watch_type_post',j.alert_watch_type);"
+      "setVal('alert_watch_reg_post',j.alert_watch_reg);"
+      "setVal('use_airlabs',j.use_airlabs);"
+      "setVal('use_flightaware',j.use_flightaware);"
+      "setVal('use_fr24',j.use_fr24);"
+      "setVal('use_adsbdb',j.use_adsbdb);"
+      "setVal('airlabs_max_calls',j.airlabs_max_calls);"
+      "setVal('flightaware_max_usd',j.flightaware_max_usd);"
+      "setVal('flightaware_cost_usd',j.flightaware_cost_usd);"
+      "setVal('fr24_max_usd',j.fr24_max_usd);"
+      "setVal('fr24_cost_usd',j.fr24_cost_usd);"
+      "setVal('use_weather',j.use_weather);"
+      "setVal('use_openmeteo',j.use_openmeteo);"
+      "setVal('weather_units',j.weather_units);"
+      "if(!first){var n=document.getElementById('sync_note');if(n){"
+      "n.style.display='block';clearTimeout(n._t);"
+      "n._t=setTimeout(function(){n.style.display='none';},1200);}}"
+      "}"
+      "function poll(){"
+      "if(document.visibilityState==='hidden')return;"
+      "fetch('/api/settings').then(function(r){return r.json();}).then(apply)"
+      ".catch(function(){});"
+      "}"
+      "function arm(){if(timer)clearInterval(timer);poll();timer=setInterval(poll,1000);}"
+      "document.addEventListener('visibilitychange',function(){"
+      "if(document.visibilityState==='visible')arm();"
+      "else if(timer){clearInterval(timer);timer=null;}"
+      "});"
+      "arm();"
+      "})();"
+      "</script>"
       "</body></html>",
       config::kGithubRepoUrl);
   if (tail_n > 0) {
@@ -1449,6 +1524,7 @@ void handleBasemapUploadDone() {
     return;
   }
   s_server->send(200, "text/plain", "ok");
+  settingsNotifySaved();
 }
 
 void handleBasemapUpload() {
@@ -1514,6 +1590,9 @@ void handleBasemapClear() {
   }
   const bool ok = services::basemap::clear();
   redirectToSettings(ok ? "saved=1" : "error=basemap");
+  if (ok) {
+    settingsNotifySaved();
+  }
 }
 
 void handleBasemapAdjust() {
@@ -1524,6 +1603,7 @@ void handleBasemapAdjust() {
   services::basemap::saveBakeAdjustFromForm(s_server->arg("bm_contrast_dark").c_str(),
                                             s_server->arg("bm_contrast_light").c_str(),
                                             s_server->arg("bm_wash_vfr").c_str());
+  settingsStateBump();
   s_server->send(200, "text/plain", "ok");
 }
 
@@ -1536,6 +1616,9 @@ void handleWifiAdd() {
   const bool ok =
       wifiNetsAddOrUpdate(s_server->arg("s").c_str(), s_server->arg("p").c_str(), err,
                           sizeof(err));
+  if (ok) {
+    settingsStateBump();
+  }
   redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
 }
 
@@ -1545,6 +1628,9 @@ void handleWifiRemove() {
     return;
   }
   const bool ok = wifiNetsRemove(static_cast<uint8_t>(s_server->arg("i").toInt()));
+  if (ok) {
+    settingsStateBump();
+  }
   redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
 }
 
@@ -1554,6 +1640,7 @@ void handleWifiUp() {
     return;
   }
   wifiNetsMoveUp(static_cast<uint8_t>(s_server->arg("i").toInt()));
+  settingsStateBump();
   redirectToSettings("wifi_ok=1");
 }
 
@@ -1563,6 +1650,7 @@ void handleWifiDown() {
     return;
   }
   wifiNetsMoveDown(static_cast<uint8_t>(s_server->arg("i").toInt()));
+  settingsStateBump();
   redirectToSettings("wifi_ok=1");
 }
 
@@ -1573,6 +1661,9 @@ void handleWifiPass() {
   }
   const bool ok = wifiNetsUpdatePassword(static_cast<uint8_t>(s_server->arg("i").toInt()),
                                          s_server->arg("p").c_str());
+  if (ok) {
+    settingsStateBump();
+  }
   redirectToSettings(ok ? "wifi_ok=1" : "wifi_err=1");
 }
 
@@ -1781,9 +1872,241 @@ void handleOtaGithubProgress() {
   s_server->send(200, "application/json; charset=utf-8", body);
 }
 
+/** Append a JSON string value with escaping. Returns chars written (excl NUL) or -1. */
+int appendJsonString(char* out, size_t out_len, size_t* used, const char* value) {
+  if (out == nullptr || used == nullptr || *used + 2 >= out_len) {
+    return -1;
+  }
+  out[(*used)++] = '"';
+  if (value != nullptr) {
+    for (const char* p = value; *p != '\0'; ++p) {
+      if (*used + 7 >= out_len) {
+        return -1;
+      }
+      const unsigned char c = static_cast<unsigned char>(*p);
+      if (c == '"' || c == '\\') {
+        out[(*used)++] = '\\';
+        out[(*used)++] = static_cast<char>(c);
+      } else if (c < 0x20) {
+        // Skip control chars in settings strings.
+        continue;
+      } else {
+        out[(*used)++] = static_cast<char>(c);
+      }
+    }
+  }
+  if (*used + 1 >= out_len) {
+    return -1;
+  }
+  out[(*used)++] = '"';
+  return 0;
+}
+
+const char* basemapStyleKey(services::basemap::Style style) {
+  switch (style) {
+    case services::basemap::Style::Light:
+      return "light";
+    case services::basemap::Style::Voyager:
+      return "voyager";
+    case services::basemap::Style::Vfr:
+      return "vfr";
+    default:
+      return "dark";
+  }
+}
+
+const char* distUnitKey(ui::radar::DistanceUnit unit) {
+  switch (unit) {
+    case ui::radar::DistanceUnit::StatuteMile:
+      return "mi";
+    case ui::radar::DistanceUnit::NauticalMile:
+      return "nm";
+    default:
+      return "km";
+  }
+}
+
+void handleSettingsApi() {
+  services::apikeys::load();
+
+  char watch_buf[160];
+  char watch_type_buf[96];
+  char watch_reg_buf[160];
+  services::alert::watchCallsignsFormatted(watch_buf, sizeof(watch_buf));
+  services::alert::watchTypesFormatted(watch_type_buf, sizeof(watch_type_buf));
+  services::alert::watchRegsFormatted(watch_reg_buf, sizeof(watch_reg_buf));
+
+  char fa_budget[16];
+  char fa_cost[16];
+  char fr_budget[16];
+  char fr_cost[16];
+  formatUsdMicro(services::apikeys::flightAwareBudgetUsdMicro(), fa_budget, sizeof(fa_budget), 2);
+  formatUsdMicro(services::apikeys::flightAwareCostUsdMicro(), fa_cost, sizeof(fa_cost), 4);
+  formatUsdMicro(services::apikeys::fr24BudgetUsdMicro(), fr_budget, sizeof(fr_budget), 2);
+  formatUsdMicro(services::apikeys::fr24CostUsdMicro(), fr_cost, sizeof(fr_cost), 4);
+
+  const uint16_t night_start = services::offhours::startMinute();
+  const uint16_t night_end = services::offhours::endMinute();
+  char night_start_s[8];
+  char night_end_s[8];
+  snprintf(night_start_s, sizeof(night_start_s), "%02u:%02u", night_start / 60, night_start % 60);
+  snprintf(night_end_s, sizeof(night_end_s), "%02u:%02u", night_end / 60, night_end % 60);
+
+  const auto bm_style = services::basemap::hasImage() ? services::basemap::storedStyle()
+                                                     : services::basemap::Style::Dark;
+
+  // Compose into a reusable PSRAM/DRAM buffer — avoid WebServer String copy.
+  constexpr size_t kApiCap = 6144;
+  static char* s_api_buf = nullptr;
+  if (s_api_buf == nullptr) {
+    s_api_buf = static_cast<char*>(
+        heap_caps_malloc(kApiCap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (s_api_buf == nullptr) {
+      s_api_buf = static_cast<char*>(malloc(kApiCap));
+    }
+  }
+  if (s_api_buf == nullptr) {
+    s_server->send(503, "text/plain", "Out of memory");
+    return;
+  }
+
+  size_t used = 0;
+  const int head_n = snprintf(
+      s_api_buf, kApiCap,
+      "{"
+      "\"rev\":%lu,"
+      "\"updated_ms\":%lu,"
+      "\"radar_center\":\"%.6f, %.6f\","
+      "\"range_mi\":\"%u\","
+      "\"dist_unit\":\"%s\","
+      "\"min_height\":\"%d\","
+      "\"max_height\":\"%d\","
+      "\"radar_accent\":\"%u\","
+      "\"show_cardinals\":%s,"
+      "\"facing_deg\":\"%u\","
+      "\"show_sweep\":%s,"
+      "\"hide_blip_details\":%s,"
+      "\"use_basemap\":%s,"
+      "\"basemap_style\":\"%s\","
+      "\"bm_contrast_dark\":\"%u\","
+      "\"bm_contrast_light\":\"%u\","
+      "\"bm_wash_vfr\":\"%u\","
+      "\"bright_pct\":\"%u\","
+      "\"detail_timeout\":\"%lu\","
+      "\"clock_timeout\":\"%lu\","
+      "\"idle_clock\":%s,"
+      "\"clock_24h\":%s,"
+      "\"date_numeric\":%s,"
+      "\"auto_timezone\":%s,"
+      "\"night_en\":%s,"
+      "\"night_mode\":\"%u\","
+      "\"night_start\":\"%s\","
+      "\"night_end\":\"%s\","
+      "\"ui_beep\":%s,"
+#if !FLIGHTSCNR_HAS_HAPTIC
+      "\"beep_tone\":\"%c\","
+#endif
+      "\"alert_mil\":%s,"
+      "\"alert_emrg\":%s,"
+      "\"alert_hide\":%s,",
+      static_cast<unsigned long>(settingsStateRev()),
+      static_cast<unsigned long>(settingsStateUpdatedMs()),
+      services::map_center::latitude(), services::map_center::longitude(),
+      static_cast<unsigned>(ui::radar::scaleActiveMiles()),
+      distUnitKey(ui::radar::distanceUnit()), services::adsb::altitudeFloorFt(),
+      services::adsb::altitudeCeilingFt(),
+      static_cast<unsigned>(ui::radar::accentColorIndex()),
+      ui::radar::showCompassRose() ? "true" : "false",
+      static_cast<unsigned>(ui::radar::facingDeg()),
+      ui::displayPrefsSweepLineEnabled() ? "true" : "false",
+      ui::displayPrefsHideBlipDetails() ? "true" : "false",
+      services::basemap::enabled() ? "true" : "false", basemapStyleKey(bm_style),
+      static_cast<unsigned>(services::basemap::contrastPercentDark()),
+      static_cast<unsigned>(services::basemap::contrastPercentLight()),
+      static_cast<unsigned>(services::basemap::washPercentVfr()),
+      static_cast<unsigned>(hardware::displayBrightnessPercent()),
+      ui::displayPrefsFlightDetailTimeoutMs() / 1000UL,
+      ui::displayPrefsClockWeatherTimeoutMs() / 1000UL,
+      ui::displayPrefsAutoIdleClockEnabled() ? "true" : "false",
+      services::clock::use24Hour() ? "true" : "false",
+      services::clock::useNumericDate() ? "true" : "false",
+      services::clock::useAutoTimezone() ? "true" : "false",
+      services::offhours::enabled() ? "true" : "false",
+      static_cast<unsigned>(services::offhours::mode()), night_start_s, night_end_s,
+      hardware::buzzerEnabled() ? "true" : "false",
+#if !FLIGHTSCNR_HAS_HAPTIC
+      hardware::buzzerToneLetter(),
+#endif
+      services::alert::militaryAlertEnabled() ? "true" : "false",
+      services::alert::emergencyAlertEnabled() ? "true" : "false",
+      services::alert::hideNonAlertedEnabled() ? "true" : "false");
+  if (head_n <= 0) {
+    s_server->send(500, "text/plain", "json error");
+    return;
+  }
+  used = static_cast<size_t>(head_n);
+
+  auto appendKeyString = [&](const char* key, const char* value) -> bool {
+    if (used + strlen(key) + 4 >= kApiCap) {
+      return false;
+    }
+    used += static_cast<size_t>(
+        snprintf(s_api_buf + used, kApiCap - used, "\"%s\":", key));
+    if (appendJsonString(s_api_buf, kApiCap, &used, value) < 0) {
+      return false;
+    }
+    if (used + 1 >= kApiCap) {
+      return false;
+    }
+    s_api_buf[used++] = ',';
+    return true;
+  };
+
+  if (!appendKeyString("alert_watch", watch_buf) ||
+      !appendKeyString("alert_watch_type", watch_type_buf) ||
+      !appendKeyString("alert_watch_reg", watch_reg_buf)) {
+    s_server->send(500, "text/plain", "json overflow");
+    return;
+  }
+
+  const int tail_n = snprintf(
+      s_api_buf + used, kApiCap - used,
+      "\"use_airlabs\":%s,"
+      "\"use_flightaware\":%s,"
+      "\"use_fr24\":%s,"
+      "\"use_adsbdb\":%s,"
+      "\"airlabs_max_calls\":\"%u\","
+      "\"flightaware_max_usd\":\"%s\","
+      "\"flightaware_cost_usd\":\"%s\","
+      "\"fr24_max_usd\":\"%s\","
+      "\"fr24_cost_usd\":\"%s\","
+      "\"use_weather\":%s,"
+      "\"use_openmeteo\":%s,"
+      "\"weather_units\":\"%s\""
+      "}",
+      services::apikeys::useAirLabs() ? "true" : "false",
+      services::apikeys::useFlightAware() ? "true" : "false",
+      services::apikeys::useFr24() ? "true" : "false",
+      services::apikeys::useAdsbDb() ? "true" : "false",
+      static_cast<unsigned>(services::apikeys::airLabsMaxCalls()), fa_budget, fa_cost,
+      fr_budget, fr_cost, services::apikeys::useWeather() ? "true" : "false",
+      services::apikeys::useOpenMeteo() ? "true" : "false",
+      services::weather::useImperial() ? "imperial" : "metric");
+  if (tail_n <= 0 || static_cast<size_t>(tail_n) >= kApiCap - used) {
+    s_server->send(500, "text/plain", "json overflow");
+    return;
+  }
+  used += static_cast<size_t>(tail_n);
+
+  s_server->setContentLength(used);
+  s_server->send(200, "application/json; charset=utf-8", "");
+  s_server->sendContent(s_api_buf, used);
+}
+
 void registerRoutes() {
   s_server->on("/", HTTP_GET, handleSettingsPage);
   s_server->on("/settings", HTTP_GET, handleSettingsPage);
+  s_server->on("/api/settings", HTTP_GET, handleSettingsApi);
   s_server->on("/save", HTTP_POST, handleSave);
   s_server->on("/route_cache.csv", HTTP_GET, handleRouteCacheDownload);
   s_server->on("/route_cache/clear", HTTP_POST, handleRouteCacheClear);
