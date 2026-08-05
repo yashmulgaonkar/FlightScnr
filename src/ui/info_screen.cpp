@@ -11,6 +11,7 @@
 #include "hardware/display.h"
 #include "hardware/display_brightness.h"
 #include "hardware/display_font.h"
+#include "hardware/pin_config.h"
 #include "services/adsb_client.h"
 #include "services/api_keys.h"
 #include "services/device_identity.h"
@@ -27,10 +28,7 @@ constexpr int kBezelInsetPx = 10;
 constexpr int kTextPadPx = 6;
 constexpr int kTitleGap = 6;
 constexpr int kLineGap = 4;
-constexpr int kFooterGap = 8;
 constexpr int kSectionGap = 6;
-/** Space between main content and help hints. */
-constexpr int kHintsTopGap = 22;
 
 const int kCenterX = config::kDisplayWidth / 2;
 const int kCenterY = config::kDisplayHeight / 2;
@@ -48,8 +46,7 @@ enum class DisplayAdjustRow : uint8_t {
 
 DisplayAdjustRow s_display_focus = DisplayAdjustRow::Brightness;
 
-// Page 3/3: radar behavior timeouts, sweep, color, and audio — keeps page 2/3
-// short enough for the round panel with hints visible.
+// Page 3/3: radar behavior timeouts, sweep, color, and audio.
 enum class ColorsAdjustRow : uint8_t {
   Sweep,
   BlipDetails,
@@ -231,10 +228,17 @@ void buildColorsStrings(char* sweep_line, size_t sweep_len, char* blip_line,
   snprintf(idle_line, idle_len, "Idle Clock: %s",
            ui::displayPrefsAutoIdleClockEnabled() ? "on" : "off");
   snprintf(color_line, color_len, "Radar color: %s", ui::radar::accentColorName());
+#if FLIGHTSCNR_HAS_HAPTIC
+  snprintf(beep_line, beep_len, "Vibration: %s",
+           hardware::buzzerEnabled() ? "on" : "off");
+  snprintf(beep_tone_line, beep_tone_len, "Intensity: %s",
+           hardware::buzzerIntensityLabel());
+#else
   snprintf(beep_line, beep_len, "UI Beep: %s",
            hardware::buzzerEnabled() ? "on" : "off");
   snprintf(beep_tone_line, beep_tone_len, "Beep Tone: %c",
            hardware::buzzerToneLetter());
+#endif
 }
 
 void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg) {
@@ -273,15 +277,9 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
       {fr24_line, displayFontDetail(), label_fg},
       {adsbdb_line, displayFontDetail(), label_fg},
   };
-  const InfoLine hint_lines[] = {
-      {"Swipe left — Display", displayFontDetail(), hint_fg},
-      {"Swipe right — Radar", displayFontDetail(), hint_fg},
-  };
   const int main_h = measureBlockHeight(main_lines, sizeof(main_lines) / sizeof(main_lines[0]));
   const int api_h = measureBlockHeight(api_lines, sizeof(api_lines) / sizeof(api_lines[0]));
-  const int hints_h = measureBlockHeight(hint_lines, sizeof(hint_lines) / sizeof(hint_lines[0]));
-  const int block_h = title_h + kTitleGap + main_h + kSectionGap + api_h + kHintsTopGap +
-                      hints_h + kFooterGap;
+  const int block_h = title_h + kTitleGap + main_h + kSectionGap + api_h;
 
   int y = kCenterY - block_h / 2;
   if (y < kBezelInsetPx) {
@@ -320,12 +318,6 @@ void drawMainPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg)
                  bg);
   drawCenterLine(adsbdb_line, &y, displayFontDetail(),
                  services::apikeys::useAdsbDb() ? fg : label_fg, bg);
-
-  y += kHintsTopGap;
-
-  for (const InfoLine& line : hint_lines) {
-    drawCenterLine(line.text, &y, line.style, line.color, bg);
-  }
 }
 
 uint16_t settingsActiveFg() {
@@ -336,7 +328,7 @@ uint16_t settingsActiveFg() {
   return tft.color565(r, g, b);
 }
 
-void drawDisplayPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg) {
+void drawDisplayPage(uint16_t bg, uint16_t fg, uint16_t label_fg) {
   char bright_line[32];
   char units_line[24];
   char range_line[24];
@@ -366,15 +358,8 @@ void drawDisplayPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_
       {compass_line, displayFontBody(), compass_fg},
       {facing_line, displayFontBody(), facing_fg},
   };
-  const InfoLine hint_lines[] = {
-      {"Knob press: change item", displayFontDetail(), hint_fg},
-      {"Facing: turn knob to adjust", displayFontDetail(), hint_fg},
-      {"Swipe left — Colors", displayFontDetail(), hint_fg},
-      {"Swipe right — Settings", displayFontDetail(), hint_fg},
-  };
   const int options_h = measureBlockHeight(option_lines, sizeof(option_lines) / sizeof(option_lines[0]));
-  const int hints_h = measureBlockHeight(hint_lines, sizeof(hint_lines) / sizeof(hint_lines[0]));
-  const int block_h = title_h + kTitleGap + options_h + kHintsTopGap + hints_h + kFooterGap;
+  const int block_h = title_h + kTitleGap + options_h;
 
   int y = kCenterY - block_h / 2;
   if (y < kBezelInsetPx) {
@@ -390,15 +375,9 @@ void drawDisplayPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_
   for (const InfoLine& line : option_lines) {
     drawCenterLine(line.text, &y, line.style, line.color, bg);
   }
-
-  y += kHintsTopGap;
-
-  for (const InfoLine& line : hint_lines) {
-    drawCenterLine(line.text, &y, line.style, line.color, bg);
-  }
 }
 
-void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_fg) {
+void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg) {
   char sweep_line[24];
   char blip_line[28];
   char detail_line[28];
@@ -442,14 +421,8 @@ void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_f
       {beep_line, displayFontBody(), beep_fg},
       {beep_tone_line, displayFontBody(), beep_tone_fg},
   };
-  const InfoLine hint_lines[] = {
-      {"Knob press: change item", displayFontDetail(), hint_fg},
-      {"Turn knob: change value", displayFontDetail(), hint_fg},
-      {"Swipe right — Display", displayFontDetail(), hint_fg},
-  };
   const int options_h = measureBlockHeight(option_lines, sizeof(option_lines) / sizeof(option_lines[0]));
-  const int hints_h = measureBlockHeight(hint_lines, sizeof(hint_lines) / sizeof(hint_lines[0]));
-  const int block_h = title_h + kTitleGap + options_h + kHintsTopGap + hints_h + kFooterGap;
+  const int block_h = title_h + kTitleGap + options_h;
 
   int y = kCenterY - block_h / 2;
   if (y < kBezelInsetPx) {
@@ -463,12 +436,6 @@ void drawColorsPage(uint16_t bg, uint16_t fg, uint16_t label_fg, uint16_t hint_f
   y += title_h + kTitleGap;
 
   for (const InfoLine& line : option_lines) {
-    drawCenterLine(line.text, &y, line.style, line.color, bg);
-  }
-
-  y += kHintsTopGap;
-
-  for (const InfoLine& line : hint_lines) {
     drawCenterLine(line.text, &y, line.style, line.color, bg);
   }
 }
@@ -555,9 +522,9 @@ void infoScreenDraw() {
   if (s_page == ui::InfoSettingsPage::Main) {
     drawMainPage(bg, fg, label_fg, hint_fg);
   } else if (s_page == ui::InfoSettingsPage::Display) {
-    drawDisplayPage(bg, fg, label_fg, hint_fg);
+    drawDisplayPage(bg, fg, label_fg);
   } else {
-    drawColorsPage(bg, fg, label_fg, hint_fg);
+    drawColorsPage(bg, fg, label_fg);
   }
 
   tft.setTextDatum(TextDatum::TopLeft);

@@ -13,7 +13,7 @@ The best part? There is absolutely no coding or soldering required!
 </p>
 
 
-Open-source firmware that shows **live ADS-B traffic** on a sweeping radar around your preset position. Built for the **[LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl)**, inspired by **[ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)** and **[deskradar](https://github.com/arvis91/deskradar)**.
+Open-source firmware that shows **live ADS-B traffic** on a sweeping radar around your preset position. Built for the **[LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl)** and the **[Waveshare ESP32-S3-Knob-Touch-LCD-1.8](https://www.waveshare.com/wiki/ESP32-S3-Knob-Touch-LCD-1.8)**, inspired by **[ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)** and **[deskradar](https://github.com/arvis91/deskradar)**.
 
 Firmware is **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** ([LICENSE](LICENSE)) - shareable for hobbyists, not for closed commercial forks.
 
@@ -51,7 +51,7 @@ Screen timeouts (configurable on web or device page 2): flight detail 10/20/30s 
 
 **From flight detail / settings / about:** swipe right (or timeout) → back
 
-**Everywhere:** hold knob **5 s** = clear all Wi‑Fi networks and open the setup portal. Do **not** hold the screen at power-on - that is BOOT/download mode.
+**Everywhere:** hold knob **5 s** = clear all Wi‑Fi networks and open the setup portal (T-Encoder only — Waveshare has no knob button; use the web UI). Do **not** hold the screen at power-on - that is BOOT/download mode.
 
 On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle clock. Page 3 = radar color, beep on/off, tone A–E.
 
@@ -90,9 +90,10 @@ To change other settings later: same URL, **Save**. To wipe all Wi‑Fi networks
 
 | Item          | Details                                                                                                                             |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Board**     | [LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl) - ESP32-S3, 16 MB flash, 8 MB PSRAM                                            |
-| **Display**   | 1.2″ 390×390 AMOLED; auto-detects DXQ120 or TFD12 panel at boot                                                                     |
-| **Enclosure** | [MakerWorld](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055) (not in repo) |
+| **Boards**    | [LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl) (390×390 AMOLED) or [Waveshare ESP32-S3-Knob-Touch-LCD-1.8](https://www.waveshare.com/wiki/ESP32-S3-Knob-Touch-LCD-1.8) (360×360 IPS). Board is selected at **compile time**. |
+| **T-Encoder** | Auto-detects DXQ120 (SH8601) or TFD12 (CO5300) panel at boot; piezo beep + knob push button                                          |
+| **Waveshare** | ST77916 + CST816; PWM backlight; rotary encoder only (no push button — Wi‑Fi wipe via web UI); no piezo                             |
+| **Enclosure** | [MakerWorld](https://makerworld.com/en/models/2902669-flightscnr-live-ads-b-traffic-sweeping-radar#profileId-3245055) (T-Encoder; not in repo) |
 
 
 ## Build & flash
@@ -100,9 +101,13 @@ To change other settings later: same URL, **Save**. To wipe all Wi‑Fi networks
 Requires [PlatformIO](https://platformio.org/).
 
 ```bash
-python -m platformio run -e tencoder-pro -t upload   # Windows if pio not on PATH
-pio run -e tencoder-pro -t upload                      # otherwise
+pio run -t upload                         # auto: USB heuristic / last board / T-Encoder default
+pio run -e tencoder-pro -t upload         # LilyGO T-Encoder Pro
+pio run -e waveshare-knob-1.8 -t upload   # Waveshare Knob Touch LCD 1.8
+# or: set FLIGHTSCNR_BOARD=waveshare-knob-1.8
 ```
+
+On Waveshare, USB-C plug **orientation** matters (CH334 hub). If esptool reports the wrong chip, flip the cable.
 
 **WebFlasher (no PlatformIO):** [yashmulgaonkar.github.io/FlightScnr](https://yashmulgaonkar.github.io/FlightScnr) - Connect → choose the latest or an older release → Install. Older releases are offered as full installs for safer downgrades. Hold screen (**BOOT**) if the port doesn’t appear.
 
@@ -116,9 +121,9 @@ Once the unit is on your network, open the web settings page (`http://flightscnr
 
 The device also checks GitHub for a newer release **on every boot** and again after **24 hours of uptime**. If one is available, the **About** screen shows a short “Update available” note (install remains on the web portal).
 
-**Merged binary:** `pio run -t merge -e tencoder-pro` → `.pio/build/tencoder-pro/firmware-merged.bin`
+**Merged binary:** `pio run -t merge -e tencoder-pro` (or `-e waveshare-knob-1.8`) → `.pio/build/<env>/firmware-merged.bin`
 
-Builds auto-download [tar1090-db](https://github.com/wiedehopf/tar1090-db) and [Airports](https://github.com/mwgg/Airports) lookups. Wrong panel saved? Erase flash and re-detect, or override with `-D FLIGHTSCNR_PANEL_DXQ` / `-D FLIGHTSCNR_PANEL_TFD12` in `platformio.ini`.
+Builds auto-download [tar1090-db](https://github.com/wiedehopf/tar1090-db) and [Airports](https://github.com/mwgg/Airports) lookups. Wrong T-Encoder panel saved? Erase flash and re-detect, or override with `-D FLIGHTSCNR_PANEL_DXQ` / `-D FLIGHTSCNR_PANEL_TFD12` in `platformio.ini`.
 
 ## Optional APIs
 

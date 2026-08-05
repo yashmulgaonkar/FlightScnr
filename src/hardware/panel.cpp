@@ -14,8 +14,13 @@ namespace {
 constexpr char kStoreNs[] = "flightscnr";
 constexpr char kPanelKey[] = "panel_hw";
 
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+PanelType s_panel = PanelType::WaveshareSt77916;
+#else
 PanelType s_panel = PanelType::DxqSh8601;
+#endif
 
+#if FLIGHTSCNR_PANEL_AUTODETECT
 bool i2cDevicePresent(uint8_t addr) {
   Wire.beginTransmission(addr);
   return Wire.endTransmission() == 0;
@@ -74,11 +79,16 @@ void persistPanel(PanelType type) {
     prefs.end();
   }
 }
+#endif  // FLIGHTSCNR_PANEL_AUTODETECT
 
 }  // namespace
 
 void panelBootResolve() {
-#if defined(FLIGHTSCNR_PANEL_TFD12)
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+  s_panel = PanelType::WaveshareSt77916;
+  Serial.println("Panel: Waveshare ST77916 / CST816 (compile-time board)");
+  return;
+#elif defined(FLIGHTSCNR_PANEL_TFD12)
   s_panel = PanelType::TfdCo5300;
   Serial.println("Panel: forced TFD12 / CO5300 / CST816 (build flag)");
   return;
@@ -88,6 +98,7 @@ void panelBootResolve() {
   return;
 #endif
 
+#if FLIGHTSCNR_PANEL_AUTODETECT
   PanelType stored = PanelType::DxqSh8601;
   if (readStoredPanel(&stored)) {
     s_panel = stored;
@@ -98,6 +109,7 @@ void panelBootResolve() {
   s_panel = probeTouchPanel();
   persistPanel(s_panel);
   Serial.printf("Panel: %s (auto-detected, saved)\n", panelTypeName());
+#endif
 }
 
 PanelType panelType() { return s_panel; }
@@ -106,6 +118,8 @@ const char* panelTypeName() {
   switch (s_panel) {
     case PanelType::TfdCo5300:
       return "TFD12 / CO5300";
+    case PanelType::WaveshareSt77916:
+      return "Waveshare / ST77916";
     case PanelType::DxqSh8601:
     default:
       return "DXQ120 / SH8601";
@@ -113,5 +127,9 @@ const char* panelTypeName() {
 }
 
 bool panelUsesCo5300() { return s_panel == PanelType::TfdCo5300; }
+
+bool panelUsesCst816() {
+  return s_panel == PanelType::TfdCo5300 || s_panel == PanelType::WaveshareSt77916;
+}
 
 }  // namespace hardware

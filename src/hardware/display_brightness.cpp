@@ -4,6 +4,7 @@
 #include <cstdlib>
 
 #include "hardware/display.h"
+#include "hardware/pin_config.h"
 
 namespace hardware {
 
@@ -14,6 +15,13 @@ constexpr char kBrightPctKey[] = "bright_pct";
 
 constexpr uint8_t kLevels[] = {20, 40, 60, 80, 100};
 constexpr size_t kLevelCount = sizeof(kLevels) / sizeof(kLevels[0]);
+
+#if FLIGHTSCNR_HAS_LCD_BACKLIGHT_PWM
+constexpr int kBlLedcChannel = 3;
+constexpr int kBlLedcFreqHz = 5000;
+constexpr int kBlLedcResolution = 8;
+bool s_bl_pwm_ready = false;
+#endif
 
 uint8_t s_percent = 100;
 
@@ -30,6 +38,22 @@ uint8_t panelLevelForPercent(uint8_t pct) {
   return static_cast<uint8_t>((static_cast<uint16_t>(pct) * 255u + 50u) / 100u);
 }
 
+#if FLIGHTSCNR_HAS_LCD_BACKLIGHT_PWM
+void ensureBacklightPwm() {
+  if (s_bl_pwm_ready) {
+    return;
+  }
+  ledcSetup(kBlLedcChannel, kBlLedcFreqHz, kBlLedcResolution);
+  ledcAttachPin(LCD_BL, kBlLedcChannel);
+  s_bl_pwm_ready = true;
+}
+
+void applyBacklightPwm(uint8_t pct) {
+  ensureBacklightPwm();
+  ledcWrite(kBlLedcChannel, panelLevelForPercent(pct));
+}
+#endif
+
 }  // namespace
 
 void displayBrightnessBootLoad() {
@@ -45,11 +69,15 @@ void displayBrightnessBootLoad() {
 uint8_t displayBrightnessPercent() { return s_percent; }
 
 void displayApplyBrightness() {
+#if FLIGHTSCNR_HAS_LCD_BACKLIGHT_PWM
+  applyBacklightPwm(s_percent);
+#else
   Arduino_GFX* const panel = tft.raw();
   if (panel == nullptr) {
     return;
   }
   panel->Display_Brightness(panelLevelForPercent(s_percent));
+#endif
 }
 
 void displayBrightnessStep(int8_t delta) {
@@ -98,11 +126,15 @@ void displayBrightnessSaveFromForm(const char* percent_str) {
 }
 
 void displayBrightnessOverride(uint8_t percent) {
+#if FLIGHTSCNR_HAS_LCD_BACKLIGHT_PWM
+  applyBacklightPwm(percent);
+#else
   Arduino_GFX* const panel = tft.raw();
   if (panel == nullptr) {
     return;
   }
   panel->Display_Brightness(panelLevelForPercent(percent));
+#endif
 }
 
 void displayBrightnessRestore() { displayApplyBrightness(); }

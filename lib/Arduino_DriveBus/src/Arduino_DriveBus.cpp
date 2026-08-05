@@ -214,7 +214,10 @@ bool Arduino_IIC_DriveBus::IIC_ReadC8_Data(uint8_t device_address, uint8_t c, ui
         log_w("->RequestFrom(device_address, length) fail");
         return false;
     }
-    *d = Read();
+    for (size_t i = 0; i < length; i++)
+    {
+        d[i] = Read();
+    }
 
     return true;
 }
@@ -242,7 +245,10 @@ bool Arduino_IIC_DriveBus::IIC_ReadC16_Data(uint8_t device_address, uint16_t c, 
         log_w("->RequestFrom(device_address, length) fail");
         return false;
     }
-    *d = Read();
+    for (size_t i = 0; i < length; i++)
+    {
+        d[i] = Read();
+    }
 
     return true;
 }
@@ -266,7 +272,10 @@ bool Arduino_IIC_DriveBus::IIC_ReadC8_Delay_Data(uint8_t device_address, uint8_t
         log_w("->RequestFrom(device_address, length) fail");
         return false;
     }
-    *d = Read();
+    for (size_t i = 0; i < length; i++)
+    {
+        d[i] = Read();
+    }
 
     return true;
 }

@@ -36,10 +36,12 @@ constexpr char kAvailKey[] = "av";
 constexpr char kApiHost[] = "api.github.com";
 constexpr char kApiPath[] =
     "/repos/yashmulgaonkar/FlightScnr/releases/latest";
-constexpr char kAppAssetName[] = "FlightScnr-tencoder-pro-app.bin";
+constexpr char kAppAssetName[] = "FlightScnr-" FLIGHTSCNR_BOARD_NAME "-app.bin";
 constexpr char kUserAgent[] = "FlightScnr-OTA";
 
 constexpr unsigned long kCheckIntervalMs = 24UL * 60UL * 60UL * 1000UL;
+/** After a failed GitHub check (e.g. HTTP 403), wait before retrying. */
+constexpr unsigned long kCheckRetryOnFailMs = 60UL * 60UL * 1000UL;
 constexpr uint32_t kCheckTimeoutMs = 20000;
 constexpr uint32_t kInstallTimeoutMs = 10UL * 60UL * 1000UL;
 constexpr size_t kStreamChunk = 4096;
@@ -49,6 +51,7 @@ char s_latest_tag[32] = {};
 char s_asset_url[256] = {};
 bool s_available = false;
 unsigned long s_last_check_ms = 0;
+unsigned long s_check_cooldown_ms = kCheckIntervalMs;
 
 volatile InstallState s_install_state = InstallState::Idle;
 volatile uint8_t s_install_pct = 0;
@@ -146,7 +149,7 @@ void loadCache() {
   }
 }
 
-/** True when a successful check already ran this boot and is still within 24h. */
+/** True when a check already ran this boot and is still within the cooldown. */
 bool cacheFresh() {
   if (s_last_check_ms == 0) {
     return false;
@@ -155,7 +158,12 @@ bool cacheFresh() {
   if (now < s_last_check_ms) {
     return false;
   }
-  return (now - s_last_check_ms) < kCheckIntervalMs;
+  return (now - s_last_check_ms) < s_check_cooldown_ms;
+}
+
+void markCheckAttempt(bool success) {
+  s_last_check_ms = millis();
+  s_check_cooldown_ms = success ? kCheckIntervalMs : kCheckRetryOnFailMs;
 }
 
 size_t otaAppPartitionSize() {
@@ -208,13 +216,16 @@ bool fetchLatestFromGitHub(bool wait_for_link) {
   char url[128];
   snprintf(url, sizeof(url), "https://%s%s", kApiHost, kApiPath);
   if (!http.begin(client, url)) {
+    markCheckAttempt(false);
     services::https::drainTlsHeapAfterSession();
     return false;
   }
 
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    Serial.printf("[ota_gh] releases HTTP %d\n", code);
+    Serial.printf("[ota_gh] releases HTTP %d (retry in %luh)\n", code,
+                  static_cast<unsigned long>(kCheckRetryOnFailMs / 3600000UL));
+    markCheckAttempt(false);
     http.end();
     services::https::drainTlsHeapAfterSession();
     return false;
@@ -234,12 +245,14 @@ bool fetchLatestFromGitHub(bool wait_for_link) {
 
   if (err) {
     Serial.printf("[ota_gh] json: %s\n", err.c_str());
+    markCheckAttempt(false);
     return false;
   }
 
   const char* tag = doc["tag_name"] | "";
   if (tag[0] == '\0') {
     Serial.println("[ota_gh] missing tag_name");
+    markCheckAttempt(false);
     return false;
   }
 
@@ -254,6 +267,7 @@ bool fetchLatestFromGitHub(bool wait_for_link) {
   }
   if (asset_url == nullptr || asset_url[0] == '\0') {
     Serial.println("[ota_gh] app.bin asset not found");
+    markCheckAttempt(false);
     return false;
   }
 
@@ -262,7 +276,7 @@ bool fetchLatestFromGitHub(bool wait_for_link) {
   strncpy(s_asset_url, asset_url, sizeof(s_asset_url) - 1);
   s_asset_url[sizeof(s_asset_url) - 1] = '\0';
   s_available = isNewerThanRunning(s_latest_tag);
-  s_last_check_ms = millis();
+  markCheckAttempt(true);
   persistCache();
   Serial.printf("[ota_gh] latest=%s available=%d\n", s_latest_tag,
                 s_available ? 1 : 0);

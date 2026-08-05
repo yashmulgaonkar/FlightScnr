@@ -13,7 +13,8 @@ constexpr int kTopSafePx = 40;
 
 constexpr int kBtnW = 120;
 constexpr int kBtnH = 36;
-constexpr int kBtnBottomInset = 58;
+/** Keep inside the round bezel; lower frees vertical room for body copy. */
+constexpr int kBtnBottomInset = 28;
 constexpr int kBodyBtnGap = 12;
 
 const int kCenterX = config::kDisplayWidth / 2;

@@ -233,6 +233,8 @@ typedef enum
   WRITE_C16_D16,
   END_WRITE,
   DELAY,
+  /** Command + N data bytes over QSPI cmd 0x02 (not pixel RAMWR 0x32). Appended to keep older init opcode values stable. */
+  WRITE_C8_BYTES,
 } spi_operation_type_t;
 
 union
@@ -272,7 +274,7 @@ public:
   void sendData(uint8_t d);
   void sendData16(uint16_t d);
 
-  void batchOperation(const uint8_t *operations, size_t len);
+  virtual void batchOperation(const uint8_t *operations, size_t len);
 
 #if !defined(LITTLE_FOOT_PRINT)
   virtual void writeBytes(uint8_t *data, uint32_t len) = 0;

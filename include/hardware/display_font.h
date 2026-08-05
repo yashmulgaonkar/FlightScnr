@@ -1,10 +1,11 @@
 #pragma once
 
+#include "hardware/aa_font.h"
 #include "hardware/plane_gfx.h"
 
-/** Montserrat Bold GFXfont preset for UI text. */
+/** Montserrat Bold 4-bit antialiased font preset for UI text. */
 struct UiTextStyle {
-  const GFXfont* font;
+  const AaFont* font;
 };
 
 UiTextStyle displayFontTitle();

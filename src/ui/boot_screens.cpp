@@ -247,22 +247,24 @@ namespace {
 
 constexpr int kWifiResetCx = config::kDisplayWidth / 2;
 constexpr int kWifiResetCy = config::kDisplayHeight / 2;
-constexpr int kWifiResetRingRadiusPx = kWifiResetCx - 2;
-constexpr float kWifiResetRingHalfWidth = 2.0f;
-constexpr int kWifiResetRingDegStep = 2;
-constexpr float kWifiResetDegToRad = 0.01745329252f;
+constexpr int kWifiResetRingOuterR = kWifiResetCx - 1;
+constexpr int kWifiResetRingInnerR = kWifiResetRingOuterR - 4;
+constexpr int kWifiResetRingDegStep = 1;
 
 bool s_wifi_reset_ui_active = false;
 int s_wifi_reset_last_sec = -1;
 int s_wifi_reset_last_deg = -1;
 char s_wifi_reset_line[36];
 
-void wifiResetRingPoint(float deg_cw_from_top, int* x, int* y) {
-  const float rad = deg_cw_from_top * kWifiResetDegToRad;
-  *x = kWifiResetCx +
-       static_cast<int>(lroundf(sinf(rad) * static_cast<float>(kWifiResetRingRadiusPx)));
-  *y = kWifiResetCy -
-       static_cast<int>(lroundf(cosf(rad) * static_cast<float>(kWifiResetRingRadiusPx)));
+float wifiResetToGfxDeg(float deg_cw_from_top) {
+  float a = deg_cw_from_top + 270.0f;
+  while (a >= 360.0f) {
+    a -= 360.0f;
+  }
+  while (a < 0.0f) {
+    a += 360.0f;
+  }
+  return a;
 }
 
 uint16_t wifiResetRingColor() { return tft.color565(26, 156, 60); }
@@ -271,27 +273,30 @@ void drawWifiResetRingArc(float start_deg, float end_deg, uint16_t color) {
   if (end_deg <= start_deg + 0.05f) {
     return;
   }
-  const float step = static_cast<float>(kWifiResetRingDegStep);
-  float a = start_deg;
-  int px = 0;
-  int py = 0;
-  wifiResetRingPoint(a, &px, &py);
-  for (float b = start_deg + step; b < end_deg; b += step) {
-    int nx = 0;
-    int ny = 0;
-    wifiResetRingPoint(b, &nx, &ny);
-    tft.drawWideLine(static_cast<int16_t>(px), static_cast<int16_t>(py),
-                     static_cast<int16_t>(nx), static_cast<int16_t>(ny),
-                     kWifiResetRingHalfWidth, color);
-    px = nx;
-    py = ny;
+  const float span = end_deg - start_deg;
+  if (span >= 359.5f) {
+    tft.fillArc(static_cast<int16_t>(kWifiResetCx), static_cast<int16_t>(kWifiResetCy),
+                static_cast<int16_t>(kWifiResetRingOuterR),
+                static_cast<int16_t>(kWifiResetRingInnerR), 0.0f, 360.0f, color);
+    return;
   }
-  int nx = 0;
-  int ny = 0;
-  wifiResetRingPoint(end_deg, &nx, &ny);
-  tft.drawWideLine(static_cast<int16_t>(px), static_cast<int16_t>(py),
-                   static_cast<int16_t>(nx), static_cast<int16_t>(ny),
-                   kWifiResetRingHalfWidth, color);
+
+  const float gs = wifiResetToGfxDeg(start_deg);
+  const float ge = wifiResetToGfxDeg(end_deg);
+  if (ge < gs) {
+    tft.fillArc(static_cast<int16_t>(kWifiResetCx), static_cast<int16_t>(kWifiResetCy),
+                static_cast<int16_t>(kWifiResetRingOuterR),
+                static_cast<int16_t>(kWifiResetRingInnerR), gs, 360.0f, color);
+    if (ge > 0.05f) {
+      tft.fillArc(static_cast<int16_t>(kWifiResetCx), static_cast<int16_t>(kWifiResetCy),
+                  static_cast<int16_t>(kWifiResetRingOuterR),
+                  static_cast<int16_t>(kWifiResetRingInnerR), 0.0f, ge, color);
+    }
+  } else {
+    tft.fillArc(static_cast<int16_t>(kWifiResetCx), static_cast<int16_t>(kWifiResetCy),
+                static_cast<int16_t>(kWifiResetRingOuterR),
+                static_cast<int16_t>(kWifiResetRingInnerR), gs, ge, color);
+  }
 }
 
 void paintWifiResetCountdown(int sec, int rem_deg) {

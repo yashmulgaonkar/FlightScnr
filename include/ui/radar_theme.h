@@ -2,14 +2,16 @@
 
 #include <cstdint>
 
+#include "config.h"
+
 namespace ui::radar {
 
-constexpr int kSize = 390;
+constexpr int kSize = config::kDisplayWidth;
 constexpr int kCenterX = kSize / 2;
 constexpr int kCenterY = kSize / 2;
 
-/** Outermost grid ring (inside edge labels). */
-constexpr int kGridOuterRadius = 174;
+/** Outermost grid ring (inside edge labels). Scales with panel diameter. */
+constexpr int kGridOuterRadius = (kSize * 174) / 390;
 
 /** N: pixels inset from top edge (TopCenter anchor). */
 constexpr int kCardinalNorthOffsetY = 10;

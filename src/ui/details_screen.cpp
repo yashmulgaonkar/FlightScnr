@@ -16,8 +16,6 @@ namespace {
 constexpr int kBezelInsetPx = 10;
 constexpr int kTextPadPx = 6;
 constexpr int kLineGap = 4;
-constexpr int kFooterGap = 8;
-constexpr int kHintsTopGap = 22;
 /** Extra space between firmware version and author lines. */
 constexpr int kAuthorTopGap = 20;
 
@@ -97,6 +95,7 @@ int measureBlockHeight(const InfoLine* lines, size_t count) {
 }  // namespace
 
 void detailsScreenDraw(bool boot_splash) {
+  (void)boot_splash;
   tft.beginOffscreen();
   const uint16_t bg = tft.color565(0, 0, 0);
   const uint16_t fg = tft.color565(255, 255, 255);
@@ -123,9 +122,6 @@ void detailsScreenDraw(bool boot_splash) {
       {"FlightScnr by", displayFontBody(), label_fg},
       {"Yash Mulgaonkar", displayFontBody(), label_fg},
   };
-  const InfoLine hint_lines[] = {
-      {"Swipe down — Radar", displayFontDetail(), hint_fg},
-  };
 
   const int version_h = measureBlockHeight(version_lines, sizeof(version_lines) / sizeof(version_lines[0]));
   const int update_h =
@@ -133,11 +129,7 @@ void detailsScreenDraw(bool boot_splash) {
                      kLineGap)
                   : 0;
   const int author_h = measureBlockHeight(author_lines, sizeof(author_lines) / sizeof(author_lines[0]));
-  const int hints_h = boot_splash ? 0
-                                  : measureBlockHeight(hint_lines,
-                                                       sizeof(hint_lines) / sizeof(hint_lines[0]));
-  const int block_h = version_h + update_h + kAuthorTopGap + author_h +
-                      (boot_splash ? 0 : kHintsTopGap + hints_h + kFooterGap);
+  const int block_h = version_h + update_h + kAuthorTopGap + author_h;
 
   tft.fillScreen(bg);
 
@@ -161,14 +153,6 @@ void detailsScreenDraw(bool boot_splash) {
 
   for (const InfoLine& line : author_lines) {
     drawCenterLine(line.text, &y, line.style, line.color, bg);
-  }
-
-  if (!boot_splash) {
-    y += kHintsTopGap;
-
-    for (const InfoLine& line : hint_lines) {
-      drawCenterLine(line.text, &y, line.style, line.color, bg);
-    }
   }
 
   tft.setTextDatum(TextDatum::TopLeft);

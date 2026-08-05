@@ -1,34 +1,20 @@
 #pragma once
 
-/** T-Encoder Pro V1.0 — 390×390 AMOLED QSPI (panel variant resolved at boot). */
+/**
+ * Compile-time board pin map.
+ *
+ * Selected by PlatformIO build flag:
+ *   -D FLIGHTSCNR_BOARD_TENCODER_PRO   (LilyGO T-Encoder Pro — default)
+ *   -D FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18  (Waveshare ESP32-S3-Knob-Touch-LCD-1.8)
+ *
+ * Run `pio run` (env: auto) to pick a connected board, or `pio run -e <board>`.
+ */
 
-#ifndef CHSC5816_SLAVE_ADDRESS
-#define CHSC5816_SLAVE_ADDRESS 0x2E
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+#include "boards/waveshare_knob_18.h"
+#elif defined(FLIGHTSCNR_BOARD_TENCODER_PRO)
+#include "boards/tencoder_pro.h"
+#else
+/* Native/host unit tests and accidental bare builds default to T-Encoder Pro. */
+#include "boards/tencoder_pro.h"
 #endif
-
-#ifndef CST816_SLAVE_ADDRESS
-#define CST816_SLAVE_ADDRESS 0x15
-#endif
-
-#define BUZZER_DATA 17
-
-#define IIC_SDA 5
-#define IIC_SCL 6
-
-#define TOUCH_INT 9
-#define TOUCH_RST 8
-
-#define LCD_SDIO0 11
-#define LCD_SDIO1 13
-#define LCD_SDIO2 7
-#define LCD_SDIO3 14
-#define LCD_SCLK 12
-#define LCD_CS 10
-#define LCD_RST 4
-#define LCD_WIDTH 390
-#define LCD_HEIGHT 390
-#define LCD_VCI_EN 3
-
-#define KNOB_DATA_A 1
-#define KNOB_DATA_B 2
-#define KNOB_KEY 0

@@ -4,6 +4,8 @@
 
 #include <driver/gpio.h>
 
+#include "hardware/pin_config.h"
+
 namespace config {
 
 #ifndef FLIGHTSCNR_FIRMWARE_VERSION
@@ -47,8 +49,12 @@ constexpr uint8_t kWifiDemoteAfterFails = 3;
  */
 constexpr uint8_t kWifiPortalAfterReconnectFails = 3;
 
-// --- Knob button (GPIO 0, active LOW) ---
-constexpr gpio_num_t kKnobKeyPin = GPIO_NUM_0;
+// --- Knob button (active LOW; absent on Waveshare — see FLIGHTSCNR_HAS_KNOB_BUTTON) ---
+#if FLIGHTSCNR_HAS_KNOB_BUTTON
+constexpr gpio_num_t kKnobKeyPin = static_cast<gpio_num_t>(KNOB_KEY);
+#else
+constexpr gpio_num_t kKnobKeyPin = static_cast<gpio_num_t>(-1);
+#endif
 constexpr unsigned long kKnobResetHoldMs = 5000UL;
 /** Show Wi-Fi reset countdown UI after this hold (avoids flash on short presses). */
 constexpr unsigned long kKnobResetCountdownStartMs = 250UL;
@@ -59,12 +65,12 @@ constexpr unsigned long kKnobTapMinMs = 40UL;
 constexpr unsigned long kSwipeNavDebounceMs = 300UL;
 
 // --- Rotary encoder ---
-constexpr gpio_num_t kKnobPinA = GPIO_NUM_1;
-constexpr gpio_num_t kKnobPinB = GPIO_NUM_2;
+constexpr gpio_num_t kKnobPinA = static_cast<gpio_num_t>(KNOB_DATA_A);
+constexpr gpio_num_t kKnobPinB = static_cast<gpio_num_t>(KNOB_DATA_B);
 
-// --- Display: 1.2" round 390×390 AMOLED QSPI (SH8601 or CO5300, auto-detected) ---
-constexpr int kDisplayWidth = 390;
-constexpr int kDisplayHeight = 390;
+// --- Display size from selected board (compile-time) ---
+constexpr int kDisplayWidth = LCD_WIDTH;
+constexpr int kDisplayHeight = LCD_HEIGHT;
 
 /** Flight detail / device settings return to radar; clock settings return to clock (ms). */
 constexpr unsigned long kSecondaryScreenTimeoutMs = 10000;

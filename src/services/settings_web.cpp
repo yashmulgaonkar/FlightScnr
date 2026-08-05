@@ -859,7 +859,29 @@ void handleSettingsPage() {
             "display. All API calls are paused. Knob press wakes the device.</p>");
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 
-  // ---------- Sound card ----------
+  // ---------- Sound / haptic card ----------
+#if FLIGHTSCNR_HAS_HAPTIC
+  appendRaw(page, kSettingsPageCap, &used,
+            "<details class=\"card\"><summary><span class=\"ico\">&#9835;</span>Haptic"
+            "<span class=\"sum\">vibration</span><span class=\"chev\">&#9656;</span>"
+            "</summary><div class=\"body\">");
+  appendToggle(page, kSettingsPageCap, &used, "ui_beep", "Vibration on touch and knob",
+               hardware::buzzerEnabled());
+  const char beep_tone = hardware::buzzerToneLetter();
+  const int beep_n = snprintf(
+      page + used, kSettingsPageCap - used,
+      "<label for=\"beep_tone\">Vibration intensity</label>"
+      "<select id=\"beep_tone\" name=\"beep_tone\">"
+      "<option value=\"A\"%s>20%%</option>"
+      "<option value=\"B\"%s>40%%</option>"
+      "<option value=\"C\"%s>60%%</option>"
+      "<option value=\"D\"%s>80%%</option>"
+      "<option value=\"E\"%s>100%%</option>"
+      "</select>",
+      beep_tone == 'A' ? " selected" : "", beep_tone == 'B' ? " selected" : "",
+      beep_tone == 'C' ? " selected" : "", beep_tone == 'D' ? " selected" : "",
+      beep_tone == 'E' ? " selected" : "");
+#else
   appendRaw(page, kSettingsPageCap, &used,
             "<details class=\"card\"><summary><span class=\"ico\">&#9835;</span>Sound"
             "<span class=\"sum\">UI beep</span><span class=\"chev\">&#9656;</span>"
@@ -880,6 +902,7 @@ void handleSettingsPage() {
       beep_tone == 'A' ? " selected" : "", beep_tone == 'B' ? " selected" : "",
       beep_tone == 'C' ? " selected" : "", beep_tone == 'D' ? " selected" : "",
       beep_tone == 'E' ? " selected" : "");
+#endif
   appendClamped(page, kSettingsPageCap, &used, beep_n);
   appendRaw(page, kSettingsPageCap, &used, "</div></details>");
 

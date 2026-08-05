@@ -3,6 +3,8 @@
 #include <Arduino_GFX_Library.h>
 #include <cstdint>
 
+#include "hardware/aa_font.h"
+
 enum class TextDatum : uint8_t {
   TopLeft,
   TopCenter,
@@ -24,12 +26,21 @@ class PlaneGfx {
     gfx_ = gfx;
     hardware_panel_ = hardware_panel;
   }
+  /** Optional RGB565 framebuffer for AA text blending (sprites / offscreen). */
+  void setFramebuffer(uint16_t* buf, int16_t w, int16_t h) {
+    fb_ = buf;
+    fb_w_ = w;
+    fb_h_ = h;
+  }
   Arduino_GFX* raw() const { return gfx_; }
 
   void fillScreen(uint16_t color);
   void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
   void fillCircle(int16_t x, int16_t y, int16_t r, uint16_t color);
   void drawCircle(int16_t x, int16_t y, int16_t r, uint16_t color);
+  /** Filled annulus sector. Angles: 0° = 3 o'clock, clockwise (Arduino_GFX). */
+  void fillArc(int16_t x, int16_t y, int16_t r_outer, int16_t r_inner, float start_deg,
+               float end_deg, uint16_t color);
   void fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2,
                     int16_t y2, uint16_t color);
   void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
@@ -42,6 +53,7 @@ class PlaneGfx {
   void setTextColor(uint16_t fg, uint16_t bg);
   void setTextSize(uint8_t size);
   void setFont(const GFXfont* font);
+  void setFont(const AaFont* font);
   void setTextDatum(TextDatum datum);
   void setTextWrap(bool wrap);
 
@@ -74,6 +86,15 @@ class PlaneGfx {
   TextDatum datum_ = TextDatum::TopLeft;
   uint8_t write_depth_ = 0;
 
+  const AaFont* aa_font_ = nullptr;
+  uint16_t text_fg_ = 0xFFFF;
+  uint16_t text_bg_ = 0xFFFF;
+  bool text_transparent_ = true;
+
+  uint16_t* fb_ = nullptr;
+  int16_t fb_w_ = 0;
+  int16_t fb_h_ = 0;
+
   // Offscreen compose state (see beginOffscreen): a cached full-screen canvas
   // that temporarily replaces gfx_ so draws bypass the panel's 2x2 alignment.
   Arduino_GFX* offscreen_canvas_ = nullptr;
@@ -92,6 +113,9 @@ class PlaneGfx {
                         uint16_t color);
   void mapDatum(const char* text, int16_t x, int16_t y, int16_t* out_x,
                 int16_t* out_y) const;
+  void getAaTextBounds(const char* text, int16_t x, int16_t y, int16_t* x1,
+                       int16_t* y1, uint16_t* w, uint16_t* h) const;
+  void drawAaString(const char* text, int16_t cursor_x, int16_t cursor_y);
 };
 
 /** RAII hardware panel SPI session for one composited frame. */

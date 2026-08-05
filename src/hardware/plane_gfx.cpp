@@ -283,6 +283,13 @@ void PlaneGfx::drawCircle(int16_t x, int16_t y, int16_t r, uint16_t color) {
   }
 }
 
+void PlaneGfx::fillArc(int16_t x, int16_t y, int16_t r_outer, int16_t r_inner,
+                       float start_deg, float end_deg, uint16_t color) {
+  if (gfx_ != nullptr) {
+    gfx_->fillArc(x, y, r_outer, r_inner, start_deg, end_deg, color);
+  }
+}
+
 void PlaneGfx::fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
                             int16_t x2, int16_t y2, uint16_t color) {
   if (gfx_ != nullptr) {
@@ -349,12 +356,18 @@ uint16_t PlaneGfx::color565(uint8_t r, uint8_t g, uint8_t b) const {
 }
 
 void PlaneGfx::setTextColor(uint16_t fg) {
+  text_fg_ = fg;
+  text_bg_ = fg;
+  text_transparent_ = true;
   if (gfx_ != nullptr) {
     gfx_->setTextColor(fg);
   }
 }
 
 void PlaneGfx::setTextColor(uint16_t fg, uint16_t bg) {
+  text_fg_ = fg;
+  text_bg_ = bg;
+  text_transparent_ = (fg == bg);
   if (gfx_ != nullptr) {
     gfx_->setTextColor(fg, bg);
   }
@@ -367,8 +380,16 @@ void PlaneGfx::setTextSize(uint8_t size) {
 }
 
 void PlaneGfx::setFont(const GFXfont* font) {
+  aa_font_ = nullptr;
   if (gfx_ != nullptr) {
     gfx_->setFont(font);
+  }
+}
+
+void PlaneGfx::setFont(const AaFont* font) {
+  aa_font_ = font;
+  if (gfx_ != nullptr) {
+    gfx_->setFont(static_cast<const GFXfont*>(nullptr));
   }
 }
 
@@ -380,8 +401,101 @@ void PlaneGfx::setTextWrap(bool wrap) {
   }
 }
 
+namespace {
+
+uint16_t blend565(uint16_t fg, uint16_t bg, uint8_t a4) {
+  if (a4 == 0) {
+    return bg;
+  }
+  if (a4 >= 15) {
+    return fg;
+  }
+  const uint8_t fr = static_cast<uint8_t>((fg >> 11) & 0x1F);
+  const uint8_t fg_g = static_cast<uint8_t>((fg >> 5) & 0x3F);
+  const uint8_t fb = static_cast<uint8_t>(fg & 0x1F);
+  const uint8_t br = static_cast<uint8_t>((bg >> 11) & 0x1F);
+  const uint8_t bg_g = static_cast<uint8_t>((bg >> 5) & 0x3F);
+  const uint8_t bb = static_cast<uint8_t>(bg & 0x1F);
+  const uint8_t r =
+      static_cast<uint8_t>((fr * a4 + br * (15 - a4)) / 15);
+  const uint8_t g =
+      static_cast<uint8_t>((fg_g * a4 + bg_g * (15 - a4)) / 15);
+  const uint8_t b =
+      static_cast<uint8_t>((fb * a4 + bb * (15 - a4)) / 15);
+  return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+}  // namespace
+
+void PlaneGfx::getAaTextBounds(const char* text, int16_t x, int16_t y, int16_t* x1,
+                               int16_t* y1, uint16_t* w, uint16_t* h) const {
+  *x1 = x;
+  *y1 = y;
+  *w = 0;
+  *h = 0;
+  if (aa_font_ == nullptr || text == nullptr || *text == '\0') {
+    return;
+  }
+
+  int16_t min_x = 0x7FFF;
+  int16_t min_y = 0x7FFF;
+  int16_t max_x = -0x7FFF;
+  int16_t max_y = -0x7FFF;
+  int16_t cursor_x = x;
+  const int16_t cursor_y = y;
+  bool any = false;
+
+  for (const char* p = text; *p != '\0'; ++p) {
+    const uint8_t c = static_cast<uint8_t>(*p);
+    if (c < aa_font_->first || c > aa_font_->last) {
+      cursor_x = static_cast<int16_t>(cursor_x + aa_font_->yAdvance / 2);
+      continue;
+    }
+    const AaGlyph& g = aa_font_->glyph[c - aa_font_->first];
+    if (g.width > 0 && g.height > 0) {
+      const int16_t gx0 = static_cast<int16_t>(cursor_x + g.xOffset);
+      const int16_t gy0 = static_cast<int16_t>(cursor_y + g.yOffset);
+      const int16_t gx1 = static_cast<int16_t>(gx0 + g.width - 1);
+      const int16_t gy1 = static_cast<int16_t>(gy0 + g.height - 1);
+      if (gx0 < min_x) {
+        min_x = gx0;
+      }
+      if (gy0 < min_y) {
+        min_y = gy0;
+      }
+      if (gx1 > max_x) {
+        max_x = gx1;
+      }
+      if (gy1 > max_y) {
+        max_y = gy1;
+      }
+      any = true;
+    }
+    cursor_x = static_cast<int16_t>(cursor_x + g.xAdvance);
+  }
+
+  if (!any) {
+    return;
+  }
+  *x1 = min_x;
+  *y1 = min_y;
+  *w = static_cast<uint16_t>(max_x - min_x + 1);
+  *h = static_cast<uint16_t>(max_y - min_y + 1);
+}
+
 int PlaneGfx::textWidth(const char* text) const {
-  if (gfx_ == nullptr || text == nullptr) {
+  if (text == nullptr) {
+    return 0;
+  }
+  if (aa_font_ != nullptr) {
+    int16_t x1 = 0;
+    int16_t y1 = 0;
+    uint16_t w = 0;
+    uint16_t h = 0;
+    getAaTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+    return static_cast<int>(w);
+  }
+  if (gfx_ == nullptr) {
     return 0;
   }
   int16_t x1 = 0;
@@ -393,6 +507,14 @@ int PlaneGfx::textWidth(const char* text) const {
 }
 
 int PlaneGfx::fontHeight() const {
+  if (aa_font_ != nullptr) {
+    int16_t x1 = 0;
+    int16_t y1 = 0;
+    uint16_t w = 0;
+    uint16_t h = 0;
+    getAaTextBounds("Ag", 0, 0, &x1, &y1, &w, &h);
+    return h > 0 ? static_cast<int>(h) : static_cast<int>(aa_font_->yAdvance);
+  }
   if (gfx_ == nullptr) {
     return 8;
   }
@@ -406,7 +528,12 @@ int PlaneGfx::fontHeight() const {
 
 void PlaneGfx::mapDatum(const char* text, int16_t x, int16_t y, int16_t* out_x,
                         int16_t* out_y) const {
-  if (gfx_ == nullptr || text == nullptr) {
+  if (text == nullptr) {
+    *out_x = x;
+    *out_y = y;
+    return;
+  }
+  if (aa_font_ == nullptr && gfx_ == nullptr) {
     *out_x = x;
     *out_y = y;
     return;
@@ -416,7 +543,11 @@ void PlaneGfx::mapDatum(const char* text, int16_t x, int16_t y, int16_t* out_x,
   int16_t y1 = 0;
   uint16_t w = 0;
   uint16_t h = 0;
-  gfx_->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  if (aa_font_ != nullptr) {
+    getAaTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  } else {
+    gfx_->getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  }
 
   switch (datum_) {
     case TextDatum::TopLeft:
@@ -458,6 +589,85 @@ void PlaneGfx::mapDatum(const char* text, int16_t x, int16_t y, int16_t* out_x,
   }
 }
 
+void PlaneGfx::drawAaString(const char* text, int16_t cursor_x, int16_t cursor_y) {
+  if (gfx_ == nullptr || aa_font_ == nullptr || text == nullptr) {
+    return;
+  }
+
+  int16_t x = cursor_x;
+  const int16_t y = cursor_y;
+  const uint16_t fg = text_fg_;
+  const bool transparent = text_transparent_;
+  const uint16_t opaque_bg = text_bg_;
+
+  for (const char* p = text; *p != '\0'; ++p) {
+    const uint8_t c = static_cast<uint8_t>(*p);
+    if (c < aa_font_->first || c > aa_font_->last) {
+      x = static_cast<int16_t>(x + aa_font_->yAdvance / 2);
+      continue;
+    }
+    const AaGlyph& g = aa_font_->glyph[c - aa_font_->first];
+    const int16_t gw = g.width;
+    const int16_t gh = g.height;
+    if (gw <= 0 || gh <= 0) {
+      x = static_cast<int16_t>(x + g.xAdvance);
+      continue;
+    }
+
+    const int16_t ox = static_cast<int16_t>(x + g.xOffset);
+    const int16_t oy = static_cast<int16_t>(y + g.yOffset);
+    const size_t pixels = static_cast<size_t>(gw) * static_cast<size_t>(gh);
+    const bool can_blit = !transparent && ensureBlitScratch(pixels);
+
+    if (can_blit) {
+      const uint8_t* bm = aa_font_->bitmap + g.bitmapOffset;
+      size_t bit_i = 0;
+      for (int16_t row = 0; row < gh; ++row) {
+        for (int16_t col = 0; col < gw; ++col) {
+          const uint8_t byte = bm[bit_i / 2];
+          const uint8_t a4 =
+              (bit_i & 1) ? static_cast<uint8_t>(byte & 0x0F)
+                          : static_cast<uint8_t>(byte >> 4);
+          ++bit_i;
+          s_blit_scratch[static_cast<size_t>(row) * static_cast<size_t>(gw) +
+                         static_cast<size_t>(col)] = blend565(fg, opaque_bg, a4);
+        }
+      }
+      draw16bitRGBBitmap(ox, oy, s_blit_scratch, gw, gh);
+    } else {
+      const uint8_t* bm = aa_font_->bitmap + g.bitmapOffset;
+      size_t bit_i = 0;
+      for (int16_t row = 0; row < gh; ++row) {
+        for (int16_t col = 0; col < gw; ++col) {
+          const uint8_t byte = bm[bit_i / 2];
+          const uint8_t a4 =
+              (bit_i & 1) ? static_cast<uint8_t>(byte & 0x0F)
+                          : static_cast<uint8_t>(byte >> 4);
+          ++bit_i;
+          if (a4 == 0) {
+            continue;
+          }
+          const int16_t px = static_cast<int16_t>(ox + col);
+          const int16_t py = static_cast<int16_t>(oy + row);
+          uint16_t bg = opaque_bg;
+          if (transparent) {
+            if (fb_ != nullptr && px >= 0 && py >= 0 && px < fb_w_ &&
+                py < fb_h_) {
+              bg = fb_[static_cast<size_t>(py) * static_cast<size_t>(fb_w_) +
+                       static_cast<size_t>(px)];
+            } else {
+              bg = 0;
+            }
+          }
+          gfx_->drawPixel(px, py, blend565(fg, bg, a4));
+        }
+      }
+    }
+
+    x = static_cast<int16_t>(x + g.xAdvance);
+  }
+}
+
 void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
   if (gfx_ == nullptr || text == nullptr) {
     return;
@@ -469,6 +679,19 @@ void PlaneGfx::drawString(const char* text, int16_t x, int16_t y) {
     draw_x &= ~1;
     draw_y &= ~1;
   }
+
+  if (aa_font_ != nullptr) {
+    const bool opened_here = write_depth_ == 0 && !hardware_panel_;
+    if (opened_here) {
+      startWrite();
+    }
+    drawAaString(text, draw_x, draw_y);
+    if (opened_here) {
+      endWrite();
+    }
+    return;
+  }
+
   gfx_->setCursor(draw_x, draw_y);
   // drawChar() opens/closes its own SPI session per glyph; do not wrap print().
   if (hardware_panel_) {
@@ -540,6 +763,7 @@ bool PlaneGfx::beginOffscreen() {
   saved_hardware_panel_ = hardware_panel_;
   gfx_ = offscreen_canvas_;
   hardware_panel_ = false;
+  setFramebuffer(offscreen_buf_, w, h);
   offscreen_active_ = true;
   return true;
 }
@@ -550,6 +774,7 @@ void PlaneGfx::endOffscreen() {
   }
   gfx_ = saved_gfx_;
   hardware_panel_ = saved_hardware_panel_;
+  setFramebuffer(nullptr, 0, 0);
   offscreen_active_ = false;
   if (offscreen_buf_ == nullptr) {
     return;
@@ -734,6 +959,7 @@ bool PlaneGfxSprite::createSprite(int16_t w, int16_t h) {
   width_ = w;
   height_ = h;
   canvas_.attach(new SpriteCanvas(buffer_, w, h));
+  canvas_.setFramebuffer(buffer_, w, h);
   canvas_.setTextWrap(false);
   return true;
 }
@@ -743,6 +969,7 @@ void PlaneGfxSprite::deleteSprite() {
     delete canvas_.raw();
     canvas_.attach(nullptr);
   }
+  canvas_.setFramebuffer(nullptr, 0, 0);
   if (buffer_ != nullptr) {
     heap_caps_free(buffer_);
     buffer_ = nullptr;

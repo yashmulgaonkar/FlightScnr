@@ -18,9 +18,6 @@ constexpr int kBezelInsetPx = 10;
 constexpr int kTextPadPx = 6;
 constexpr int kTitleGap = 6;
 constexpr int kLineGap = 4;
-constexpr int kFooterGap = 8;
-/** Space between editable options and help hints. */
-constexpr int kHintsTopGap = 22;
 
 const int kCenterX = config::kDisplayWidth / 2;
 const int kCenterY = config::kDisplayHeight / 2;
@@ -133,7 +130,6 @@ void clockSettingsScreenDraw() {
   const uint16_t bg = tft.color565(0, 0, 0);
   const uint16_t fg = tft.color565(255, 255, 255);
   const uint16_t label_fg = tft.color565(180, 200, 220);
-  const uint16_t hint_fg = tft.color565(120, 140, 160);
   uint8_t accent_r = 0;
   uint8_t accent_g = 0;
   uint8_t accent_b = 0;
@@ -159,14 +155,8 @@ void clockSettingsScreenDraw() {
       {fmt_line, displayFontBody(), fmt_fg},
       {date_line, displayFontBody(), date_fg},
   };
-  const InfoLine hint_lines[] = {
-      {"Knob press: change item", displayFontDetail(), hint_fg},
-      {"Turn knob: adjust value", displayFontDetail(), hint_fg},
-      {"Swipe right — Clock", displayFontDetail(), hint_fg},
-  };
   const int options_h = measureBlockHeight(option_lines, sizeof(option_lines) / sizeof(option_lines[0]));
-  const int hints_h = measureBlockHeight(hint_lines, sizeof(hint_lines) / sizeof(hint_lines[0]));
-  const int block_h = title_h + kTitleGap + options_h + kHintsTopGap + hints_h + kFooterGap;
+  const int block_h = title_h + kTitleGap + options_h;
 
   tft.fillScreen(bg);
 
@@ -182,12 +172,6 @@ void clockSettingsScreenDraw() {
   y += title_h + kTitleGap;
 
   for (const InfoLine& line : option_lines) {
-    drawCenterLine(line.text, &y, line.style, line.color, bg);
-  }
-
-  y += kHintsTopGap;
-
-  for (const InfoLine& line : hint_lines) {
     drawCenterLine(line.text, &y, line.style, line.color, bg);
   }
 

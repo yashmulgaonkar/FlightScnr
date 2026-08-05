@@ -5,7 +5,9 @@
 #include <cmath>
 #include <memory>
 
+#if !defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
 #include "TouchDrvCHSC5816.hpp"
+#endif
 #include "Arduino_DriveBus_Library.h"
 #include "config.h"
 #include "hardware/buzzer.h"
@@ -20,13 +22,14 @@ namespace {
 portMUX_TYPE s_input_mux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_encoder_step_pending = false;
 volatile int8_t s_encoder_pending_delta = 0;
-int8_t s_encoder_accum = 0;
+volatile int8_t s_encoder_accum = 0;
 
-/** Quadrature transition: -1, 0, or +1 half-step. */
+/** Quadrature transition: -1, 0, or +1 half-step (T-Encoder Pro). */
 constexpr int8_t kEncoderQuad[16] = {
     0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0,
 };
 constexpr int8_t kEncoderDetentThreshold = 2;
+
 volatile bool s_knob_tap_pending = false;
 volatile bool s_knob_press_pending = false;
 volatile int16_t s_tap_x = -1;
@@ -39,10 +42,70 @@ bool s_long_press_handled = false;
 bool s_wifi_reset_ui_cancelled_pending = false;
 bool s_knob_interrupt_attached = false;
 
-uint8_t s_knob_previous = 0;
-unsigned long s_knob_scan_ms = 0;
+volatile uint8_t s_knob_previous = 0;
 
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+// Waveshare demo (bidi_switch_knob): 3ms poll, rising A = CW, rising B = CCW.
+#include <esp_timer.h>
+constexpr uint32_t kWaveshareEncoderPollUs = 3000;
+constexpr uint8_t kWaveshareEncoderDebounceTicks = 2;
+uint8_t s_enc_a_level = 1;
+uint8_t s_enc_b_level = 1;
+uint8_t s_enc_a_debounce = 0;
+uint8_t s_enc_b_debounce = 0;
+esp_timer_handle_t s_enc_timer = nullptr;
+
+void queueEncoderStep(int8_t step) {
+  portENTER_CRITICAL(&s_input_mux);
+  s_encoder_step_pending = true;
+  if (step > 0) {
+    if (s_encoder_pending_delta < 20) {
+      s_encoder_pending_delta =
+          static_cast<int8_t>(s_encoder_pending_delta + 1);
+    }
+  } else if (step < 0) {
+    if (s_encoder_pending_delta > -20) {
+      s_encoder_pending_delta =
+          static_cast<int8_t>(s_encoder_pending_delta - 1);
+    }
+  }
+  portEXIT_CRITICAL(&s_input_mux);
+}
+
+/** Port of Waveshare process_knob_channel — count a rising edge after debounce. */
+void waveshareProcessChannel(uint8_t current_level, uint8_t* prev_level,
+                             uint8_t* debounce_cnt, int8_t step) {
+  if (current_level == 0) {
+    if (current_level != *prev_level) {
+      *debounce_cnt = 0;
+    } else {
+      (*debounce_cnt)++;
+    }
+  } else {
+    if (current_level != *prev_level &&
+        ++(*debounce_cnt) >= kWaveshareEncoderDebounceTicks) {
+      *debounce_cnt = 0;
+      queueEncoderStep(step);
+    } else {
+      *debounce_cnt = 0;
+    }
+  }
+  *prev_level = current_level;
+}
+
+void waveshareEncoderTimerCb(void* /*arg*/) {
+  const uint8_t a =
+      digitalRead(static_cast<uint8_t>(config::kKnobPinA)) ? 1 : 0;
+  const uint8_t b =
+      digitalRead(static_cast<uint8_t>(config::kKnobPinB)) ? 1 : 0;
+  waveshareProcessChannel(a, &s_enc_a_level, &s_enc_a_debounce, +1);
+  waveshareProcessChannel(b, &s_enc_b_level, &s_enc_b_debounce, -1);
+}
+#endif
+
+#if !defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
 TouchDrvCHSC5816 s_touch;
+#endif
 std::shared_ptr<Arduino_IIC_DriveBus> s_cst816_bus;
 std::unique_ptr<Arduino_IIC> s_cst816;
 bool s_touch_ready = false;
@@ -54,9 +117,9 @@ int16_t s_touch_last_x = 0;
 int16_t s_touch_last_y = 0;
 
 constexpr int kSwipeMinPx = 70;
-constexpr int kTapMaxPx = 25;
 
 void IRAM_ATTR onKnobButtonIsr() {
+#if FLIGHTSCNR_HAS_KNOB_BUTTON
   const bool down = digitalRead(config::kKnobKeyPin) == LOW;
   const unsigned long now = millis();
   portENTER_CRITICAL_ISR(&s_input_mux);
@@ -76,9 +139,11 @@ void IRAM_ATTR onKnobButtonIsr() {
     s_knob_is_down = false;
   }
   portEXIT_CRITICAL_ISR(&s_input_mux);
+#endif
 }
 
 void initKnobButton() {
+#if FLIGHTSCNR_HAS_KNOB_BUTTON
   pinMode(config::kKnobKeyPin, INPUT_PULLUP);
   if (s_knob_interrupt_attached) {
     return;
@@ -86,56 +151,97 @@ void initKnobButton() {
   attachInterrupt(digitalPinToInterrupt(static_cast<uint8_t>(config::kKnobKeyPin)),
                   onKnobButtonIsr, CHANGE);
   s_knob_interrupt_attached = true;
+#else
+  (void)s_knob_interrupt_attached;
+#endif
 }
+
+#if !defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+void IRAM_ATTR onEncoderIsr() {
+  uint8_t state = 0;
+  if (digitalRead(static_cast<uint8_t>(config::kKnobPinA))) {
+    state |= 0x02;
+  }
+  if (digitalRead(static_cast<uint8_t>(config::kKnobPinB))) {
+    state |= 0x01;
+  }
+
+  portENTER_CRITICAL_ISR(&s_input_mux);
+  if (state != s_knob_previous) {
+    const int8_t movement = kEncoderQuad[(s_knob_previous << 2) | state];
+    s_knob_previous = state;
+    if (movement != 0) {
+      s_encoder_accum =
+          static_cast<int8_t>(s_encoder_accum + movement);
+      if (s_encoder_accum >= kEncoderDetentThreshold) {
+        s_encoder_step_pending = true;
+        if (s_encoder_pending_delta < 20) {
+          s_encoder_pending_delta =
+              static_cast<int8_t>(s_encoder_pending_delta + 1);
+        }
+        s_encoder_accum =
+            static_cast<int8_t>(s_encoder_accum - kEncoderDetentThreshold);
+      } else if (s_encoder_accum <= -kEncoderDetentThreshold) {
+        s_encoder_step_pending = true;
+        if (s_encoder_pending_delta > -20) {
+          s_encoder_pending_delta =
+              static_cast<int8_t>(s_encoder_pending_delta - 1);
+        }
+        s_encoder_accum =
+            static_cast<int8_t>(s_encoder_accum + kEncoderDetentThreshold);
+      }
+    }
+  }
+  portEXIT_CRITICAL_ISR(&s_input_mux);
+}
+#endif
 
 void initEncoder() {
   pinMode(config::kKnobPinA, INPUT_PULLUP);
   pinMode(config::kKnobPinB, INPUT_PULLUP);
+
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+  s_enc_a_level =
+      digitalRead(static_cast<uint8_t>(config::kKnobPinA)) ? 1 : 0;
+  s_enc_b_level =
+      digitalRead(static_cast<uint8_t>(config::kKnobPinB)) ? 1 : 0;
+  s_enc_a_debounce = 0;
+  s_enc_b_debounce = 0;
+
+  // Match Waveshare 04_Encoder_Test: 3ms software debounce poll, no GPIO ISR.
+  const esp_timer_create_args_t args = {
+      .callback = &waveshareEncoderTimerCb,
+      .arg = nullptr,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "enc",
+      .skip_unhandled_events = true,
+  };
+  if (esp_timer_create(&args, &s_enc_timer) == ESP_OK) {
+    esp_timer_start_periodic(s_enc_timer, kWaveshareEncoderPollUs);
+  }
+  Serial.printf("Encoder on GPIO %d/%d (Waveshare 3ms poll)\n",
+                static_cast<int>(config::kKnobPinA),
+                static_cast<int>(config::kKnobPinB));
+#else
   s_knob_previous = 0;
-  if (digitalRead(config::kKnobPinA)) {
+  if (digitalRead(static_cast<uint8_t>(config::kKnobPinA))) {
     s_knob_previous |= 0x02;
   }
-  if (digitalRead(config::kKnobPinB)) {
+  if (digitalRead(static_cast<uint8_t>(config::kKnobPinB))) {
     s_knob_previous |= 0x01;
   }
+  attachInterrupt(digitalPinToInterrupt(static_cast<uint8_t>(config::kKnobPinA)),
+                  onEncoderIsr, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(static_cast<uint8_t>(config::kKnobPinB)),
+                  onEncoderIsr, CHANGE);
+  Serial.printf("Encoder on GPIO %d/%d (ISR)\n",
+                static_cast<int>(config::kKnobPinA),
+                static_cast<int>(config::kKnobPinB));
+#endif
 }
 
 void pollEncoder() {
-  if (millis() < s_knob_scan_ms) {
-    return;
-  }
-  s_knob_scan_ms = millis() + 20;
-
-  uint8_t state = 0;
-  if (digitalRead(config::kKnobPinA)) {
-    state |= 0x02;
-  }
-  if (digitalRead(config::kKnobPinB)) {
-    state |= 0x01;
-  }
-
-  if (state == s_knob_previous) {
-    return;
-  }
-
-  const int8_t movement = kEncoderQuad[(s_knob_previous << 2) | state];
-  s_knob_previous = state;
-  if (movement == 0) {
-    return;
-  }
-
-  s_encoder_accum += movement;
-  portENTER_CRITICAL(&s_input_mux);
-  if (s_encoder_accum >= kEncoderDetentThreshold) {
-    s_encoder_step_pending = true;
-    s_encoder_pending_delta = 1;
-    s_encoder_accum -= kEncoderDetentThreshold;
-  } else if (s_encoder_accum <= -kEncoderDetentThreshold) {
-    s_encoder_step_pending = true;
-    s_encoder_pending_delta = -1;
-    s_encoder_accum += kEncoderDetentThreshold;
-  }
-  portEXIT_CRITICAL(&s_input_mux);
+  // Waveshare: esp_timer. T-Encoder Pro: GPIO ISR.
 }
 
 void onCst816Interrupt() {
@@ -144,6 +250,7 @@ void onCst816Interrupt() {
   }
 }
 
+#if !defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
 void initTouchChsc5816() {
   s_touch.setPins(TOUCH_RST, TOUCH_INT);
   if (!s_touch.begin(Wire, CHSC5816_SLAVE_ADDRESS, IIC_SDA, IIC_SCL)) {
@@ -154,6 +261,7 @@ void initTouchChsc5816() {
   s_touch_ready = true;
   Serial.println("CHSC5816 touch ready");
 }
+#endif
 
 void initTouchCst816() {
   s_cst816_bus = std::make_shared<Arduino_HWIIC>(IIC_SDA, IIC_SCL, &Wire);
@@ -167,16 +275,50 @@ void initTouchCst816() {
   s_cst816->IIC_Write_Device_State(
       s_cst816->Arduino_IIC_Touch::Device::TOUCH_DEVICE_INTERRUPT_MODE,
       s_cst816->Arduino_IIC_Touch::Device_Mode::TOUCH_DEVICE_INTERRUPT_PERIODIC);
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+  // Keep the controller awake; default auto-sleep makes polling look dead.
+  s_cst816_bus->IIC_WriteC8D8(CST816_SLAVE_ADDRESS, CST816x_WR_DEVICE_AUTO_SLEEP_MODE,
+                              0x00);
+#endif
   s_touch_ready = true;
   Serial.println("CST816 touch ready");
 }
 
 void initTouch() {
-  if (hardware::panelUsesCo5300()) {
+  if (hardware::panelUsesCst816()) {
     initTouchCst816();
   } else {
+#if !defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
     initTouchChsc5816();
+#endif
   }
+}
+
+void mapTouchToDisplay(int16_t* x, int16_t* y) {
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+  // Keep touch in the same orientation as FLIGHTSCNR_DISPLAY_ROTATION.
+  const int16_t raw_x = *x;
+  const int16_t raw_y = *y;
+  switch (FLIGHTSCNR_DISPLAY_ROTATION & 3) {
+    case 1:
+      *x = raw_y;
+      *y = static_cast<int16_t>(LCD_WIDTH - 1 - raw_x);
+      break;
+    case 2:
+      *x = static_cast<int16_t>(LCD_WIDTH - 1 - raw_x);
+      *y = static_cast<int16_t>(LCD_HEIGHT - 1 - raw_y);
+      break;
+    case 3:
+      *x = static_cast<int16_t>(LCD_HEIGHT - 1 - raw_y);
+      *y = raw_x;
+      break;
+    default:
+      break;
+  }
+#else
+  (void)x;
+  (void)y;
+#endif
 }
 
 void queueSwipe(SwipeGesture gesture) {
@@ -206,11 +348,14 @@ void finishTouchGesture() {
     queueSwipe(SwipeDown);
   } else if (dy <= -kSwipeMinPx && adx * 2 < ady) {
     queueSwipe(SwipeUp);
-  } else if (adx <= kTapMaxPx && ady <= kTapMaxPx) {
-    queueTap(s_touch_last_x, s_touch_last_y);
+  } else {
+    // Anything that is not a clear swipe counts as a tap. CST816 coords often
+    // drift 30–60px during a press, which used to fall in a dead zone.
+    queueTap(s_touch_start_x, s_touch_start_y);
   }
 }
 
+#if !defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
 void pollTouchChsc5816() {
   int16_t x[2] = {};
   int16_t y[2] = {};
@@ -222,11 +367,14 @@ void pollTouchChsc5816() {
     s_touch_start_y = y[0];
     s_touch_last_x = x[0];
     s_touch_last_y = y[0];
+    mapTouchToDisplay(&s_touch_start_x, &s_touch_start_y);
+    mapTouchToDisplay(&s_touch_last_x, &s_touch_last_y);
     s_touch_tracking = true;
     hardware::buzzerClick();
   } else if (down && s_touch_tracking) {
     s_touch_last_x = x[0];
     s_touch_last_y = y[0];
+    mapTouchToDisplay(&s_touch_last_x, &s_touch_last_y);
   } else if (!down && s_touch_was_down && s_touch_tracking) {
     finishTouchGesture();
     s_touch_tracking = false;
@@ -234,39 +382,65 @@ void pollTouchChsc5816() {
 
   s_touch_was_down = down;
 }
+#endif
 
 void pollTouchCst816() {
-  if (s_cst816 == nullptr) {
+  if (s_cst816 == nullptr || s_cst816_bus == nullptr) {
     return;
   }
 
-  const bool down =
-      s_cst816->IIC_Read_Device_Value(
-          s_cst816->Arduino_IIC_Touch::Value_Information::TOUCH_FINGER_NUMBER) > 0;
-  int16_t x = 0;
-  int16_t y = 0;
-  if (down) {
-    x = static_cast<int16_t>(s_cst816->IIC_Read_Device_Value(
-        s_cst816->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_X));
-    y = static_cast<int16_t>(s_cst816->IIC_Read_Device_Value(
-        s_cst816->Arduino_IIC_Touch::Value_Information::TOUCH_COORDINATE_Y));
+  // Repeated-start burst read (Waveshare demos). A STOP between address write
+  // and data read yields stale/jumping coordinates on this CST816.
+  uint8_t data[7] = {};
+  Wire.beginTransmission(CST816_SLAVE_ADDRESS);
+  Wire.write(static_cast<uint8_t>(0x00));
+  if (Wire.endTransmission(false) != 0) {
+    return;
   }
+  const size_t got =
+      Wire.requestFrom(static_cast<uint8_t>(CST816_SLAVE_ADDRESS),
+                       static_cast<uint8_t>(sizeof(data)));
+  if (got < sizeof(data)) {
+    return;
+  }
+  for (size_t i = 0; i < sizeof(data); ++i) {
+    data[i] = static_cast<uint8_t>(Wire.read());
+  }
+
+  const uint8_t fingers = data[2];
+  const bool down = fingers > 0 && fingers < 0x80;
+  int16_t x = static_cast<int16_t>(((data[3] & 0x0F) << 8) | data[4]);
+  int16_t y = static_cast<int16_t>(((data[5] & 0x0F) << 8) | data[6]);
+
+  // Do not use GestureID 0x05 (Single Click): the register stays latched and
+  // would re-fire a tap on every poll until the next touch clears it.
 
   if (down && !s_touch_was_down) {
     s_touch_start_x = x;
     s_touch_start_y = y;
     s_touch_last_x = x;
     s_touch_last_y = y;
+    mapTouchToDisplay(&s_touch_start_x, &s_touch_start_y);
+    mapTouchToDisplay(&s_touch_last_x, &s_touch_last_y);
     s_touch_tracking = true;
     hardware::buzzerClick();
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+    Serial.printf("[touch] down raw=%d,%d map=%d,%d fingers=%u\n", x, y,
+                  s_touch_start_x, s_touch_start_y, fingers);
+#endif
   } else if (down && s_touch_tracking) {
     s_touch_last_x = x;
     s_touch_last_y = y;
+    mapTouchToDisplay(&s_touch_last_x, &s_touch_last_y);
   } else if (!down && s_touch_was_down && s_touch_tracking) {
     finishTouchGesture();
     s_touch_tracking = false;
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+    Serial.printf("[touch] up map=%d,%d\n", s_touch_last_x, s_touch_last_y);
+#endif
   }
 
+  s_cst816->IIC_Interrupt_Flag = false;
   s_touch_was_down = down;
 }
 
@@ -275,10 +449,12 @@ void pollTouch() {
     return;
   }
 
-  if (hardware::panelUsesCo5300()) {
+  if (hardware::panelUsesCst816()) {
     pollTouchCst816();
   } else {
+#if !defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
     pollTouchChsc5816();
+#endif
   }
 }
 
@@ -297,11 +473,17 @@ void inputPoll() {
 
 int8_t inputConsumeEncoderDelta() {
   portENTER_CRITICAL(&s_input_mux);
-  const int8_t delta = s_encoder_step_pending ? s_encoder_pending_delta : 0;
-  if (delta != 0) {
-    s_encoder_step_pending = false;
-    s_encoder_pending_delta = 0;
+  int8_t delta = 0;
+  if (s_encoder_pending_delta > 0) {
+    delta = 1;
+    s_encoder_pending_delta =
+        static_cast<int8_t>(s_encoder_pending_delta - 1);
+  } else if (s_encoder_pending_delta < 0) {
+    delta = -1;
+    s_encoder_pending_delta =
+        static_cast<int8_t>(s_encoder_pending_delta + 1);
   }
+  s_encoder_step_pending = (s_encoder_pending_delta != 0);
   portEXIT_CRITICAL(&s_input_mux);
   return delta;
 }
@@ -367,6 +549,7 @@ void inputDiscardPendingInteractions() {
 }
 
 void inputPollLongPress() {
+#if FLIGHTSCNR_HAS_KNOB_BUTTON
   if (digitalRead(config::kKnobKeyPin) == LOW) {
     portENTER_CRITICAL(&s_input_mux);
     if (!s_knob_is_down) {
@@ -406,6 +589,12 @@ void inputPollLongPress() {
       s_wifi_reset_ui_cancelled_pending = true;
     }
   }
+#else
+  // Waveshare knob has no push button; Wi-Fi wipe remains available via the web UI.
+  (void)s_long_press_handled;
+  (void)s_wifi_reset_ui_shown;
+  (void)s_wifi_reset_ui_cancelled_pending;
+#endif
 }
 
 bool inputConsumeWifiResetUiCancelled() {

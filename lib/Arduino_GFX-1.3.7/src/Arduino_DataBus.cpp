@@ -134,8 +134,13 @@ void Arduino_DataBus::batchOperation(const uint8_t *operations, size_t len)
             beginWrite();
             break;
         case WRITE_C8_D16:
-            
+        {
+            const uint8_t c = operations[++i];
+            _data16.msb = operations[++i];
+            _data16.lsb = operations[++i];
+            writeC8D16(c, _data16.value);
             break;
+        }
         case WRITE_C8_D8:
             writeC8D8(operations[++i], operations[++i]);
             break;
@@ -143,10 +148,12 @@ void Arduino_DataBus::batchOperation(const uint8_t *operations, size_t len)
             writeCommand(operations[++i]);
             break;
         case WRITE_C16_D16:
-
-            break;
+            l = 2;
+            /* fall through */
         case WRITE_COMMAND_16:
-
+            _data16.msb = operations[++i];
+            _data16.lsb = operations[++i];
+            writeCommand16(_data16.value);
             break;
         case WRITE_DATA_8:
             l = 1;
@@ -157,6 +164,11 @@ void Arduino_DataBus::batchOperation(const uint8_t *operations, size_t len)
         case WRITE_BYTES:
             l = operations[++i];
             break;
+        case WRITE_C8_BYTES:
+            // Default path is incorrect on QSPI (write() hits RAMWR). ESP32QSPI overrides batchOperation.
+            writeCommand(operations[++i]);
+            l = operations[++i];
+            break;
         case END_WRITE:
             endWrite();
             break;
@@ -164,7 +176,7 @@ void Arduino_DataBus::batchOperation(const uint8_t *operations, size_t len)
             delay(operations[++i]);
             break;
         default:
-            printf("Unknown operation id at %d: %d", i, operations[i]);
+            printf("Unknown operation id at %d: %d\n", i, operations[i]);
             break;
         }
         while (l--)

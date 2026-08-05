@@ -1376,6 +1376,15 @@ void handleInput() {
   }
 
   if (g_screen == AppScreen::FlightDetail) {
+#if !FLIGHTSCNR_HAS_KNOB_BUTTON
+    // No knob button — tap advances to the next aircraft (same as encoder +1).
+    if (inputConsumeScreenTap(nullptr, nullptr)) {
+      noteSecondaryActivity();
+      onFlightDetailStep(1);
+      hardware::buzzerClick();
+      return;
+    }
+#endif
     const int8_t enc = inputConsumeEncoderDelta();
     if (enc != 0) {
       noteSecondaryActivity();
@@ -1391,7 +1400,12 @@ void handleInput() {
         noteSecondaryActivity();
         hardware::buzzerClick();
       }
-      if (inputConsumeKnobTap()) {
+      // Waveshare has no knob button — screen tap advances the focused row.
+      if (inputConsumeKnobTap()
+#if !FLIGHTSCNR_HAS_KNOB_BUTTON
+          || inputConsumeScreenTap(nullptr, nullptr)
+#endif
+      ) {
         noteSecondaryActivity();
         ui::infoScreenCycleDisplayFocus();
         showSettings();
@@ -1402,13 +1416,24 @@ void handleInput() {
         noteSecondaryActivity();
         hardware::buzzerClick();
       }
-      if (inputConsumeKnobTap()) {
+      if (inputConsumeKnobTap()
+#if !FLIGHTSCNR_HAS_KNOB_BUTTON
+          || inputConsumeScreenTap(nullptr, nullptr)
+#endif
+      ) {
         noteSecondaryActivity();
         ui::infoScreenCycleColorsFocus();
         showSettings();
         return;
       }
     }
+#if FLIGHTSCNR_HAS_KNOB_BUTTON
+    // Discard stray taps on settings pages that do not use them.
+#else
+    else {
+      (void)inputConsumeScreenTap(nullptr, nullptr);
+    }
+#endif
     const int8_t enc = inputConsumeEncoderDelta();
     if (enc != 0) {
       noteSecondaryActivity();
@@ -1450,16 +1475,32 @@ void handleInput() {
     int16_t tx = 0;
     int16_t ty = 0;
     if (inputConsumeScreenTap(&tx, &ty)) {
+      // Waveshare has no knob button — accept on any tap so a missed hit-box
+      // (touch/display orientation) cannot trap the user on this screen.
+#if !FLIGHTSCNR_HAS_KNOB_BUTTON
+      Serial.printf("[disclaimer] tap @ %d,%d — accept\n", tx, ty);
+      acceptDisclaimerAndContinue();
+#else
       if (ui::disclaimerScreenHitAccept(tx, ty)) {
         acceptDisclaimerAndContinue();
       }
+#endif
       return;
     }
     if (inputConsumeKnobTap()) {
       acceptDisclaimerAndContinue();
       return;
     }
+#if !FLIGHTSCNR_HAS_KNOB_BUTTON
+    // Encoder click (detent) is the only physical control on Waveshare.
+    if (inputConsumeEncoderDelta() != 0) {
+      Serial.println("[disclaimer] encoder — accept");
+      acceptDisclaimerAndContinue();
+      return;
+    }
+#else
     (void)inputConsumeEncoderDelta();
+#endif
     return;
   }
 
@@ -1468,7 +1509,11 @@ void handleInput() {
       noteSecondaryActivity();
       hardware::buzzerClick();
     }
-    if (inputConsumeKnobTap()) {
+    if (inputConsumeKnobTap()
+#if !FLIGHTSCNR_HAS_KNOB_BUTTON
+        || inputConsumeScreenTap(nullptr, nullptr)
+#endif
+    ) {
       noteSecondaryActivity();
       ui::clockSettingsCycleFocus();
       showClockSettings();
@@ -1854,7 +1899,7 @@ void setup() {
                 resetReasonName(), config::kFirmwareVersion, config::kOvernightPerfLog ? 1 : 0,
                 config::kRadarResumeDebug ? 1 : 0, config::kDiagLogIntervalMs / 1000UL,
                 config::kDiagSlowLoopMs);
-  Serial.println("FlightScnr (T-Encoder Pro)");
+  Serial.printf("FlightScnr (%s)\n", FLIGHTSCNR_BOARD_NAME);
 
   // The ADS-B fetch worker is pinned to core 0 so its CPU-bound mbedTLS handshake
   // never stalls the render loop on core 1. That heavy crypto, together with the

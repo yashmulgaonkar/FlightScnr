@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "config.h"
+
 namespace services::basemap {
 
 /** Raster style used when the basemap JPEG was baked. */
@@ -77,7 +79,7 @@ bool cacheReady();
 bool metaMatchesLive();
 
 /**
- * Begin/abort/finish multipart upload of a baseline JPEG (390×390).
+ * Begin/abort/finish multipart upload of a baseline JPEG (board pixel size).
  * finish stamps meta from live center/facing, bake coverage miles, and style.
  */
 void uploadBegin();
@@ -89,6 +91,6 @@ void uploadAbort();
 bool clear();
 
 constexpr size_t kMaxJpegBytes = 180 * 1024;
-constexpr int kPixelSize = 390;
+constexpr int kPixelSize = config::kDisplayWidth;
 
 }  // namespace services::basemap

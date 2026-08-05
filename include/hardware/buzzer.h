@@ -11,8 +11,12 @@ void buzzerInit();
 void buzzerBootLoad();
 
 bool buzzerEnabled();
-/** Current tone step A (quietest) through E (loudest). */
+/** Current tone step A (quietest) through E (loudest). Piezo boards. */
 char buzzerToneLetter();
+/** Intensity 1–5 (same storage as tone A–E). Prefer for haptic boards. */
+uint8_t buzzerIntensityLevel();
+/** "20%" … "100%" for the current intensity step. */
+const char* buzzerIntensityLabel();
 
 void buzzerSetEnabled(bool enabled);
 void buzzerToneStep(int8_t delta);
