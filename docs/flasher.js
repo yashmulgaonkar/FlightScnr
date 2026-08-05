@@ -111,14 +111,21 @@ function formatUsbId(value) {
     : "unknown";
 }
 
+/**
+ * USB IDs cannot tell the two boards apart: in the working orientation both
+ * expose the ESP32-S3 native USB device (0x303A:0x1001). Only the WCH bridge
+ * (0x1A86) is board-specific — that is the Waveshare's secondary ESP32 UART,
+ * reached when the USB-C plug is flipped the wrong way.
+ */
 function detectBoardFromPortInfo(info) {
   if (info?.usbVendorId === 0x1a86) {
     return BOARD_WAVESHARE;
   }
-  if (info?.usbVendorId === 0x303a) {
-    return BOARD_TENCODER;
-  }
   return null;
+}
+
+function isEspressifNativeUsb(info) {
+  return info?.usbVendorId === 0x303a;
 }
 
 function isEsp32S3Chip(chipName) {
@@ -163,6 +170,13 @@ function updateBoardStatus() {
     const pid = formatUsbId(detectedPortInfo?.usbProductId);
     els.boardStatus.textContent =
       `Auto detected: ${BOARD_LABELS[detectedBoard]} (USB ${vid}:${pid}).${chipNote} Confirm before flashing.`;
+    return;
+  }
+  if (port && isEspressifNativeUsb(detectedPortInfo)) {
+    const vid = formatUsbId(detectedPortInfo?.usbVendorId);
+    const pid = formatUsbId(detectedPortInfo?.usbProductId);
+    els.boardStatus.textContent =
+      `Both boards report the same ESP32-S3 native USB (${vid}:${pid}), so Auto cannot tell them apart.${chipNote} Select your board manually before Install.`;
     return;
   }
   if (port) {
@@ -213,7 +227,7 @@ function updateReleaseMeta() {
     notes.push(releaseLoadWarning);
   }
   if (!board) {
-    notes.push("Connect for Auto detection or choose a board manually.");
+    notes.push("Choose your board in the Board list to enable Install.");
   } else if (!boardParts?.fullPart) {
     notes.push(`This release has no ${BOARD_LABELS[board]} firmware.`);
   }
@@ -534,6 +548,10 @@ async function connect() {
       log(
         `USB ${vid}:${pid} suggests ${BOARD_LABELS[detectedBoard]}. Confirm the board before Install.`,
       );
+    } else if (isEspressifNativeUsb(detectedPortInfo)) {
+      log(
+        `USB ${vid}:${pid} is the ESP32-S3 native USB used by both boards. Select T-Encoder Pro or Waveshare manually.`,
+      );
     } else {
       log(
         `USB ${vid}:${pid} is ambiguous. Select T-Encoder Pro or Waveshare manually.`,
@@ -781,5 +799,5 @@ if (savedBoard === BOARD_TENCODER || savedBoard === BOARD_WAVESHARE) {
 updateInstallModeUI();
 loadReleaseOptions();
 log("Ready. Use Chrome or Edge on desktop.");
-log("Auto detection uses USB VID/PID hints; always confirm the board before Install.");
+log("Both boards use the same ESP32-S3 native USB ID, so pick your board in the Board list (remembered for next time).");
 log("T-Encoder: if the port is missing, hold BOOT and tap RESET. Waveshare: select the CH343 port; flip USB-C 180° if the secondary ESP32 is detected.");

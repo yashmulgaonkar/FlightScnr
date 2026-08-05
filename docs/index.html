@@ -45,13 +45,14 @@
       <div class="board-picker">
         <label for="board-select">Board</label>
         <select id="board-select">
-          <option value="auto" selected>Auto-detect after Connect</option>
+          <option value="auto" selected>Auto (both boards share one USB ID — pick manually)</option>
           <option value="tencoder-pro">LilyGO T-Encoder Pro</option>
           <option value="waveshare-knob-18">Waveshare Knob Touch LCD 1.8</option>
         </select>
       </div>
       <p class="meta board-status" id="board-status">
-        Auto: connect a board to detect it. You can always override this selection.
+        Select your board. Both boards expose the same ESP32-S3 USB ID, so Auto cannot
+        tell them apart; your choice is remembered.
       </p>
 
       <div class="release-picker">
@@ -114,15 +115,15 @@
           <strong>Connect</strong>.
         </li>
         <li>
-          Waveshare: select its WCH CH343 serial port. If Auto cannot identify it,
-          choose <strong>Waveshare Knob Touch LCD 1.8</strong> manually before Install.
-          The USB-C plug orientation selects ESP32-S3 vs the secondary ESP32 — if Connect
-          reports the wrong chip, unplug, flip the cable 180°, and Connect again.
+          Waveshare: the USB-C plug orientation decides whether the ESP32-S3 or the
+          secondary ESP32 is connected. If Connect reports a plain
+          <strong>ESP32</strong>, unplug, flip the cable 180°, and Connect again.
         </li>
         <li>
-          Confirm the detected/selected board before flashing. Both use ESP32-S3,
-          so flashing the wrong binary can complete successfully but the display
-          and controls will not work until reflashed correctly.
+          Pick your board in the <strong>Board</strong> list. Both boards identify as the
+          same ESP32-S3 USB device, so this cannot be detected automatically. Flashing
+          the wrong binary can succeed but leaves the display and controls dead until
+          reflashed correctly.
         </li>
       </ol>
       <br>

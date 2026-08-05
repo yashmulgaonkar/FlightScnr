@@ -44,6 +44,56 @@ int circleHalfWidthAtRow(int row_y, int row_h) {
   return usable > 0 ? usable : 0;
 }
 
+// Three-column forecast geometry, tuned per panel size. On the 360 px Waveshare
+// panel the 390 px column spacing and fonts push the outer "Rain n%" labels and
+// hi temperatures past the visible chord, so both are pulled in one step.
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+constexpr int kForecastColOffset = 100;
+constexpr int kForecastIconSize = 66;
+constexpr int kTitleY = 42;
+constexpr int kLabelY = 92;
+constexpr int kIconY = 114;
+constexpr int kHiY = 194;
+constexpr int kLoY = 226;
+constexpr int kRainY = 252;
+constexpr int kCreditY = 288;
+#else
+constexpr int kForecastColOffset = 110;
+// Smaller icons leave room for the larger hi/lo temperature fonts.
+constexpr int kForecastIconSize = 72;
+constexpr int kTitleY = 48;
+constexpr int kLabelY = 104;
+constexpr int kIconY = 128;
+constexpr int kHiY = 214;
+constexpr int kLoY = 256;
+constexpr int kRainY = 292;
+constexpr int kCreditY = 330;
+#endif
+
+UiTextStyle forecastHiStyle() {
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+  return displayFontBody();
+#else
+  return displayFontTitle();
+#endif
+}
+
+UiTextStyle forecastLoStyle() {
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+  return displayFontDetail();
+#else
+  return displayFontBody();
+#endif
+}
+
+UiTextStyle forecastRainStyle() {
+#if defined(FLIGHTSCNR_BOARD_WAVESHARE_KNOB_18)
+  return displayFontScale();
+#else
+  return displayFontDetail();
+#endif
+}
+
 void drawCenteredAt(const char* text, int cx, int y, UiTextStyle style, uint16_t fg,
                     uint16_t bg) {
   displayFontApply(tft, style);
@@ -94,15 +144,8 @@ void weekdayLabel(int64_t date_epoch, int index, char* out, size_t len) {
 void drawForecast(const services::weather::WeatherData& wx, uint16_t fg, uint16_t dim,
                   uint16_t accent, uint16_t bg) {
   const char unit = wx.imperial ? 'F' : 'C';
-  const int col_centers[services::weather::kForecastDays] = {kCenterX - 110, kCenterX,
-                                                             kCenterX + 110};
-  // Smaller icons leave room for the larger hi/lo temperature fonts.
-  constexpr int kForecastIconSize = 72;
-  constexpr int kLabelY = 104;
-  constexpr int kIconY = 128;
-  constexpr int kHiY = 214;
-  constexpr int kLoY = 256;
-  constexpr int kRainY = 292;
+  const int col_centers[services::weather::kForecastDays] = {
+      kCenterX - kForecastColOffset, kCenterX, kCenterX + kForecastColOffset};
 
   for (int i = 0; i < services::weather::kForecastDays; ++i) {
     const services::weather::DayForecast& d = wx.days[i];
@@ -117,14 +160,14 @@ void drawForecast(const services::weather::WeatherData& wx, uint16_t fg, uint16_
     services::weather_icon::drawIconScaled(tft, services::weather::dayIconCode(i), cx, kIconY,
                                            bg, kForecastIconSize);
     drawTempCentered(cx, kHiY, static_cast<int>(lroundf(d.temp_max)), unit,
-                     displayFontTitle(), fg, bg);
+                     forecastHiStyle(), fg, bg);
     drawTempCentered(cx, kLoY, static_cast<int>(lroundf(d.temp_min)), unit,
-                     displayFontBody(), dim, bg);
+                     forecastLoStyle(), dim, bg);
     if (d.precip_probability >= 0) {
       const int pct = d.precip_probability > 100 ? 100 : d.precip_probability;
       char rain[16];
       snprintf(rain, sizeof(rain), "Rain %d%%", pct);
-      drawCenteredAt(rain, cx, kRainY, displayFontDetail(), dim, bg);
+      drawCenteredAt(rain, cx, kRainY, forecastRainStyle(), dim, bg);
     }
   }
 }
@@ -143,7 +186,7 @@ void weatherScreenDraw() {
   const uint16_t accent = tft.color565(accent_r, accent_g, accent_b);
 
   tft.fillScreen(bg);
-  drawCentered("Forecast", 48, displayFontClockDate(), fg, bg);
+  drawCentered("Forecast", kTitleY, displayFontClockDate(), fg, bg);
 
   // A weather source is available when paid Tomorrow.io is enabled with a key,
   // or the free key-less Open-Meteo fallback is on.
@@ -170,7 +213,7 @@ void weatherScreenDraw() {
         services::weather::WeatherData::Source::OpenMeteo) {
       const char* credit = "Open-Meteo.com";
       const UiTextStyle credit_style = displayFontDetail();
-      const int credit_y = 330;
+      const int credit_y = kCreditY;
       displayFontApply(tft, credit_style);
       const int credit_h = displayFontHeight(tft, credit_style);
       const int max_w = circleHalfWidthAtRow(credit_y, credit_h) * 2;
