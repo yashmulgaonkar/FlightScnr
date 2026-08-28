@@ -64,6 +64,21 @@ struct Aircraft {
 
 constexpr size_t kMaxAircraft = 64;
 
+/** Last completed ADS-B poll (feed vs filter breakdown for serial diagnostics). */
+struct FetchStats {
+  uint16_t feed_total = 0;
+  uint16_t feed_raw = 0;
+  uint16_t skipped_latlon = 0;
+  uint16_t skipped_alt = 0;
+  uint16_t kept = 0;
+  size_t payload_bytes = 0;
+  double center_lat = 0.0;
+  double center_lon = 0.0;
+  float radius_km = 0.0f;
+};
+
+const FetchStats& lastFetchStats();
+
 size_t aircraftCount();
 const Aircraft* aircraftList();
 

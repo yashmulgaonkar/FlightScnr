@@ -75,6 +75,7 @@ void workerYield() { vTaskDelay(1); }
 // the JsonDocument to just those keys so a large response (many aircraft at long
 // range) can't balloon internal heap and starve the SPI display driver.
 void buildAircraftFilter(JsonDocument& filter) {
+  filter["total"] = true;
   JsonObject el = filter["ac"].add<JsonObject>();
   static const char* kKeepKeys[] = {
       "lat",          "lon",      "true_heading", "mag_heading", "track",
@@ -151,36 +152,127 @@ bool readHttpPayload(HTTPClient& http, PsramPayload* payload, uint32_t timeout_m
     return false;
   }
   const int content_len = http.getSize();
+  // getSize() < 0 means unknown length — adsb.fi serves Transfer-Encoding: chunked,
+  // and getStreamPtr() is the RAW socket (hex chunk-size lines included). Reading it
+  // without de-chunking corrupts JSON (InvalidInput) or yields ac=0.
+  const bool chunked = content_len < 0;
   if (content_len > 0 && !payload->reserve(static_cast<size_t>(content_len) + 1)) {
     Serial.printf("[fetch] payload alloc failed (%d bytes)\n", content_len);
     return false;
   }
   const unsigned long deadline_ms = millis() + timeout_ms;
   uint8_t buf[512];
-  while (http.connected() || stream->available()) {
-    if (millis() >= deadline_ms) {
-      if (config::kSerialTraceDebug) {
-        Serial.printf("[fetch] http read timeout (%ums)\n", timeout_ms);
+
+  if (!chunked) {
+    while (http.connected() || stream->available()) {
+      if (millis() >= deadline_ms) {
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[fetch] http read timeout (%ums)\n", timeout_ms);
+        }
+        return false;
       }
+      if (stream->available() == 0) {
+        if (!http.connected()) {
+          break;
+        }
+        workerYield();
+        continue;
+      }
+      const size_t n = stream->readBytes(buf, sizeof(buf));
+      if (n == 0) {
+        workerYield();
+        continue;
+      }
+      if (!payload->append(buf, n)) {
+        Serial.println("[fetch] payload alloc failed (grow)");
+        return false;
+      }
+    }
+    if (payload->len == 0) {
       return false;
     }
-    if (stream->available() == 0) {
-      if (!http.connected()) {
+    if (payload->len != static_cast<size_t>(content_len)) {
+      Serial.printf("[fetch] short read %u/%d bytes\n",
+                    static_cast<unsigned>(payload->len), content_len);
+      return false;
+    }
+    return true;
+  }
+
+  if (config::kSerialTraceDebug) {
+    Serial.println("[fetch] chunked body decode");
+  }
+
+  auto readByte = [&](uint8_t* out) -> bool {
+    for (;;) {
+      if (millis() >= deadline_ms) {
+        return false;
+      }
+      if (stream->available() > 0) {
+        const int c = stream->read();
+        if (c >= 0) {
+          *out = static_cast<uint8_t>(c);
+          return true;
+        }
+      }
+      if (!http.connected() && stream->available() == 0) {
+        return false;
+      }
+      workerYield();
+    }
+  };
+
+  for (;;) {
+    char size_line[16] = {};
+    size_t size_len = 0;
+    uint8_t c = 0;
+    while (readByte(&c)) {
+      if (c == '\n') {
         break;
       }
-      workerYield();
-      continue;
+      if (c != '\r' && size_len + 1 < sizeof(size_line)) {
+        size_line[size_len++] = static_cast<char>(c);
+      }
     }
-    const size_t n = stream->readBytes(buf, sizeof(buf));
-    if (n == 0) {
-      workerYield();
-      continue;
+    size_line[size_len] = '\0';
+    const long chunk_size = strtol(size_line, nullptr, 16);
+    if (chunk_size <= 0) {
+      break;
     }
-    if (!payload->append(buf, n)) {
-      Serial.println("[fetch] payload alloc failed (grow)");
-      return false;
+    long remaining = chunk_size;
+    while (remaining > 0) {
+      if (millis() >= deadline_ms) {
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[fetch] http read timeout (%ums)\n", timeout_ms);
+        }
+        return false;
+      }
+      if (stream->available() == 0) {
+        if (!http.connected()) {
+          return false;
+        }
+        workerYield();
+        continue;
+      }
+      const size_t want = remaining < static_cast<long>(sizeof(buf))
+                              ? static_cast<size_t>(remaining)
+                              : sizeof(buf);
+      const size_t got = stream->readBytes(buf, want);
+      if (got == 0) {
+        workerYield();
+        continue;
+      }
+      if (!payload->append(buf, got)) {
+        Serial.println("[fetch] payload alloc failed (chunk grow)");
+        return false;
+      }
+      remaining -= static_cast<long>(got);
+    }
+    if (readByte(&c) && c == '\r') {
+      readByte(&c);
     }
   }
+
   return payload->len > 0;
 }
 
@@ -291,6 +383,8 @@ uint32_t s_fetch_fail_streak = 0;
 // fail streak: rate limiting must not trigger a WiFi recycle, just a back-off.
 volatile bool s_fetch_rate_limited = false;
 volatile unsigned long s_rate_limit_until_ms = 0;
+
+FetchStats s_last_fetch_stats{};
 
 double s_fetch_lat = 0.0;
 double s_fetch_lon = 0.0;
@@ -799,11 +893,31 @@ float distSqFromCenterKm(double center_lat, double center_lon, float lat,
 }
 
 bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count,
-                      double center_lat, double center_lon) {
+                      double center_lat, double center_lon, FetchStats* stats) {
   JsonArray ac = doc["ac"].as<JsonArray>();
+  const int feed_total = doc["total"].is<int>() ? doc["total"].as<int>() : -1;
   if (ac.isNull()) {
     *out_count = 0;
+    if (stats != nullptr) {
+      stats->feed_total = feed_total >= 0 ? static_cast<uint16_t>(feed_total) : 0;
+      stats->feed_raw = 0;
+      stats->skipped_latlon = 0;
+      stats->skipped_alt = 0;
+      stats->kept = 0;
+    }
     return true;
+  }
+
+  const size_t feed_raw = ac.size();
+  if (stats != nullptr) {
+    stats->feed_total =
+        feed_total >= 0 ? static_cast<uint16_t>(feed_total)
+                        : (feed_raw > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(feed_raw));
+    stats->feed_raw =
+        feed_raw > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(feed_raw);
+    stats->skipped_latlon = 0;
+    stats->skipped_alt = 0;
+    stats->kept = 0;
   }
 
   // Keep the nearest kMaxAircraft. The feed is not distance-sorted; with the
@@ -820,9 +934,15 @@ bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count,
     float lat = 0.0f;
     float lon = 0.0f;
     if (!readJsonFloat(plane, "lat", &lat) || !readJsonFloat(plane, "lon", &lon)) {
+      if (stats != nullptr && stats->skipped_latlon < UINT16_MAX) {
+        ++stats->skipped_latlon;
+      }
       continue;
     }
     if (!passesAltitudeBand(plane)) {
+      if (stats != nullptr && stats->skipped_alt < UINT16_MAX) {
+        ++stats->skipped_alt;
+      }
       continue;
     }
     ++considered;
@@ -869,10 +989,18 @@ bool parseAircraftDoc(JsonDocument& doc, Aircraft* out, size_t* out_count,
   }
 
   *out_count = n;
+  if (stats != nullptr) {
+    stats->kept = n > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(n);
+  }
   // Always log so serial can confirm floor + ground ingestion after a flash.
-  Serial.printf("[adsb] floor=%d ceil=%d kept=%u/%u ground=%u\n",
+  Serial.printf("[adsb] floor=%d ceil=%d feed=%u raw=%u kept=%u/%u alt_skip=%u "
+                "latlon_skip=%u ground=%u\n",
                 s_altitude_floor_ft, s_altitude_ceiling_ft,
+                static_cast<unsigned>(stats != nullptr ? stats->feed_total : 0),
+                static_cast<unsigned>(feed_raw),
                 static_cast<unsigned>(n), static_cast<unsigned>(considered),
+                static_cast<unsigned>(stats != nullptr ? stats->skipped_alt : 0),
+                static_cast<unsigned>(stats != nullptr ? stats->skipped_latlon : 0),
                 static_cast<unsigned>(ground_kept));
   return true;
 }
@@ -918,7 +1046,7 @@ bool parseAircraftPayload(const char* payload, size_t payload_len, Aircraft* out
     Serial.printf("[adsb] JSON parse error: %s\n", err.c_str());
     return false;
   }
-  return parseAircraftDoc(doc, out, out_count, center_lat, center_lon);
+  return parseAircraftDoc(doc, out, out_count, center_lat, center_lon, &s_last_fetch_stats);
 }
 
 bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radius_km,
@@ -1008,6 +1136,11 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
 
   services::https::drainTlsHeapAfterSession();
   workerYield();
+  s_last_fetch_stats = {};
+  s_last_fetch_stats.center_lat = center_lat;
+  s_last_fetch_stats.center_lon = center_lon;
+  s_last_fetch_stats.radius_km = fetch_radius_km;
+  s_last_fetch_stats.payload_bytes = payload.len;
   if (!parseAircraftPayload(payload.data, payload.len, out, out_count, center_lat,
                             center_lon)) {
     if (config::kSerialTraceDebug) {
@@ -1019,6 +1152,17 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
   if (config::kSerialTraceDebug) {
     Serial.printf("[fetch] ok %u aircraft (%lums)\n", static_cast<unsigned>(*out_count),
                   millis() - fetch_start_ms);
+  }
+  if (*out_count == 0 &&
+      (s_last_fetch_stats.feed_total == 0 || s_last_fetch_stats.feed_raw == 0)) {
+    Serial.printf("[adsb] empty feed lat=%.6f lon=%.6f dist_km=%.1f payload=%uB\n",
+                  center_lat, center_lon, fetch_radius_km,
+                  static_cast<unsigned>(payload.len));
+  } else if (*out_count == 0 && s_last_fetch_stats.skipped_alt > 0 &&
+             s_last_fetch_stats.kept == 0) {
+    Serial.printf("[adsb] all traffic filtered (floor=%d ceil=%d alt_skip=%u)\n",
+                  s_altitude_floor_ft, s_altitude_ceiling_ft,
+                  static_cast<unsigned>(s_last_fetch_stats.skipped_alt));
   }
   return true;
 }
@@ -1188,5 +1332,7 @@ uint32_t fetchTaskStackFreeBytes() {
   }
   return static_cast<uint32_t>(uxTaskGetStackHighWaterMark(s_fetch_task) * sizeof(StackType_t));
 }
+
+const FetchStats& lastFetchStats() { return s_last_fetch_stats; }
 
 }  // namespace services::adsb
