@@ -582,7 +582,8 @@ void handleSettingsPage() {
         "placeholder=\"paste key\">"
         "<p class=\"hint\">Required for Dark Matter, Positron, and Voyager bakes. "
         "Free at <a href=\"https://carto.com/basemaps/apikey/\" target=\"_blank\" "
-        "rel=\"noopener\">carto.com/basemaps/apikey</a> (not needed for FAA VFR).</p>"
+        "rel=\"noopener\">carto.com/basemaps/apikey</a> (not needed for FAA VFR). "
+        "Key is saved automatically when you Generate (or click Save).</p>"
         "<label for=\"basemap_style\">Map style</label>"
         "<select id=\"basemap_style\">"
         "<option value=\"dark\"%s>Dark Matter (dark)</option>"
@@ -678,7 +679,11 @@ void handleSettingsPage() {
         "var fd=new FormData();"
         "['bm_contrast_dark','bm_contrast_light','bm_wash_vfr'].forEach(function(id){"
         "var el=document.getElementById(id);if(el)fd.append(id,el.value);});"
-        "return fetch('/basemap/adjust',{method:'POST',body:fd}).catch(function(){});}"
+        "var ckEl=document.getElementById('carto_key');"
+        "if(ckEl&&ckEl.value&&ckEl.value.trim())fd.append('carto_key',ckEl.value.trim());"
+        "return fetch('/basemap/adjust',{method:'POST',body:fd}).then(function(r){"
+        "if(r.ok){var k=activeCartoKey();if(k)cartoKey=k;}return r;"
+        "}).catch(function(){});}"
         "function mercX(L){return(L+180)/360;}"
         "function mercY(A){var s=Math.sin(A*Math.PI/180);return.5-Math.log((1+s)/(1-s))/(4*Math.PI);}"
         "function tileXY(A,L,z){var n=Math.pow(2,z);return[mercX(L)*n,mercY(A)*n];}"
@@ -706,7 +711,7 @@ void handleSettingsPage() {
         "i.src=tileUrl(z,x,y);});}"
         "async function bake(){"
         "if(styleKey()!=='vfr'&&!activeCartoKey()){"
-        "msg.textContent='CARTO API key required — paste key above (Save optional), then Generate';"
+        "msg.textContent='CARTO API key required — paste key above, then Generate';"
         "return;}"
         "await persistBakeAdjust();"
         "var miles=bakeMiles(),labelKm=miles*1.609344,ppm=OUTER/labelKm;"
@@ -1685,6 +1690,9 @@ void handleBasemapAdjust() {
   services::basemap::saveBakeAdjustFromForm(s_server->arg("bm_contrast_dark").c_str(),
                                             s_server->arg("bm_contrast_light").c_str(),
                                             s_server->arg("bm_wash_vfr").c_str());
+  if (s_server->hasArg("carto_key")) {
+    services::apikeys::saveCartoKeyFromForm(s_server->arg("carto_key").c_str());
+  }
   settingsStateBump();
   s_server->send(200, "text/plain", "ok");
 }
