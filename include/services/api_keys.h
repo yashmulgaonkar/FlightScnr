@@ -26,11 +26,16 @@ bool hasAirLabs();
 bool hasFlightAware();
 bool hasFr24();
 bool hasWeather();
+bool hasCarto();
 
 /** Tomorrow.io weather key (single key). Returns "" when unset. */
 const char* weatherKey();
+/** CARTO basemap key for portal tile bake (single key). Returns "" when unset. */
+const char* cartoKey();
 /** Persist a new weather key from the web form; ignores null/empty. */
 bool saveWeatherKeyFromForm(const char* weather);
+/** Persist a new CARTO key from the web form; ignores null/empty. */
+bool saveCartoKeyFromForm(const char* carto);
 /** Portal/web checkbox ("T" = enabled). */
 void saveWeatherEnabledFromForm(const char* use_weather);
 
@@ -48,6 +53,7 @@ void saveOpenMeteoEnabledFromForm(const char* use_openmeteo);
 /** Free key-less Open-Meteo weather source enabled (default on). */
 bool useOpenMeteo();
 void maskedWeather(char* out, size_t len);
+void maskedCarto(char* out, size_t len);
 
 bool useAirLabs();
 bool useFlightAware();

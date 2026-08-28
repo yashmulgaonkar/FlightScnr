@@ -20,6 +20,7 @@ constexpr char kAirLabs[] = "al_key";
 constexpr char kFlightAware[] = "fa_key";
 constexpr char kFr24[] = "fr24_key";
 constexpr char kWeather[] = "wx_key";
+constexpr char kCarto[] = "carto_key";
 constexpr char kUseWeather[] = "wx_use";
 constexpr char kUseAirLabs[] = "al_use";
 constexpr char kUseFlightAware[] = "fa_use";
@@ -60,6 +61,7 @@ bool s_use_flightaware = false;
 bool s_use_fr24 = false;
 
 char s_weather_key[kMaxSingleKeyLen + 1] = {0};
+char s_carto_key[kMaxSingleKeyLen + 1] = {0};
 bool s_use_weather = true;
 bool s_use_adsbdb = true;
 bool s_use_openmeteo = true;
@@ -456,6 +458,11 @@ void load() {
   } else {
     s_weather_key[0] = '\0';
   }
+  if (prefs.isKey(kCarto)) {
+    copyBlob(s_carto_key, prefs.getString(kCarto).c_str(), sizeof(s_carto_key));
+  } else {
+    s_carto_key[0] = '\0';
+  }
   s_use_weather = prefs.getBool(kUseWeather, true);
   s_use_adsbdb = prefs.getBool(kUseAdsbDb, true);
   s_use_openmeteo = prefs.getBool(kUseOpenMeteo, true);
@@ -754,6 +761,18 @@ bool saveWeatherKeyFromForm(const char* weather) {
   return true;
 }
 
+bool hasCarto() { return s_carto_key[0] != '\0'; }
+
+const char* cartoKey() { return s_carto_key; }
+
+bool saveCartoKeyFromForm(const char* carto) {
+  if (!saveIfNonEmpty(carto, kCarto)) {
+    return false;
+  }
+  copyBlob(s_carto_key, carto, sizeof(s_carto_key));
+  return true;
+}
+
 void saveWeatherEnabledFromForm(const char* use_weather) {
   Preferences prefs;
   if (!prefs.begin(kNs, false)) {
@@ -793,6 +812,7 @@ void saveOpenMeteoEnabledFromForm(const char* use_openmeteo) {
 bool useOpenMeteo() { return s_use_openmeteo; }
 
 void maskedWeather(char* out, size_t len) { maskedPreviewSingle(s_weather_key, out, len); }
+void maskedCarto(char* out, size_t len) { maskedPreviewSingle(s_carto_key, out, len); }
 
 void maskedAirLabs(char* out, size_t len) { maskedPreviewProvider(s_airlabs, out, len); }
 void maskedFlightAware(char* out, size_t len) { maskedPreviewProvider(s_flightaware, out, len); }
