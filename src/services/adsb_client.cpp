@@ -152,46 +152,128 @@ bool readHttpPayload(HTTPClient& http, PsramPayload* payload, uint32_t timeout_m
     return false;
   }
   const int content_len = http.getSize();
+  // getSize() < 0 means unknown length — adsb.fi serves Transfer-Encoding: chunked,
+  // and getStreamPtr() is the RAW socket (hex chunk-size lines included). Reading it
+  // without de-chunking corrupts JSON (InvalidInput) or yields ac=0.
+  const bool chunked = content_len < 0;
   if (content_len > 0 && !payload->reserve(static_cast<size_t>(content_len) + 1)) {
     Serial.printf("[fetch] payload alloc failed (%d bytes)\n", content_len);
     return false;
   }
   const unsigned long deadline_ms = millis() + timeout_ms;
   uint8_t buf[512];
-  while (http.connected() || stream->available()) {
-    if (millis() >= deadline_ms) {
-      if (config::kSerialTraceDebug) {
-        Serial.printf("[fetch] http read timeout (%ums)\n", timeout_ms);
+
+  if (!chunked) {
+    while (http.connected() || stream->available()) {
+      if (millis() >= deadline_ms) {
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[fetch] http read timeout (%ums)\n", timeout_ms);
+        }
+        return false;
       }
+      if (stream->available() == 0) {
+        if (!http.connected()) {
+          break;
+        }
+        workerYield();
+        continue;
+      }
+      const size_t n = stream->readBytes(buf, sizeof(buf));
+      if (n == 0) {
+        workerYield();
+        continue;
+      }
+      if (!payload->append(buf, n)) {
+        Serial.println("[fetch] payload alloc failed (grow)");
+        return false;
+      }
+    }
+    if (payload->len == 0) {
       return false;
     }
-    if (stream->available() == 0) {
-      if (!http.connected()) {
+    if (payload->len != static_cast<size_t>(content_len)) {
+      Serial.printf("[fetch] short read %u/%d bytes\n",
+                    static_cast<unsigned>(payload->len), content_len);
+      return false;
+    }
+    return true;
+  }
+
+  if (config::kSerialTraceDebug) {
+    Serial.println("[fetch] chunked body decode");
+  }
+
+  auto readByte = [&](uint8_t* out) -> bool {
+    for (;;) {
+      if (millis() >= deadline_ms) {
+        return false;
+      }
+      if (stream->available() > 0) {
+        const int c = stream->read();
+        if (c >= 0) {
+          *out = static_cast<uint8_t>(c);
+          return true;
+        }
+      }
+      if (!http.connected() && stream->available() == 0) {
+        return false;
+      }
+      workerYield();
+    }
+  };
+
+  for (;;) {
+    char size_line[16] = {};
+    size_t size_len = 0;
+    uint8_t c = 0;
+    while (readByte(&c)) {
+      if (c == '\n') {
         break;
       }
-      workerYield();
-      continue;
+      if (c != '\r' && size_len + 1 < sizeof(size_line)) {
+        size_line[size_len++] = static_cast<char>(c);
+      }
     }
-    const size_t n = stream->readBytes(buf, sizeof(buf));
-    if (n == 0) {
-      workerYield();
-      continue;
+    size_line[size_len] = '\0';
+    const long chunk_size = strtol(size_line, nullptr, 16);
+    if (chunk_size <= 0) {
+      break;
     }
-    if (!payload->append(buf, n)) {
-      Serial.println("[fetch] payload alloc failed (grow)");
-      return false;
+    long remaining = chunk_size;
+    while (remaining > 0) {
+      if (millis() >= deadline_ms) {
+        if (config::kSerialTraceDebug) {
+          Serial.printf("[fetch] http read timeout (%ums)\n", timeout_ms);
+        }
+        return false;
+      }
+      if (stream->available() == 0) {
+        if (!http.connected()) {
+          return false;
+        }
+        workerYield();
+        continue;
+      }
+      const size_t want = remaining < static_cast<long>(sizeof(buf))
+                              ? static_cast<size_t>(remaining)
+                              : sizeof(buf);
+      const size_t got = stream->readBytes(buf, want);
+      if (got == 0) {
+        workerYield();
+        continue;
+      }
+      if (!payload->append(buf, got)) {
+        Serial.println("[fetch] payload alloc failed (chunk grow)");
+        return false;
+      }
+      remaining -= static_cast<long>(got);
+    }
+    if (readByte(&c) && c == '\r') {
+      readByte(&c);
     }
   }
-  if (payload->len == 0) {
-    return false;
-  }
-  if (content_len > 0 &&
-      payload->len != static_cast<size_t>(content_len)) {
-    Serial.printf("[fetch] short read %u/%d bytes\n",
-                  static_cast<unsigned>(payload->len), content_len);
-    return false;
-  }
-  return true;
+
+  return payload->len > 0;
 }
 
 void logAircraftToSerial(const Aircraft* planes, size_t count, double center_lat,
