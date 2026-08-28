@@ -1127,8 +1127,12 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
 
   PsramPayload payload;
   if (!readHttpPayload(http, &payload, kFetchHttpTimeoutMs + 4000U)) {
+    Serial.printf("[adsb] HTTP body read failed (chunked=%d len=%u)\n",
+                  http.getSize() < 0 ? 1 : 0,
+                  static_cast<unsigned>(payload.len));
     http.end();
     client.stop();
+    services::https::drainTlsHeapAfterSession();
     return false;
   }
   http.end();
@@ -1163,6 +1167,12 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
     Serial.printf("[adsb] all traffic filtered (floor=%d ceil=%d alt_skip=%u)\n",
                   s_altitude_floor_ft, s_altitude_ceiling_ft,
                   static_cast<unsigned>(s_last_fetch_stats.skipped_alt));
+  } else if (*out_count == 0 && s_last_fetch_stats.feed_raw > 0 &&
+             s_last_fetch_stats.skipped_latlon > 0 &&
+             s_last_fetch_stats.kept == 0) {
+    Serial.printf("[adsb] all traffic missing lat/lon (latlon_skip=%u raw=%u)\n",
+                  static_cast<unsigned>(s_last_fetch_stats.skipped_latlon),
+                  static_cast<unsigned>(s_last_fetch_stats.feed_raw));
   }
   return true;
 }

@@ -13,8 +13,10 @@ const APP_FLASH_OFFSET = 0x10000;
 /** Must match the magic in src/hardware/board_marker.cpp. */
 const BOARD_MARKER_MAGIC = "FSBRDMK:";
 /** How far into the app partition to search for the board marker. */
-const BOARD_MARKER_SEARCH_BYTES = 1024 * 1024;
-const BOARD_MARKER_CHUNK = 64 * 1024;
+const BOARD_MARKER_SEARCH_BYTES = 256 * 1024;
+const BOARD_MARKER_CHUNK = 16 * 1024;
+/** Per-chunk read timeout — abort marker scan instead of blocking Connect. */
+const BOARD_MARKER_READ_TIMEOUT_MS = 20_000;
 /**
  * SPI flash manufacturer ID → board hint. Observed on known units; suppliers
  * can change between production runs, so this is never treated as definitive.
@@ -153,6 +155,30 @@ function isKnownBoardId(id) {
   return id === BOARD_TENCODER || id === BOARD_WAVESHARE;
 }
 
+function isErasedFlashChunk(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    return false;
+  }
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] !== 0xff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function readFlashWithTimeout(loader, address, length, timeoutMs) {
+  return Promise.race([
+    loader.readFlash(address, length),
+    new Promise((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`flash read timed out after ${timeoutMs / 1000}s`)),
+        timeoutMs,
+      );
+    }),
+  ]);
+}
+
 /** Scan a Uint8Array for "FSBRDMK:<board-id>" written by board_marker.cpp. */
 function parseBoardMarker(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
@@ -191,7 +217,7 @@ function parseBoardMarker(bytes) {
  * Read the app partition looking for a FlightScnr board marker. Returns the
  * board id, or null when the chip is blank / running non-FlightScnr firmware.
  */
-async function detectBoardFromMarker(loader) {
+async function detectBoardFromMarker(loader, onProgress) {
   if (!loader || typeof loader.readFlash !== "function") {
     return null;
   }
@@ -199,10 +225,20 @@ async function detectBoardFromMarker(loader) {
   let offset = 0;
   while (offset < BOARD_MARKER_SEARCH_BYTES) {
     const len = Math.min(BOARD_MARKER_CHUNK, BOARD_MARKER_SEARCH_BYTES - offset);
-    const chunk = await loader.readFlash(APP_FLASH_OFFSET + offset, len);
+    onProgress?.(offset, len, BOARD_MARKER_SEARCH_BYTES);
+    const chunk = await readFlashWithTimeout(
+      loader,
+      APP_FLASH_OFFSET + offset,
+      len,
+      BOARD_MARKER_READ_TIMEOUT_MS,
+    );
     const board = parseBoardMarker(chunk);
     if (board) {
       return board;
+    }
+    // Blank factory flash is all 0xFF — no marker will appear deeper in the app slot.
+    if (offset === 0 && isErasedFlashChunk(chunk)) {
+      return null;
     }
     if (offset + len >= BOARD_MARKER_SEARCH_BYTES) {
       break;
@@ -746,8 +782,11 @@ async function connect() {
     }
 
     try {
-      log("Looking for FlightScnr board marker in flash (may take a few seconds)…");
-      const markerBoard = await detectBoardFromMarker(esploader);
+      log("Looking for FlightScnr board marker in flash…");
+      const markerBoard = await detectBoardFromMarker(esploader, (offset, len, total) => {
+        const end = Math.min(offset + len, total);
+        log(`  marker scan ${Math.round((end / total) * 100)}% (0x${(APP_FLASH_OFFSET + offset).toString(16)}…)`);
+      });
       if (markerBoard) {
         detectedBoard = markerBoard;
         detectedBoardSource = "marker";
