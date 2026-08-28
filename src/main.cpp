@@ -1835,10 +1835,15 @@ void tickAdsbFetch() {
       Serial.printf("[sweep] fetch_ready process_ms=%lu ac=%u\n", process_ms,
                     static_cast<unsigned>(services::adsb::aircraftCount()));
     } else if (on_radar && config::kRadarResumeDebug) {
-      Serial.printf("[fetch] done ac=%u ac_in=%u full_draw=%d proc_ms=%lu\n",
+      const services::adsb::FetchStats& fs = services::adsb::lastFetchStats();
+      Serial.printf("[fetch] done ac=%u ac_in=%u full_draw=%d proc_ms=%lu feed=%u raw=%u "
+                    "alt_skip=%u center=%.5f,%.5f km=%.1f\n",
                     static_cast<unsigned>(services::adsb::aircraftCount()),
                     static_cast<unsigned>(ui::radarDisplayInRangeAircraftCount()),
-                    g_radar_full_draw_pending ? 1 : 0, process_ms);
+                    g_radar_full_draw_pending ? 1 : 0, process_ms,
+                    static_cast<unsigned>(fs.feed_total), static_cast<unsigned>(fs.feed_raw),
+                    static_cast<unsigned>(fs.skipped_alt), fs.center_lat, fs.center_lon,
+                    fs.radius_km);
     }
     if (g_radar_full_draw_pending && g_screen == AppScreen::Radar && g_radar_visible) {
       completeDeferredRadarDraw();

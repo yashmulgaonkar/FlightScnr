@@ -79,16 +79,19 @@ void bootLoad() {
   if (readFromNamespace(kStoreNs, kLatKey, kLonKey, &lat, &lon)) {
     s_latitude = lat;
     s_longitude = lon;
+    Serial.printf("Map center: %.6f, %.6f (saved)\n", lat, lon);
     return;
   }
   if (readFromNamespace(kLegacyNs, kLegacyLatKey, kLegacyLonKey, &lat, &lon)) {
     s_latitude = lat;
     s_longitude = lon;
     writeFlash(lat, lon);
+    Serial.printf("Map center: %.6f, %.6f (legacy migrated)\n", lat, lon);
     return;
   }
   s_latitude = config::kFactoryLatitude;
   s_longitude = config::kFactoryLongitude;
+  Serial.printf("Map center: %.6f, %.6f (factory default)\n", s_latitude, s_longitude);
 }
 
 double latitude() { return s_latitude; }

@@ -8,6 +8,7 @@
 // Mirrors services::adsb filter + ground detection against a real adsb.fi snippet.
 
 static void buildAircraftFilter(JsonDocument& filter) {
+  filter["total"] = true;
   JsonObject el = filter["ac"].add<JsonObject>();
   static const char* kKeepKeys[] = {
       "lat",          "lon",      "true_heading", "mag_heading", "track",
