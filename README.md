@@ -61,7 +61,7 @@ On-device settings: page 2 = brightness, units, compass, sweep, timeouts, idle c
 2. Enter Wi‑Fi credentials (or manage **Saved networks**). You can also join the SSID manually and open `http://4.3.2.1` or the unique `http://flightscnr-xxxx.local`. Reboot the unit.
 3. After connect: safety disclaimer (touch **Accept**; optional **Don’t show again**) → About splash (~5 s) → radar. When acceptance is remembered, the disclaimer still appears for five seconds, then continues.
 4. Set radar center, weather key, and optional route APIs at `http://flightscnr-xxxx.local/` (or the device IP shown on settings page 1).
-5. Optional: **Radar basemap** card → pick style (**Dark Matter**, **Positron**, **Voyager**, or **VFR Sectional**) + contrast/wash + **Bake coverage**, then **Generate basemap**. Zooming out past the bake needs regenerate; center/facing/style changes do too.
+5. Optional: **Radar basemap** card → paste a free **CARTO API key** ([request here](https://carto.com/basemaps/apikey/)), pick style (**Dark Matter**, **Positron**, **Voyager**, or **VFR Sectional**) + contrast/wash + **Bake coverage**, then **Generate basemap**. Zooming out past the bake needs regenerate; center/facing/style changes do too.
 
 You can save up to **3** Wi‑Fi networks. Preference order is slot order (#1 tried first). Manage them from the setup portal (**Saved networks**) or the online settings page (**Wi‑Fi networks** card: add, remove, reorder, update password).
 

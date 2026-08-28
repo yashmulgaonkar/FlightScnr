@@ -55,6 +55,8 @@ bool s_active = false;
 constexpr size_t kSettingsPageCap = 65536;
 char* s_settings_page = nullptr;
 
+int appendJsonString(char* out, size_t out_len, size_t* used, const char* value);
+
 char* settingsPageBuffer() {
   if (s_settings_page == nullptr) {
     s_settings_page = static_cast<char*>(
@@ -543,7 +545,9 @@ void handleSettingsPage() {
   // ---------- Radar basemap (Carto / FAA VFR bake) ----------
   {
     char bm_status[192];
+    char carto_masked[48];
     services::basemap::statusText(bm_status, sizeof(bm_status));
+    services::apikeys::maskedCarto(carto_masked, sizeof(carto_masked));
     const auto bm_style = services::basemap::hasImage()
                               ? services::basemap::storedStyle()
                               : services::basemap::Style::Dark;
@@ -562,7 +566,7 @@ void handleSettingsPage() {
         "<p class=\"note\">Optional map under the radar grid. "
         "Generated in your browser from <a href=\"https://carto.com/basemaps/\" "
         "target=\"_blank\" rel=\"noopener\">CARTO</a> (OSM, no city labels: Dark Matter, "
-        "Positron, Voyager) or "
+        "Positron, Voyager; free API key required) or "
         "FAA <a href=\"https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/\" "
         "target=\"_blank\" rel=\"noopener\">VFR Sectional</a> charts "
         "(dark/light/Voyager: contrast; VFR: pale wash toward white — set %% below), "
@@ -573,6 +577,12 @@ void handleSettingsPage() {
         "&copy; OpenStreetMap / &copy; CARTO / &copy; FAA."
         "</p>"
         "<p class=\"hint\" id=\"bm_status\">%s</p>"
+        "<label for=\"carto_key\">CARTO API key (%s)</label>"
+        "<input id=\"carto_key\" name=\"carto_key\" type=\"password\" autocomplete=\"off\" "
+        "placeholder=\"paste key\">"
+        "<p class=\"hint\">Required for Dark Matter, Positron, and Voyager bakes. "
+        "Free at <a href=\"https://carto.com/basemaps/apikey/\" target=\"_blank\" "
+        "rel=\"noopener\">carto.com/basemaps/apikey</a> (not needed for FAA VFR).</p>"
         "<label for=\"basemap_style\">Map style</label>"
         "<select id=\"basemap_style\">"
         "<option value=\"dark\"%s>Dark Matter (dark)</option>"
@@ -599,7 +609,7 @@ void handleSettingsPage() {
         "<option value=\"current\" selected>Current range (%u mi) — sharper</option>"
         "<option value=\"max\">Maximum range (%u mi) — zoom-friendly</option>"
         "</select>",
-        bm_status, dark_sel ? " selected" : "", light_sel ? " selected" : "",
+        bm_status, carto_masked, dark_sel ? " selected" : "", light_sel ? " selected" : "",
         voyager_sel ? " selected" : "", vfr_sel ? " selected" : "",
         static_cast<unsigned>(services::basemap::contrastPercentDark()),
         static_cast<unsigned>(services::basemap::contrastPercentLight()),
@@ -610,6 +620,13 @@ void handleSettingsPage() {
   appendToggle(page, kSettingsPageCap, &used, "use_basemap", "Show basemap on radar",
                services::basemap::enabled());
   {
+    char carto_js[services::apikeys::kMaxSingleKeyLen + 8];
+    size_t carto_js_len = 0;
+    appendJsonString(carto_js, sizeof(carto_js), &carto_js_len, services::apikeys::cartoKey());
+    if (carto_js_len >= sizeof(carto_js)) {
+      carto_js_len = sizeof(carto_js) - 1;
+    }
+    carto_js[carto_js_len] = '\0';
     const int bm2 = snprintf(
         page + used, kSettingsPageCap - used,
         "<p style=\"margin-top:.6rem\">"
@@ -620,6 +637,7 @@ void handleSettingsPage() {
         "(function(){"
         "var SIZE=%d,CX=%d,CY=%d,OUTER=%d;"
         "var lat=%.6f,lon=%.6f,curMiles=%u,maxMiles=%u,facing=%u;"
+        "var cartoKey=%s;"
         "var msg=document.getElementById('bm_msg');"
         "var styleEl=document.getElementById('basemap_style');"
         "var covEl=document.getElementById('basemap_coverage');"
@@ -668,10 +686,12 @@ void handleSettingsPage() {
         "if(styleKey()==='vfr')"
         "return'https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services/"
         "VFR_Sectional/MapServer/tile/'+z+'/'+y+'/'+x;"
-        "var path='dark_nolabels';"
-        "if(styleKey()==='light')path='light_nolabels';"
+        "var path='rastertiles/dark_nolabels';"
+        "if(styleKey()==='light')path='rastertiles/light_nolabels';"
         "else if(styleKey()==='voyager')path='rastertiles/voyager_nolabels';"
-        "return'https://a.basemaps.cartocdn.com/'+path+'/'+z+'/'+x+'/'+y+'.png';}"
+        "var url='https://a.basemaps.cartocdn.com/'+path+'/'+z+'/'+x+'/'+y+'.png';"
+        "if(cartoKey)url+='?key='+encodeURIComponent(cartoKey);"
+        "return url;}"
         "function loadTile(z,x,y){return new Promise(function(res,rej){"
         "var i=new Image();i.crossOrigin='anonymous';"
         "i.onload=function(){res(i)};"
@@ -680,6 +700,9 @@ void handleSettingsPage() {
         "else rej(new Error('tile '+z+'/'+x+'/'+y));};"
         "i.src=tileUrl(z,x,y);});}"
         "async function bake(){"
+        "if(styleKey()!=='vfr'&&!cartoKey){"
+        "msg.textContent='CARTO API key required — paste key above, Save, then Generate';"
+        "return;}"
         "await persistBakeAdjust();"
         "var miles=bakeMiles(),labelKm=miles*1.609344,ppm=OUTER/labelKm;"
         "var coverR=Math.ceil(Math.hypot(CX,CY))+2;"
@@ -757,7 +780,7 @@ void handleSettingsPage() {
         static_cast<unsigned>(ui::radar::scaleActiveMiles()),
         static_cast<unsigned>(
             ui::radar::kRangeMileOptions[ui::radar::kRangeMileOptionCount - 1]),
-        static_cast<unsigned>(ui::radar::facingDeg()),
+        static_cast<unsigned>(ui::radar::facingDeg()), carto_js,
         static_cast<unsigned>(services::basemap::contrastPercentDark()),
         static_cast<unsigned>(services::basemap::contrastPercentLight()),
         static_cast<unsigned>(services::basemap::washPercentVfr()));
@@ -1331,7 +1354,7 @@ void handleSettingsPage() {
       "<script>"
       "(function(){"
       "var lastRev=null,timer=null,PASSWORD_IDS={"
-      "airlabs_key:1,flightaware_key:1,fr24_key:1,weather_key:1"
+      "airlabs_key:1,flightaware_key:1,fr24_key:1,weather_key:1,carto_key:1"
       "};"
       "function setVal(id,v){"
       "var el=document.getElementById(id);if(!el||PASSWORD_IDS[id])return;"
@@ -1463,6 +1486,7 @@ void handleSave() {
   const bool use_openmeteo_before = services::apikeys::useOpenMeteo();
   const bool weather_key_saved =
       services::apikeys::saveWeatherKeyFromForm(s_server->arg("weather_key").c_str());
+  services::apikeys::saveCartoKeyFromForm(s_server->arg("carto_key").c_str());
   services::apikeys::saveWeatherEnabledFromForm(s_server->arg("use_weather").c_str());
   services::apikeys::saveOpenMeteoEnabledFromForm(s_server->arg("use_openmeteo").c_str());
   services::apikeys::saveAdsbDbEnabledFromForm(s_server->arg("use_adsbdb").c_str());
