@@ -10,6 +10,8 @@ const BOARD_LABELS = {
 const BOARD_STORAGE_KEY = "flightscnr-webflasher-board";
 const FULL_FLASH_OFFSET = 0;
 const APP_FLASH_OFFSET = 0x10000;
+/** Second OTA app slot (default_16MB.csv app1) — active after an on-device OTA update. */
+const OTA_APP1_FLASH_OFFSET = 0x650000;
 /** Must match the magic in src/hardware/board_marker.cpp. */
 const BOARD_MARKER_MAGIC = "FSBRDMK:";
 /** How far into the app partition to search for the board marker. */
@@ -669,7 +671,7 @@ async function fetchFirmwareForInstall(mode) {
   if (buf.byteLength === 0) {
     throw new Error("Downloaded file is empty");
   }
-  log(`Downloaded ${(buf.byteLength / (1024 * 1024)).toFixed(2)} MB`);
+  log(`Downloaded ${(buf.byteLength / (1024 * 1024)).toFixed(2)} MB from ${part.url}`);
   return {
     data: new Uint8Array(buf),
     offset: part.offset ?? (mode === "app" ? APP_FLASH_OFFSET : FULL_FLASH_OFFSET),
@@ -848,29 +850,58 @@ async function flashBinary(data, label, address = FULL_FLASH_OFFSET) {
   }
 
   setProgress(0, `Preparing ${label}…`);
-  log(
-    `Flashing ${label} at 0x${address.toString(16)} (${data.byteLength} bytes)…`,
-  );
-  if (address === FULL_FLASH_OFFSET) {
-    log("Full factory image - bootloader, partitions, and app. Clears Wi‑Fi and saved settings.");
-  } else {
-    log("App-only image - requires an existing FlightScnr bootloader and partition table.");
-  }
 
   // esptool-js 0.5.x expects a binary string, not Uint8Array (uses charCodeAt internally).
   const image =
     data instanceof Uint8Array ? esploader.ui8ToBstr(data) : data;
 
+  const fileArray = [{ data: image, address }];
+
+  if (address === FULL_FLASH_OFFSET) {
+    log(
+      `Flashing ${label} at 0x0 (${data.byteLength} bytes) — factory image (bootloader, partitions, app0).`,
+    );
+    log("Full install clears Wi‑Fi and saved settings.");
+    if (data.byteLength > APP_FLASH_OFFSET) {
+      const appTail =
+        data instanceof Uint8Array
+          ? esploader.ui8ToBstr(data.subarray(APP_FLASH_OFFSET))
+          : image.slice(APP_FLASH_OFFSET);
+      fileArray.push({ data: appTail, address: OTA_APP1_FLASH_OFFSET });
+      log(
+        "Also writing app to OTA slot app1 at 0x650000 so a prior on-device update cannot keep booting old firmware.",
+      );
+    }
+  } else if (address === APP_FLASH_OFFSET) {
+    log(
+      `Flashing ${label} to both OTA app slots at 0x10000 and 0x650000 (${data.byteLength} bytes each)…`,
+    );
+    log(
+      "After an on-device OTA update the ESP32 may boot from app1 — updating only 0x10000 leaves the old version running.",
+    );
+    fileArray.push({ data: image, address: OTA_APP1_FLASH_OFFSET });
+  } else {
+    log(
+      `Flashing ${label} at 0x${address.toString(16)} (${data.byteLength} bytes)…`,
+    );
+  }
+
   await esploader.writeFlash({
-    fileArray: [{ data: image, address }],
+    fileArray,
     flashSize: "16MB",
     flashMode: "qio",
     flashFreq: "80m",
     eraseAll: false,
     compress: true,
-    reportProgress: (_fileIndex, written, total) => {
+    reportProgress: (fileIndex, written, total) => {
       const pct = total > 0 ? Math.round((written / total) * 100) : 0;
-      setProgress(pct, `Flashing… ${pct}%`);
+      const slot =
+        fileIndex === 0
+          ? `0x${fileArray[0].address.toString(16)}`
+          : fileArray[1]
+            ? `0x${fileArray[1].address.toString(16)}`
+            : "";
+      setProgress(pct, `Flashing ${slot}… ${pct}%`);
     },
   });
 

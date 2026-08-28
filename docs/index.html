@@ -134,7 +134,8 @@
         <strong>Erase flash</strong>, or when replacing factory firmware (flashes at
         <strong>0x0</strong>; clears Wi‑Fi and saved settings).
         <strong>Update app only</strong> flashes the application at
-        <strong>0x10000</strong> and keeps settings when bootloader and partitions
+        <strong>0x10000</strong> and <strong>0x650000</strong> (both OTA slots; needed
+        after an on-device OTA) and keeps settings when bootloader and partitions
         already match.
       </p>
 
