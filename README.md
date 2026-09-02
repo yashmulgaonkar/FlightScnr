@@ -12,8 +12,6 @@ The best part? There is absolutely no coding or soldering required!
   </a>
 </p>
 
-[![Repo analytics](https://raw.githubusercontent.com/yashmulgaonkar/repo-analytics/main/out/FlightScnr/analytics.svg)](https://github.com/yashmulgaonkar/repo-analytics)
-
 Open-source firmware that shows **live ADS-B traffic** on a sweeping radar around your preset position. Built for the **[LilyGO T-Encoder Pro](https://www.lilygo.cc/zo4apl)** and the **[Waveshare ESP32-S3-Knob-Touch-LCD-1.8](https://www.waveshare.com/wiki/ESP32-S3-Knob-Touch-LCD-1.8)**, inspired by **[ESP32-Plane-Radar](https://github.com/MatixYo/ESP32-Plane-Radar)** and **[deskradar](https://github.com/arvis91/deskradar)**.
 
 Firmware is **[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)** ([LICENSE](LICENSE)) - shareable for hobbyists, not for closed commercial forks.
@@ -178,5 +176,7 @@ Always read the full license on MakerWorld before downloading, printing, or shar
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
   </a>
 </p>
+
+[![Repo analytics](https://raw.githubusercontent.com/yashmulgaonkar/repo-analytics/main/out/FlightScnr/analytics.svg)](https://github.com/yashmulgaonkar/repo-analytics)
 
 ![Alt](https://repobeats.axiom.co/api/embed/5099c1063d1cce9131cd67c435988eb14bf93a36.svg "Repobeats analytics image")
