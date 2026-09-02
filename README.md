@@ -177,3 +177,5 @@ Always read the full license on MakerWorld before downloading, printing, or shar
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
   </a>
 </p>
+
+![Alt](https://repobeats.axiom.co/api/embed/5099c1063d1cce9131cd67c435988eb14bf93a36.svg "Repobeats analytics image")
