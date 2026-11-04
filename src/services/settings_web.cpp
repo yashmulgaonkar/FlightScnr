@@ -251,7 +251,7 @@ void appendFirmwareUpdateCard(char* page, size_t* used) {
       ".finally(function(){setBusy(false);if(st&&st.innerHTML.indexOf('Update available')>=0)"
       "{ins.disabled=false;}});"
       "});"
-      "function pollInstall(){"
+      "function pollInstall(tries){"
       "fetch('/ota/github/progress').then(function(r){return r.json();})"
       ".then(function(j){"
       "var p=typeof j.percent==='number'?j.percent:parseInt(j.percent,10)||0;"
@@ -259,13 +259,16 @@ void appendFirmwareUpdateCard(char* page, size_t* used) {
       "if(j.state==='running'){"
       "var msg='Downloading / flashing '+p+'%%';"
       "if(j.bytes){msg+=' ('+fmtMb(j.bytes)+(j.total?' / '+fmtMb(j.total):'')+' MB)';}"
-      "m.textContent=msg;setTimeout(pollInstall,400);}"
+      "m.textContent=msg;setTimeout(function(){pollInstall(8);},400);}"
       "else if(j.state==='succeeded'){setPct(100);"
       "m.textContent='Update installed \\u2014 press the device\\u2019s reset button "
       "to boot the new firmware.';setBusy(false);}"
-      "else if(j.state==='idle'){setTimeout(pollInstall,300);}"
+      "else if(j.state==='idle'){setTimeout(function(){pollInstall(tries);},300);}"
       "else{m.textContent='Install failed: '+(j.error||j.state);setBusy(false);}"
-      "}).catch(function(e){m.textContent='Progress error: '+e;setBusy(false);});"
+      "}).catch(function(e){"
+      "if(tries>0){setTimeout(function(){pollInstall(tries-1);},500);return;}"
+      "m.textContent='Progress error: '+e+' \\u2014 refresh the page. The install may "
+      "still be running.';setBusy(false);});"
       "}"
       "ins.addEventListener('click',function(){"
       "if(!confirm('Download and flash the latest GitHub app image? Keep power on. "
@@ -273,7 +276,7 @@ void appendFirmwareUpdateCard(char* page, size_t* used) {
       "m.textContent='Starting install\\u2026';setBusy(true);setPct(0);"
       "fetch('/ota/github/install',{method:'POST'}).then(function(r){"
       "if(!r.ok)return r.text().then(function(t){throw new Error(t||r.status);});"
-      "pollInstall();"
+      "pollInstall(8);"
       "}).catch(function(e){m.textContent='Install error: '+e;setBusy(false);});"
       "});"
       "b.addEventListener('click',function(){"
@@ -1938,8 +1941,13 @@ void handleOtaGithubInstall() {
                    err[0] != '\0' ? err : "failed to start install");
     return;
   }
+  // Close so the progress poll is not stuck behind this keep-alive socket.
+  // An idle keep-alive blocks the next handleClient(); the browser then reports
+  // "TypeError: Failed to fetch" on /ota/github/progress.
+  s_server->sendHeader("Connection", "close");
   s_server->send(200, "application/json; charset=utf-8",
                  "{\"ok\":true,\"state\":\"running\"}");
+  s_server->client().stop();
 }
 
 void handleOtaGithubProgress() {
@@ -1959,7 +1967,9 @@ void handleOtaGithubProgress() {
            static_cast<unsigned>(services::ota_github::installBytes()),
            static_cast<unsigned>(services::ota_github::installTotal()),
            services::ota_github::installError());
+  s_server->sendHeader("Connection", "close");
   s_server->send(200, "application/json; charset=utf-8", body);
+  s_server->client().stop();
 }
 
 /** Append a JSON string value with escaping. Returns chars written (excl NUL) or -1. */

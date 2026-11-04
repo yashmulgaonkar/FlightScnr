@@ -557,9 +557,11 @@ bool startInstall() {
   s_install_total = 0;
   s_install_state = InstallState::Running;
 
+  // Same stack as the ADS-B HTTPS worker. 8 KB overflows inside mbedTLS
+  // during the GitHub download and the chip resets before progress can be read.
   const BaseType_t ok =
-      xTaskCreatePinnedToCore(installTaskThunk, "ota_gh", 8192, nullptr, 1,
-                              &s_install_task, 0);
+      xTaskCreatePinnedToCore(installTaskThunk, "ota_gh", 16384, nullptr, 1,
+                              &s_install_task, config::kCoreNetwork);
   if (ok != pdPASS) {
     s_install_task = nullptr;
     setInstallFailed("task create failed");
