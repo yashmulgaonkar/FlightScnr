@@ -105,6 +105,29 @@ constexpr uint8_t kTagAltAscendB = 255;
 constexpr uint8_t kTagAltDescendR = 255;
 constexpr uint8_t kTagAltDescendG = 0;
 constexpr uint8_t kTagAltDescendB = 255;
+/**
+ * Callsign ink. Same RGB as FlightScnr_Pi theme.TAG_TEXT_DARK / TAG_TEXT_LIGHT.
+ * Dark basemap is green; pale charts (light, Voyager, VFR) are near-black.
+ */
+constexpr uint8_t kTagTextDarkR = 0;
+constexpr uint8_t kTagTextDarkG = 255;
+constexpr uint8_t kTagTextDarkB = 0;
+constexpr uint8_t kTagTextLightR = 15;
+constexpr uint8_t kTagTextLightG = 23;
+constexpr uint8_t kTagTextLightB = 42;
+/**
+ * Type and altitude on pale charts. Same RGB as FlightScnr_Pi
+ * _LIGHT_MAP_TYPE / _LIGHT_MAP_ALT_UP / _LIGHT_MAP_ALT_DOWN.
+ */
+constexpr uint8_t kTagTypeLightR = 30;
+constexpr uint8_t kTagTypeLightG = 64;
+constexpr uint8_t kTagTypeLightB = 175;
+constexpr uint8_t kTagAltAscendLightR = 14;
+constexpr uint8_t kTagAltAscendLightG = 116;
+constexpr uint8_t kTagAltAscendLightB = 144;
+constexpr uint8_t kTagAltDescendLightR = 126;
+constexpr uint8_t kTagAltDescendLightG = 34;
+constexpr uint8_t kTagAltDescendLightB = 206;
 
 extern uint16_t kColorBackground;
 extern uint16_t kColorGrid;

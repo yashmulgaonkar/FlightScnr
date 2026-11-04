@@ -59,6 +59,11 @@ class PlaneGfx {
 
   int textWidth(const char* text) const;
   int fontHeight() const;
+  /**
+   * Average luma (0–255) of framebuffer pixels in the rect. False when this
+   * target has no framebuffer or the rect misses it.
+   */
+  bool averageLuma(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t* out) const;
   void drawString(const char* text, int16_t x, int16_t y);
 
   void startWrite();

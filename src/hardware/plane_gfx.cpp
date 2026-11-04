@@ -506,6 +506,53 @@ int PlaneGfx::textWidth(const char* text) const {
   return static_cast<int>(w);
 }
 
+bool PlaneGfx::averageLuma(int16_t x, int16_t y, int16_t w, int16_t h,
+                           uint8_t* out) const {
+  if (out == nullptr || fb_ == nullptr || w <= 0 || h <= 0 || fb_w_ <= 0 || fb_h_ <= 0) {
+    return false;
+  }
+  int x0 = x;
+  int y0 = y;
+  int x1 = static_cast<int>(x) + w;
+  int y1 = static_cast<int>(y) + h;
+  if (x0 < 0) {
+    x0 = 0;
+  }
+  if (y0 < 0) {
+    y0 = 0;
+  }
+  if (x1 > fb_w_) {
+    x1 = fb_w_;
+  }
+  if (y1 > fb_h_) {
+    y1 = fb_h_;
+  }
+  if (x0 >= x1 || y0 >= y1) {
+    return false;
+  }
+
+  const int step_x = std::max(1, (x1 - x0) / 6);
+  const int step_y = std::max(1, (y1 - y0) / 4);
+  uint32_t sum = 0;
+  uint32_t n = 0;
+  for (int py = y0; py < y1; py += step_y) {
+    const uint16_t* row = fb_ + static_cast<size_t>(py) * static_cast<size_t>(fb_w_);
+    for (int px = x0; px < x1; px += step_x) {
+      const uint16_t c = row[px];
+      const uint32_t r = ((c >> 11) & 0x1F) * 255u / 31u;
+      const uint32_t g = ((c >> 5) & 0x3F) * 255u / 63u;
+      const uint32_t b = (c & 0x1F) * 255u / 31u;
+      sum += (r * 54u + g * 183u + b * 19u) >> 8;
+      ++n;
+    }
+  }
+  if (n == 0) {
+    return false;
+  }
+  *out = static_cast<uint8_t>(sum / n);
+  return true;
+}
+
 int PlaneGfx::fontHeight() const {
   if (aa_font_ != nullptr) {
     int16_t x1 = 0;
@@ -617,7 +664,9 @@ void PlaneGfx::drawAaString(const char* text, int16_t cursor_x, int16_t cursor_y
     const int16_t ox = static_cast<int16_t>(x + g.xOffset);
     const int16_t oy = static_cast<int16_t>(y + g.yOffset);
     const size_t pixels = static_cast<size_t>(gw) * static_cast<size_t>(gh);
-    const bool can_blit = !transparent && ensureBlitScratch(pixels);
+    // Transparent text composites against the framebuffer in one blit. An
+    // opaque background would stamp a solid chip behind every glyph.
+    const bool can_blit = ensureBlitScratch(pixels) && (!transparent || fb_ != nullptr);
 
     if (can_blit) {
       const uint8_t* bm = aa_font_->bitmap + g.bitmapOffset;
@@ -629,8 +678,19 @@ void PlaneGfx::drawAaString(const char* text, int16_t cursor_x, int16_t cursor_y
               (bit_i & 1) ? static_cast<uint8_t>(byte & 0x0F)
                           : static_cast<uint8_t>(byte >> 4);
           ++bit_i;
+          uint16_t bg = opaque_bg;
+          if (transparent) {
+            const int16_t px = static_cast<int16_t>(ox + col);
+            const int16_t py = static_cast<int16_t>(oy + row);
+            if (px >= 0 && py >= 0 && px < fb_w_ && py < fb_h_) {
+              bg = fb_[static_cast<size_t>(py) * static_cast<size_t>(fb_w_) +
+                       static_cast<size_t>(px)];
+            } else {
+              bg = 0;
+            }
+          }
           s_blit_scratch[static_cast<size_t>(row) * static_cast<size_t>(gw) +
-                         static_cast<size_t>(col)] = blend565(fg, opaque_bg, a4);
+                         static_cast<size_t>(col)] = blend565(fg, bg, a4);
         }
       }
       draw16bitRGBBitmap(ox, oy, s_blit_scratch, gw, gh);

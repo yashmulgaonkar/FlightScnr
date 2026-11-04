@@ -232,6 +232,60 @@ void test_empty_set_clears_results(void) {
   TEST_ASSERT_NULL(ll::find(1));
 }
 
+// (k) Callsign-only promotes back to a full tag only under the stricter limit.
+//     Degrading still uses the wider limit. This is what stops full/short flicker.
+void test_tier_promotion_uses_stricter_coverage(void) {
+  TEST_ASSERT_EQUAL(ll::kHideCoveragePct, ll::coverageLimitPct(ll::kTierFull, ll::kTierFull));
+  TEST_ASSERT_EQUAL(ll::kHideCoveragePct, ll::coverageLimitPct(ll::kTierFull, ll::kTierShort));
+  TEST_ASSERT_EQUAL(ll::kUnhideCoveragePct, ll::coverageLimitPct(ll::kTierShort, ll::kTierFull));
+  TEST_ASSERT_EQUAL(ll::kHideCoveragePct, ll::coverageLimitPct(ll::kTierShort, ll::kTierShort));
+  TEST_ASSERT_EQUAL(ll::kUnhideCoveragePct, ll::coverageLimitPct(ll::kTierHidden, ll::kTierFull));
+  TEST_ASSERT_EQUAL(ll::kUnhideCoveragePct, ll::coverageLimitPct(ll::kTierHidden, ll::kTierShort));
+}
+
+// (l) A pile of farther aircraft must not take the closest tag's slot or tier.
+void test_closer_tag_survives_lower_priority_crowd(void) {
+  const ll::Geometry g = panel();
+  ll::Target alone = makeTarget(1, 150, 195, 0);
+  ll::resolve(&alone, 1, g);
+  const ll::Box solo = ll::find(1)->box;
+  TEST_ASSERT_EQUAL(ll::kTierFull, ll::find(1)->tier);
+
+  ll::reset();
+  ll::Target ts[8];
+  ts[0] = makeTarget(1, 150, 195, 0);
+  for (int i = 1; i < 8; ++i) {
+    ts[i] = makeTarget(static_cast<uint32_t>(100 + i), static_cast<int16_t>(150 + (i % 3)),
+                       static_cast<int16_t>(195 + (i % 2)), 1000 + i);
+  }
+  ll::resolve(ts, 8, g);
+  const ll::Placement* p = ll::find(1);
+  TEST_ASSERT_NOT_NULL(p);
+  TEST_ASSERT_EQUAL(ll::kTierFull, p->tier);
+  TEST_ASSERT_TRUE(p->box.sameAs(solo));
+}
+
+// (m) Two aircraft that share a base key stay distinct, and reordering the
+//     array does not swap which key belongs to which aircraft.
+void test_duplicate_keys_stable_across_reorder(void) {
+  uint32_t keys_a[3] = {5, 5, 7};
+  const int32_t lat_a[3] = {20, 10, 0};
+  const int32_t lon_a[3] = {1, 2, 3};
+  ll::uniquifyKeys(keys_a, lat_a, lon_a, 3);
+
+  uint32_t keys_b[3] = {7, 5, 5};
+  const int32_t lat_b[3] = {0, 10, 20};
+  const int32_t lon_b[3] = {3, 2, 1};
+  ll::uniquifyKeys(keys_b, lat_b, lon_b, 3);
+
+  TEST_ASSERT_NOT_EQUAL(keys_a[0], keys_a[1]);
+  TEST_ASSERT_EQUAL(7u, keys_a[2]);
+  // lat 10 is rank 0, lat 20 is rank 1, in both array orders.
+  TEST_ASSERT_EQUAL(keys_a[1], keys_b[1]);
+  TEST_ASSERT_EQUAL(keys_a[0], keys_b[2]);
+  TEST_ASSERT_EQUAL(keys_a[2], keys_b[0]);
+}
+
 // (j) A target with no callsign has no degrade tier: it is full or nothing.
 void test_no_short_tier_without_callsign(void) {
   const ll::Geometry g = panel();
@@ -261,5 +315,8 @@ int main(int, char**) {
   RUN_TEST(test_unchanged_input_is_stable);
   RUN_TEST(test_empty_set_clears_results);
   RUN_TEST(test_no_short_tier_without_callsign);
+  RUN_TEST(test_tier_promotion_uses_stricter_coverage);
+  RUN_TEST(test_closer_tag_survives_lower_priority_crowd);
+  RUN_TEST(test_duplicate_keys_stable_across_reorder);
   return UNITY_END();
 }
