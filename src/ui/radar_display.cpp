@@ -197,18 +197,6 @@ void initPalette() {
 /** Treat small negative rates as level (cyan). */
 constexpr int16_t kDescendRateThresholdFpm = -64;
 
-uint16_t altitudeTagColor(const services::adsb::Aircraft& plane) {
-  if (strcmp(plane.alt, "GND") == 0) {
-    // Distinct from climb/descend so surface traffic is obvious on the tag.
-    return radar::kColorTagType;
-  }
-  if (plane.vert_rate_fpm != services::adsb::kVertRateUnknown &&
-      plane.vert_rate_fpm < kDescendRateThresholdFpm) {
-    return radar::kColorTagAltitudeDescend;
-  }
-  return radar::kColorTagAltitudeAscend;
-}
-
 void localOffsetFromCenter(float lat, float lon, float* dx_km, float* dy_km,
                            float* dist_km) {
   geo::localOffsetKm(services::map_center::latitude(), services::map_center::longitude(),
@@ -345,6 +333,59 @@ int measureCallsignWidth(const services::adsb::Aircraft& plane) {
   return tft.textWidth(plane.callsign);
 }
 
+/** Luma at or above this is a light map; tag ink switches to dark. */
+constexpr uint8_t kTagLightBackgroundLuma = 140;
+
+struct TagInk {
+  uint16_t label = 0;
+  uint16_t type = 0;
+  uint16_t ascend = 0;
+  uint16_t descend = 0;
+};
+
+TagInk tagInkForBackground(bool light_background) {
+  TagInk ink;
+  if (light_background) {
+    ink.label = tft.color565(radar::kTagTextLightR, radar::kTagTextLightG, radar::kTagTextLightB);
+    ink.type = tft.color565(radar::kTagTypeLightR, radar::kTagTypeLightG, radar::kTagTypeLightB);
+    ink.ascend = tft.color565(radar::kTagAltAscendLightR, radar::kTagAltAscendLightG,
+                              radar::kTagAltAscendLightB);
+    ink.descend = tft.color565(radar::kTagAltDescendLightR, radar::kTagAltDescendLightG,
+                               radar::kTagAltDescendLightB);
+  } else {
+    ink.label = tft.color565(radar::kTagTextDarkR, radar::kTagTextDarkG, radar::kTagTextDarkB);
+    ink.type = tft.color565(radar::kTagTypeR, radar::kTagTypeG, radar::kTagTypeB);
+    ink.ascend =
+        tft.color565(radar::kTagAltAscendR, radar::kTagAltAscendG, radar::kTagAltAscendB);
+    ink.descend = tft.color565(radar::kTagAltDescendR, radar::kTagAltDescendG,
+                               radar::kTagAltDescendB);
+  }
+  return ink;
+}
+
+bool tagSitsOnLightBackground(const label_layout::Box& box) {
+  uint8_t luma = 0;
+  if (s_draw->averageLuma(box.x, box.y, box.w, box.h, &luma)) {
+    return luma >= kTagLightBackgroundLuma;
+  }
+  const auto bm_style = services::basemap::storedStyle();
+  return services::basemap::wantsDisplay() &&
+         (bm_style == services::basemap::Style::Light ||
+          bm_style == services::basemap::Style::Vfr ||
+          bm_style == services::basemap::Style::Voyager);
+}
+
+uint16_t altitudeInk(const TagInk& ink, const services::adsb::Aircraft& plane) {
+  if (strcmp(plane.alt, "GND") == 0) {
+    return ink.type;
+  }
+  if (plane.vert_rate_fpm != services::adsb::kVertRateUnknown &&
+      plane.vert_rate_fpm < kDescendRateThresholdFpm) {
+    return ink.descend;
+  }
+  return ink.ascend;
+}
+
 void drawAircraftTagPlaced(const label_layout::Placement& placement,
                            const services::adsb::Aircraft& plane) {
   applyTagStyle();
@@ -356,9 +397,12 @@ void drawAircraftTagPlaced(const label_layout::Placement& placement,
                                           : placement.box.x + placement.box.w;
   s_draw->setTextDatum(placement.on_right ? TextDatum::TopLeft : TextDatum::TopRight);
   int ly = placement.box.y;
+  // Ink follows the map under the tag. A single color (no background) keeps
+  // the glyph transparent so the basemap shows through instead of a solid chip.
+  const TagInk ink = tagInkForBackground(tagSitsOnLightBackground(placement.box));
 
   if (plane.callsign[0] != '\0') {
-    s_draw->setTextColor(radar::kColorLabel, radar::kColorBackground);
+    s_draw->setTextColor(ink.label);
     s_draw->drawString(plane.callsign, anchor_x, ly);
   }
   if (placement.tier != label_layout::kTierFull) {
@@ -368,7 +412,7 @@ void drawAircraftTagPlaced(const label_layout::Placement& placement,
 
   char type_label[32];
   if (tagTypeLine(plane, type_label, sizeof(type_label))) {
-    s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
+    s_draw->setTextColor(ink.type);
     s_draw->drawString(type_label, anchor_x, ly);
   }
   ly += line_h;
@@ -376,7 +420,7 @@ void drawAircraftTagPlaced(const label_layout::Placement& placement,
   if (plane.alt[0] != '\0') {
     char alt_display[20];
     radar::formatAltitudeDisplay(plane.alt, alt_display, sizeof(alt_display));
-    s_draw->setTextColor(altitudeTagColor(plane), radar::kColorBackground);
+    s_draw->setTextColor(altitudeInk(ink, plane));
     s_draw->drawString(alt_display, anchor_x, ly);
   }
 }
