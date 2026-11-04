@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace ui::label_layout {
@@ -42,6 +43,7 @@ size_t s_result_count = 0;
 // Scratch for resolve(). Static rather than stack: this runs on the display
 // task, which shares a 16 KB stack with the sprite rebuild path.
 uint8_t s_order[kMaxTargets];
+uint8_t s_rank[kMaxTargets];
 Placement s_chosen[kMaxTargets];
 Box s_scratch_boxes[kMaxTargets];
 
@@ -312,8 +314,10 @@ Placement placementOf(const SlotPick& pick, uint8_t tier) {
 Placement choose(const Target& t, const Box* others, size_t others_count,
                  const Target* targets, size_t count, const Geometry& geom) {
   const Memory* mem = memoryFind(t.key);
-  const bool was_hidden = mem != nullptr && mem->tier == kTierHidden;
-  const int limit = was_hidden ? kUnhideCoveragePct : kHideCoveragePct;
+  // No history yet: treat as full so the first placement can use the wider limit.
+  const uint8_t prev_tier = mem != nullptr ? mem->tier : kTierFull;
+  const int full_limit = coverageLimitPct(prev_tier, kTierFull);
+  const int short_limit = coverageLimitPct(prev_tier, kTierShort);
 
   SlotPick best;
   SlotPick pick;
@@ -322,12 +326,12 @@ Placement choose(const Target& t, const Box* others, size_t others_count,
   // Hysteresis must not win an argument that makes the tag unreadable: when the
   // sticky slot is smothered while the best one is clear, move rather than
   // degrade.
-  if (pick.slot != best.slot && coveragePct(pick.box, others, others_count) > limit &&
-      coveragePct(best.box, others, others_count) <= limit) {
+  if (pick.slot != best.slot && coveragePct(pick.box, others, others_count) > full_limit &&
+      coveragePct(best.box, others, others_count) <= full_limit) {
     pick = best;
   }
 
-  if (pick.box.empty() || coveragePct(pick.box, others, others_count) <= limit) {
+  if (pick.box.empty() || coveragePct(pick.box, others, others_count) <= full_limit) {
     return placementOf(pick, kTierFull);
   }
 
@@ -336,11 +340,11 @@ Placement choose(const Target& t, const Box* others, size_t others_count,
     SlotPick short_pick;
     bestSlot(t, kTierShort, others, others_count, targets, count, geom, mem, &short_best,
              &short_pick);
-    if (coveragePct(short_pick.box, others, others_count) > limit &&
-        coveragePct(short_best.box, others, others_count) <= limit) {
+    if (coveragePct(short_pick.box, others, others_count) > short_limit &&
+        coveragePct(short_best.box, others, others_count) <= short_limit) {
       short_pick = short_best;
     }
-    if (coveragePct(short_pick.box, others, others_count) <= limit) {
+    if (coveragePct(short_pick.box, others, others_count) <= short_limit) {
       return placementOf(short_pick, kTierShort);
     }
   }
@@ -389,6 +393,46 @@ uint32_t hashKey(const char* s) {
   return h != 0 ? h : 1u;
 }
 
+void uniquifyKeys(uint32_t* keys, const int32_t* sort_a, const int32_t* sort_b,
+                  size_t count) {
+  if (keys == nullptr || count == 0) {
+    return;
+  }
+  if (count > kMaxTargets) {
+    count = kMaxTargets;
+  }
+
+  // Copy first: rewriting keys[i] in place would hide later collisions.
+  static uint32_t base[kMaxTargets];
+  for (size_t i = 0; i < count; ++i) {
+    base[i] = keys[i];
+  }
+  for (size_t i = 0; i < count; ++i) {
+    int rank = 0;
+    bool collided = false;
+    const int32_t ia = sort_a != nullptr ? sort_a[i] : 0;
+    const int32_t ib = sort_b != nullptr ? sort_b[i] : 0;
+    for (size_t j = 0; j < count; ++j) {
+      if (j == i || base[j] != base[i]) {
+        continue;
+      }
+      collided = true;
+      const int32_t ja = sort_a != nullptr ? sort_a[j] : 0;
+      const int32_t jb = sort_b != nullptr ? sort_b[j] : 0;
+      const bool j_before = ja < ia || (ja == ia && (jb < ib || (jb == ib && j < i)));
+      if (j_before) {
+        ++rank;
+      }
+    }
+    if (!collided) {
+      continue;
+    }
+    char buf[48];
+    snprintf(buf, sizeof(buf), "dup:%lu:%d", static_cast<unsigned long>(base[i]), rank);
+    keys[i] = hashKey(buf);
+  }
+}
+
 void resolve(const Target* targets, size_t count, const Geometry& geom) {
   if (targets == nullptr) {
     count = 0;
@@ -432,6 +476,9 @@ void resolve(const Target* targets, size_t count, const Geometry& geom) {
     }
     s_order[j] = key_idx;
   }
+  for (size_t i = 0; i < count; ++i) {
+    s_rank[s_order[i]] = static_cast<uint8_t>(i);
+  }
 
   // Pass 0: greedy in priority order, so a label only ever yields to one that
   // matters more than it does.
@@ -445,15 +492,15 @@ void resolve(const Target* targets, size_t count, const Geometry& geom) {
     }
   }
 
-  // Relaxation: re-pick each label against everything else's final position, so
-  // early greedy choices are not locked in by labels that arrived later.
+  // Re-score against higher-priority tags only. Including a farther label here
+  // let it land on a closer one and degrade or hide that closer tag.
   for (int sweep = 0; sweep < kRelaxSweeps; ++sweep) {
     bool moved = false;
     for (size_t i = 0; i < count; ++i) {
       const size_t idx = s_order[i];
       size_t others_count = 0;
       for (size_t j = 0; j < count; ++j) {
-        if (j != idx && s_chosen[j].tier != kTierHidden) {
+        if (s_rank[j] < s_rank[idx] && s_chosen[j].tier != kTierHidden) {
           s_scratch_boxes[others_count++] = s_chosen[j].box;
         }
       }

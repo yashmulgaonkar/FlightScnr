@@ -40,17 +40,26 @@ enum Tier : uint8_t {
  */
 constexpr int kSwitchMarginPct = 8;
 /**
- * Degrade (then hide) above kHideCoveragePct of the block covered by
- * higher-priority tags; recover only below kUnhideCoveragePct, so a tag
- * sitting on the boundary cannot flicker between states.
+ * Drop to a worse tier above kHideCoveragePct of the block covered by
+ * higher-priority tags. Step back up to a better tier only below
+ * kUnhideCoveragePct, so a tag hovering on either boundary cannot flicker.
  */
 constexpr int kHideCoveragePct = 35;
 constexpr int kUnhideCoveragePct = 15;
+
+/** Coverage allowed when choosing `candidate_tier` given the tier from last poll. */
+constexpr int coverageLimitPct(uint8_t previous_tier, uint8_t candidate_tier) {
+  return candidate_tier < previous_tier ? kUnhideCoveragePct : kHideCoveragePct;
+}
 /** Ranking pad (px) so slots that merely touch still cost something. */
 constexpr int kClearancePx = 4;
 /** Cost per px a candidate box is displaced by bezel clamping. */
 constexpr int kClampPenaltyPerPx = 6;
-/** Re-pick passes after the greedy pass, so early choices aren't locked in. */
+/**
+ * Re-pick passes after the greedy pass. Each label is scored only against
+ * higher-priority tags, so a closer aircraft keeps the slot it earned and a
+ * farther one can still move aside once those tags have settled.
+ */
 constexpr int kRelaxSweeps = 3;
 /**
  * Resolves a vanished aircraft keeps its remembered slot. Resolves run once
@@ -116,5 +125,13 @@ const Placement* find(uint32_t key);
 
 /** FNV-1a over a C string; never returns 0 (0 marks an empty memory entry). */
 uint32_t hashKey(const char* s);
+
+/**
+ * Give colliding keys distinct values. Rank is (sort_a, sort_b, index), so the
+ * same aircraft keeps its key when the array is reordered. Keys that are
+ * already unique are left unchanged. `count` above kMaxTargets is truncated.
+ */
+void uniquifyKeys(uint32_t* keys, const int32_t* sort_a, const int32_t* sort_b,
+                  size_t count);
 
 }  // namespace ui::label_layout
