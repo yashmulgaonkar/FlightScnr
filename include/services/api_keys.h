@@ -6,7 +6,8 @@
 namespace services::apikeys {
 
 constexpr size_t kMaxKeysPerProvider = 8;
-constexpr size_t kMaxSingleKeyLen = 80;
+// FR24 tokens are longer than 80 (reported at 85). Shared by every provider.
+constexpr size_t kMaxSingleKeyLen = 100;
 
 void load();
 bool saveFromForm(const char* airlabs, const char* flightaware, const char* fr24);
