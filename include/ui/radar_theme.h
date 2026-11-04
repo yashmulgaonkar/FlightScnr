@@ -51,6 +51,11 @@ constexpr int kAircraftInsideRingInsetPx = kAircraftIconRadiusPx + 2;
 constexpr int kBeyondRingScreenMarginPx = 3;
 /** Target cap height (px) for aircraft tags (bold, slightly above scale label). */
 constexpr int kAircraftTagLabelHeightPx = 21;
+/**
+ * Tag blocks stay inside this radius so text clears the round bezel. Clamping
+ * to the square framebuffer instead would leave rim tags half off the glass.
+ */
+constexpr int kAircraftLabelVisibleRadiusPx = kCenterX - 8;
 
 /** Radar sweep: one full rotation period (ms). */
 constexpr unsigned long kSweepPeriodMs = 6000;

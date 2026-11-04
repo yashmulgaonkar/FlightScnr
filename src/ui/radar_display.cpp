@@ -19,6 +19,7 @@
 #include "services/map_center.h"
 #include "ui/aircraft_symbol.h"
 #include "ui/alert_flash.h"
+#include "ui/label_layout.h"
 #include "ui/radar_accent.h"
 #include "ui/radar_scale.h"
 #include "ui/radar_theme.h"
@@ -85,7 +86,14 @@ struct CachedAircraftMarker {
   int x = 0;
   int y = 0;
   bool beyond_dot = false;
+  /** Tag box as resolved for this marker; empty when no tag is drawn. Stored
+   *  rather than recomputed so a marker saved under an old layout still erases
+   *  exactly where its text actually landed. */
+  label_layout::Box tag_box{};
 };
+
+static_assert(services::adsb::kMaxAircraft <= label_layout::kMaxTargets,
+              "label_layout would silently drop tags for the extra aircraft");
 
 CachedAircraftMarker s_prev_aircraft_markers[services::adsb::kMaxAircraft];
 size_t s_prev_aircraft_marker_count = 0;
@@ -290,64 +298,78 @@ int aircraftSymbolHalfPx() {
   return std::max(aircraft_symbol::radiusPx(), radar::kAircraftIconRadiusPx);
 }
 
+/** Second tag line: ICAO type, or "ground" for parked/taxiing traffic. */
+bool tagTypeLine(const services::adsb::Aircraft& plane, char* out, size_t out_size) {
+  if (plane.type[0] != '\0') {
+    services::aircraft_type::formatRadarTagLabel(plane.type, out, out_size);
+    return true;
+  }
+  if (strcmp(plane.alt, "GND") == 0) {
+    snprintf(out, out_size, "ground");
+    return true;
+  }
+  return false;
+}
+
+// Layout is measured against the panel, never the sprite currently being drawn
+// into: the resolver caches on a signature built from these widths, so metrics
+// that differed by target would re-solve (and jitter) on every rebuild.
+int tagLineHeight() {
+  displayFontApply(tft, s_tag_style);
+  return tft.fontHeight();
+}
+
 int measureTagBlockWidth(const services::adsb::Aircraft& plane) {
-  applyTagStyle();
+  displayFontApply(tft, s_tag_style);
   int max_w = 0;
   if (plane.callsign[0] != '\0') {
-    max_w = std::max(max_w, s_draw->textWidth(plane.callsign));
+    max_w = std::max(max_w, tft.textWidth(plane.callsign));
   }
-  if (plane.type[0] != '\0') {
-    char type_label[32];
-    services::aircraft_type::formatRadarTagLabel(plane.type, type_label, sizeof(type_label));
-    max_w = std::max(max_w, s_draw->textWidth(type_label));
-  } else if (strcmp(plane.alt, "GND") == 0) {
-    max_w = std::max(max_w, s_draw->textWidth("ground"));
+  char type_label[32];
+  if (tagTypeLine(plane, type_label, sizeof(type_label))) {
+    max_w = std::max(max_w, tft.textWidth(type_label));
   }
   if (plane.alt[0] != '\0') {
     char alt_display[20];
     radar::formatAltitudeDisplay(plane.alt, alt_display, sizeof(alt_display));
-    max_w = std::max(max_w, s_draw->textWidth(alt_display));
+    max_w = std::max(max_w, tft.textWidth(alt_display));
   }
   return max_w;
 }
 
-void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
-  initLabelMetrics();
+int measureCallsignWidth(const services::adsb::Aircraft& plane) {
+  if (plane.callsign[0] == '\0') {
+    return 0;
+  }
+  displayFontApply(tft, s_tag_style);
+  return tft.textWidth(plane.callsign);
+}
+
+void drawAircraftTagPlaced(const label_layout::Placement& placement,
+                           const services::adsb::Aircraft& plane) {
   applyTagStyle();
 
   const int line_h = s_draw->fontHeight();
-  const int block_w = measureTagBlockWidth(plane);
-  const int block_h = line_h * 3;
-  int ly = y - block_h / 2;
-
-  const int symbol_half = aircraftSymbolHalfPx();
-  const bool tag_on_right = x < radar::kCenterX;
-  int anchor_x = 0;
-  if (tag_on_right) {
-    anchor_x = x + symbol_half + radar::kAircraftLabelGapPx;
-    anchor_x = std::min(anchor_x, radar::kSize - block_w - 1);
-    s_draw->setTextDatum(TextDatum::TopLeft);
-  } else {
-    anchor_x = x - symbol_half - radar::kAircraftLabelGapPx;
-    anchor_x = std::max(anchor_x, block_w + 1);
-    s_draw->setTextDatum(TextDatum::TopRight);
-  }
-  ly = std::max(1, std::min(ly, radar::kSize - block_h - 1));
+  // Text stays flush against the edge facing the symbol, so the ragged edge is
+  // the one pointing away from the traffic it belongs to.
+  const int anchor_x = placement.on_right ? placement.box.x
+                                          : placement.box.x + placement.box.w;
+  s_draw->setTextDatum(placement.on_right ? TextDatum::TopLeft : TextDatum::TopRight);
+  int ly = placement.box.y;
 
   if (plane.callsign[0] != '\0') {
     s_draw->setTextColor(radar::kColorLabel, radar::kColorBackground);
     s_draw->drawString(plane.callsign, anchor_x, ly);
   }
+  if (placement.tier != label_layout::kTierFull) {
+    return;
+  }
   ly += line_h;
 
-  if (plane.type[0] != '\0') {
-    char type_label[32];
-    services::aircraft_type::formatRadarTagLabel(plane.type, type_label, sizeof(type_label));
+  char type_label[32];
+  if (tagTypeLine(plane, type_label, sizeof(type_label))) {
     s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
     s_draw->drawString(type_label, anchor_x, ly);
-  } else if (strcmp(plane.alt, "GND") == 0) {
-    s_draw->setTextColor(radar::kColorTagType, radar::kColorBackground);
-    s_draw->drawString("ground", anchor_x, ly);
   }
   ly += line_h;
 
@@ -357,6 +379,94 @@ void drawAircraftTag(int x, int y, const services::adsb::Aircraft& plane) {
     s_draw->setTextColor(altitudeTagColor(plane), radar::kColorBackground);
     s_draw->drawString(alt_display, anchor_x, ly);
   }
+}
+
+/** Identity that survives the aircraft array being rebuilt on every poll. */
+uint32_t aircraftLabelKey(const services::adsb::Aircraft& plane) {
+  if (plane.hex[0] != '\0') {
+    return label_layout::hashKey(plane.hex);
+  }
+  if (plane.callsign[0] != '\0') {
+    return label_layout::hashKey(plane.callsign);
+  }
+  // No identifier in the feed: fall back to a coarse position so the entry is
+  // at least stable while the aircraft barely moves.
+  char pos[24];
+  snprintf(pos, sizeof(pos), "%.3f,%.3f", static_cast<double>(plane.lat),
+           static_cast<double>(plane.lon));
+  return label_layout::hashKey(pos);
+}
+
+label_layout::Geometry labelGeometry() {
+  label_layout::Geometry geom;
+  geom.center_x = radar::kCenterX;
+  geom.center_y = radar::kCenterY;
+  geom.visible_radius = radar::kAircraftLabelVisibleRadiusPx;
+  geom.symbol_half = static_cast<int16_t>(aircraftSymbolHalfPx());
+  geom.gap = radar::kAircraftLabelGapPx;
+  return geom;
+}
+
+/**
+ * Place every visible tag as a set.
+ *
+ * Cheap when nothing moved (the resolver short-circuits on an unchanged
+ * signature), so both the drawing path and the dirty-rect path call it and see
+ * identical boxes — the tag has to be erased from where it was actually drawn.
+ */
+void resolveAircraftLabels() {
+  initLabelMetrics();
+
+  const label_layout::Geometry geom = labelGeometry();
+  if (ui::displayPrefsHideBlipDetails()) {
+    label_layout::resolve(nullptr, 0, geom);
+    return;
+  }
+
+  const size_t n = services::adsb::aircraftCount();
+  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
+  const bool hide_others = services::alert::hideNonAlertedEnabled();
+  const int line_h = tagLineHeight();
+
+  // Static: drawAircraft() already holds two 64-entry arrays on the display
+  // task's stack when this runs.
+  static label_layout::Target targets[services::adsb::kMaxAircraft];
+  size_t target_count = 0;
+
+  for (size_t i = 0; i < n && target_count < services::adsb::kMaxAircraft; ++i) {
+    if (hide_others && !services::alert::isHighlighted(planes[i])) {
+      continue;
+    }
+    float dx_km = 0.0f;
+    float dy_km = 0.0f;
+    float dist_km = 0.0f;
+    localOffsetFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
+    if (!isInsideOuterRingKm(dist_km)) {
+      continue;  // beyond-ring rim blips carry no tag
+    }
+
+    const int block_w = measureTagBlockWidth(planes[i]);
+    if (block_w <= 0) {
+      continue;
+    }
+
+    int x = 0;
+    int y = 0;
+    latLonToScreen(planes[i].lat, planes[i].lon, &x, &y);
+
+    label_layout::Target& t = targets[target_count++];
+    t.key = aircraftLabelKey(planes[i]);
+    t.x = static_cast<int16_t>(x);
+    t.y = static_cast<int16_t>(y);
+    t.full_w = static_cast<int16_t>(block_w);
+    t.full_h = static_cast<int16_t>(line_h * 3);
+    t.short_w = static_cast<int16_t>(measureCallsignWidth(planes[i]));
+    t.short_h = t.short_w > 0 ? static_cast<int16_t>(line_h) : 0;
+    // Closest to center places first, so nearby traffic keeps the good slots.
+    t.priority = distSqFromCenter(x, y);
+  }
+
+  label_layout::resolve(targets, target_count, geom);
 }
 
 struct AircraftDrawItem {
@@ -438,6 +548,7 @@ size_t visibleAircraftCount() {
 
 void drawAircraft() {
   initLabelMetrics();
+  resolveAircraftLabels();
 
   const size_t n = services::adsb::aircraftCount();
   const services::adsb::Aircraft* planes = services::adsb::aircraftList();
@@ -505,9 +616,16 @@ void drawAircraft() {
                           color, &planes[i]);
   }
   if (!ui::displayPrefsHideBlipDetails()) {
+    // items are sorted farthest-first, so the closest tags draw last and land
+    // on top of whatever residual overlap the resolver could not avoid.
     for (size_t d = 0; d < draw_count; ++d) {
       const size_t i = items[d].index;
-      drawAircraftTag(items[d].x, items[d].y, planes[i]);
+      const label_layout::Placement* placement =
+          label_layout::find(aircraftLabelKey(planes[i]));
+      if (placement == nullptr || placement->tier == label_layout::kTierHidden) {
+        continue;
+      }
+      drawAircraftTagPlaced(*placement, planes[i]);
     }
   }
 }
@@ -808,17 +926,7 @@ void sweepSpokeEndpoint(float angle_deg, int* ex, int* ey) {
 
 void savePrevAircraftMarkers();
 
-bool rectEmpty(const IntRect& r);
-IntRect markerBounds(const CachedAircraftMarker& marker);
-
 bool rectEmpty(const IntRect& r) { return r.w <= 0 || r.h <= 0; }
-
-bool rectsOverlap(const IntRect& a, const IntRect& b) {
-  if (rectEmpty(a) || rectEmpty(b)) {
-    return false;
-  }
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
 
 IntRect rectFromPoints(int x0, int y0, int x1, int y1, int margin) {
   IntRect r;
@@ -926,98 +1034,6 @@ int collectSweepAngles(float lead_deg, float* angles, int max_angles) {
     angles[count++] = lead_deg;
   }
   return count;
-}
-
-void drawAircraftInRect(const IntRect& dirty) {
-  if (rectEmpty(dirty)) {
-    return;
-  }
-  const IntRect clip = clampRectToScreen(dirty);
-  initLabelMetrics();
-
-  const size_t n = services::adsb::aircraftCount();
-  const services::adsb::Aircraft* planes = services::adsb::aircraftList();
-
-  AircraftDrawItem items[services::adsb::kMaxAircraft];
-  BeyondDotDrawItem dots[services::adsb::kMaxAircraft];
-  size_t draw_count = 0;
-  size_t dot_count = 0;
-
-  for (size_t i = 0; i < n; ++i) {
-    float dx_km = 0.0f;
-    float dy_km = 0.0f;
-    float dist_km = 0.0f;
-    localOffsetFromCenter(planes[i].lat, planes[i].lon, &dx_km, &dy_km, &dist_km);
-
-    if (isInsideOuterRingKm(dist_km)) {
-      int x = 0;
-      int y = 0;
-      latLonToScreen(planes[i].lat, planes[i].lon, &x, &y);
-      CachedAircraftMarker marker;
-      marker.plane = planes[i];
-      marker.x = x;
-      marker.y = y;
-      marker.beyond_dot = false;
-      if (!rectsOverlap(clip, markerBounds(marker))) {
-        continue;
-      }
-      items[draw_count].index = i;
-      items[draw_count].x = x;
-      items[draw_count].y = y;
-      items[draw_count].dist_sq = distSqFromCenter(x, y);
-      ++draw_count;
-      continue;
-    }
-
-    int dot_x = 0;
-    int dot_y = 0;
-    if (!beyondRingEdgeDotFromLatLon(planes[i].lat, planes[i].lon, &dot_x, &dot_y)) {
-      continue;
-    }
-    CachedAircraftMarker marker;
-    marker.plane = planes[i];
-    marker.x = dot_x;
-    marker.y = dot_y;
-    marker.beyond_dot = true;
-    if (!rectsOverlap(clip, markerBounds(marker))) {
-      continue;
-    }
-    dots[dot_count].index = i;
-    dots[dot_count].x = dot_x;
-    dots[dot_count].y = dot_y;
-    dots[dot_count].dist_sq = distSqFromCenter(dot_x, dot_y);
-    ++dot_count;
-  }
-
-  sortBeyondDotsFarFirst(dots, dot_count);
-  for (size_t d = 0; d < dot_count; ++d) {
-    const size_t i = dots[d].index;
-    drawBeyondRingMarker(dots[d].x, dots[d].y, displayTrackDeg(planes[i].track_deg),
-                         &planes[i]);
-  }
-
-  const bool pulse_on2 = services::alert::pulsePhase();
-  sortDrawItemsFarFirst(items, draw_count);
-  for (size_t d = 0; d < draw_count; ++d) {
-    const size_t i = items[d].index;
-    uint16_t color = radar::kColorAircraft;
-    if (services::alert::isHighlighted(planes[i])) {
-      if (pulse_on2) {
-        color = planes[i].isEmergencySquawk() ? radar::kColorAlertEmergency
-                                              : radar::kColorAlertMilitary;
-      } else {
-        color = radar::kColorGrid;
-      }
-    }
-    aircraft_symbol::draw(*s_draw, items[d].x, items[d].y, displayTrackDeg(planes[i].track_deg),
-                          color, &planes[i]);
-  }
-  if (!ui::displayPrefsHideBlipDetails()) {
-    for (size_t d = 0; d < draw_count; ++d) {
-      const size_t i = items[d].index;
-      drawAircraftTag(items[d].x, items[d].y, planes[i]);
-    }
-  }
 }
 
 bool rebuildContentBase() {
@@ -1186,7 +1202,10 @@ void recoverSweepAfterGap(unsigned long gap_ms) {
   }
 }
 
-IntRect aircraftMarkerBounds(int x, int y, const services::adsb::Aircraft& plane) {
+/** Symbol plus the tag box it was drawn with; the box MUST be the resolved one
+ *  rather than a re-derived guess, or old text ghosts on the panel until the
+ *  rotating sweep happens to repaint that region from the content sprite. */
+IntRect aircraftMarkerBounds(int x, int y, const label_layout::Box& tag) {
   const int symbol_half = aircraftSymbolHalfPx();
   constexpr int kPad = 6;
 
@@ -1195,27 +1214,28 @@ IntRect aircraftMarkerBounds(int x, int y, const services::adsb::Aircraft& plane
   int min_y = y - symbol_half - kPad;
   int max_y = y + symbol_half + kPad;
 
-  if (!ui::displayPrefsHideBlipDetails()) {
-    applyTagStyle();
-    const int block_w = measureTagBlockWidth(plane);
-    const int block_h = s_draw->fontHeight() * 3;
-    // The tag side MUST match drawAircraftTag(): the label is drawn to the right
-    // of the symbol when it sits left of center, otherwise to the left. Reserving
-    // block_w on the wrong side leaves the label outside this dirty rect, so its
-    // old text ghosts on the panel until the rotating sweep happens to repaint
-    // that region from the content sprite.
-    const bool tag_on_right = x < radar::kCenterX;
-    if (tag_on_right) {
-      max_x = std::max(max_x, x + symbol_half + radar::kAircraftLabelGapPx + block_w + kPad);
-    } else {
-      min_x = std::min(min_x, x - symbol_half - radar::kAircraftLabelGapPx - block_w - kPad);
-    }
-    min_y = std::min(min_y, y - block_h / 2 - kPad);
-    max_y = std::max(max_y, y + block_h / 2 + kPad);
+  if (!tag.empty()) {
+    min_x = std::min(min_x, tag.x - kPad);
+    max_x = std::max(max_x, tag.x + tag.w + kPad);
+    min_y = std::min(min_y, tag.y - kPad);
+    max_y = std::max(max_y, tag.y + tag.h + kPad);
   }
 
   return clampRectToScreen(
       IntRect(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1));
+}
+
+/** Resolved tag box for `plane`, or an empty box when it carries no tag. */
+label_layout::Box aircraftTagBox(const services::adsb::Aircraft& plane) {
+  if (ui::displayPrefsHideBlipDetails()) {
+    return {};
+  }
+  const label_layout::Placement* placement =
+      label_layout::find(aircraftLabelKey(plane));
+  if (placement == nullptr || placement->tier == label_layout::kTierHidden) {
+    return {};
+  }
+  return placement->box;
 }
 
 size_t collectAircraftMarkers(CachedAircraftMarker* markers, size_t max_markers) {
@@ -1239,12 +1259,14 @@ size_t collectAircraftMarkers(CachedAircraftMarker* markers, size_t max_markers)
     if (isInsideOuterRingKm(dist_km)) {
       latLonToScreen(planes[i].lat, planes[i].lon, &marker.x, &marker.y);
       marker.beyond_dot = false;
+      marker.tag_box = aircraftTagBox(planes[i]);
       ++count;
       continue;
     }
 
     if (beyondRingEdgeDotFromLatLon(planes[i].lat, planes[i].lon, &marker.x, &marker.y)) {
       marker.beyond_dot = true;
+      marker.tag_box = {};
       ++count;
     }
   }
@@ -1257,7 +1279,7 @@ IntRect markerBounds(const CachedAircraftMarker& marker) {
     return clampRectToScreen(IntRect(marker.x - dot_r, marker.y - dot_r, dot_r * 2 + 1,
                                      dot_r * 2 + 1));
   }
-  return aircraftMarkerBounds(marker.x, marker.y, marker.plane);
+  return aircraftMarkerBounds(marker.x, marker.y, marker.tag_box);
 }
 
 bool aircraftIdentityMatch(const services::adsb::Aircraft& a,
@@ -1275,6 +1297,11 @@ bool markerVisualChanged(const CachedAircraftMarker& prev,
     return true;
   }
   if (prev.x != curr.x || prev.y != curr.y) {
+    return true;
+  }
+  // A tag can change slot or tier while its own aircraft sits still, when
+  // traffic around it moves. Erasing only the old symbol would strand the text.
+  if (!prev.tag_box.sameAs(curr.tag_box)) {
     return true;
   }
   if (fabsf(prev.plane.track_deg - curr.plane.track_deg) > 0.5f) {
@@ -1539,6 +1566,9 @@ void radarDisplayDraw() {
 
 void radarDisplayRefreshAircraft() {
   initPalette();
+  // Place the new tag set before measuring what changed: the dirty rect has to
+  // cover where the labels are about to land, not where they used to.
+  resolveAircraftLabels();
 
   const size_t curr_count = collectAircraftMarkers(s_current_aircraft_markers,
                                                     services::adsb::kMaxAircraft);
