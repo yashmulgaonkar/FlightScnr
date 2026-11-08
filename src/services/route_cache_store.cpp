@@ -5,6 +5,7 @@
 #include <LittleFS.h>
 #include <WebServer.h>
 
+#include <esp_heap_caps.h>
 #include <freertos/semphr.h>
 
 #include <cstring>
@@ -26,8 +27,21 @@ bool s_dirty = false;
 unsigned long s_last_flush_ms = 0;
 SemaphoreHandle_t s_fs_mutex = nullptr;
 
-/** Merge buffer for flush — must not live on loop task stack (~84 KB at 1500 rows). */
-Entry s_merged[config::kRouteCacheFileMaxEntries];
+/**
+ * Merge buffer for flush (~84 KB at 1500 rows). Too big for the loop task stack,
+ * and as a static it pinned 84 KB of scarce internal RAM for the whole uptime
+ * although it is only needed during a flush. Take it from PSRAM per flush.
+ */
+struct MergeBuffer {
+  Entry* entries = nullptr;
+  MergeBuffer() {
+    entries = static_cast<Entry*>(heap_caps_malloc(
+        sizeof(Entry) * config::kRouteCacheFileMaxEntries, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  }
+  ~MergeBuffer() { heap_caps_free(entries); }
+  MergeBuffer(const MergeBuffer&) = delete;
+  MergeBuffer& operator=(const MergeBuffer&) = delete;
+};
 
 void ensureFsMutex() {
   if (s_fs_mutex == nullptr) {
@@ -418,6 +432,12 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots,
     return;
   }
 
+  MergeBuffer merge;
+  if (merge.entries == nullptr) {
+    noteFlushAttempt(now_ms);  // no PSRAM headroom now; retry on the next interval
+    return;
+  }
+  Entry* const merged = merge.entries;
   size_t merged_count = 0;
 
   for (size_t i = 0; i < max_slots; ++i) {
@@ -428,7 +448,7 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots,
     if (!entryKeepInFlash(slot, now_sec, ttl_sec)) {
       continue;
     }
-    upsertMerged(s_merged, &merged_count, slot);
+    upsertMerged(merged, &merged_count, slot);
   }
 
   if (LittleFS.exists(kPath)) {
@@ -448,10 +468,10 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots,
       if (!entryKeepInFlash(parsed, now_sec, ttl_sec)) {
         continue;
       }
-      if (findMergedIndex(s_merged, merged_count, parsed.callsign) >= 0) {
+      if (findMergedIndex(merged, merged_count, parsed.callsign) >= 0) {
         continue;
       }
-      upsertMerged(s_merged, &merged_count, parsed);
+      upsertMerged(merged, &merged_count, parsed);
     }
     fin.close();
   }
@@ -465,7 +485,7 @@ void tick(unsigned long now_ms, ReadRamSlotFn read_slot, size_t max_slots,
   }
   fout.print(kHeader);
   for (size_t i = 0; i < merged_count; ++i) {
-    writeEntry(fout, s_merged[i]);
+    writeEntry(fout, merged[i]);
   }
   fout.close();
 
