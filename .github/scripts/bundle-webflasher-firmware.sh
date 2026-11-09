@@ -12,6 +12,15 @@ RELEASE_DIR="${RELEASE_DIR:-}" # optional local dir with already-built latest as
 
 mkdir -p "${DOCS_FW}/archive"
 
+# GitHub's release-asset CDN sometimes answers 502/503/504 on a cold fetch of a
+# multi-MB asset (a retry seconds later succeeds), so every download retries.
+fetch() {
+  curl -fsSL \
+    --retry 5 --retry-all-errors --retry-delay 5 --retry-max-time 240 \
+    --connect-timeout 20 --max-time 300 \
+    "$@"
+}
+
 if [[ -n "${RELEASE_NAME:-}" && -n "${RELEASE_TAG:-}" ]]; then
   :
 else
@@ -34,8 +43,8 @@ for board in ${BOARDS}; do
   else
     merged_url="https://github.com/${REPO}/releases/latest/download/${merged}"
     app_url="https://github.com/${REPO}/releases/latest/download/${app}"
-    if ! curl -fsSL -L -o "${DOCS_FW}/${merged}.tmp" "${merged_url}" ||
-       ! curl -fsSL -L -o "${DOCS_FW}/${app}.tmp" "${app_url}"; then
+    if ! fetch -L -o "${DOCS_FW}/${merged}.tmp" "${merged_url}" ||
+       ! fetch -L -o "${DOCS_FW}/${app}.tmp" "${app_url}"; then
       rm -f "${DOCS_FW}/${merged}.tmp" "${DOCS_FW}/${app}.tmp"
       echo "Latest release has no complete ${board} pair; skipping it."
       continue
@@ -115,7 +124,12 @@ while IFS= read -r row; do
     fi
 
     echo "Archiving ${tag} ${board}…"
-    curl -fsSL -L -o "${dest_dir}/${asset}" "${asset_url}"
+    # An old release that cannot be mirrored must not fail the whole site build.
+    if ! fetch -L -o "${dest_dir}/${asset}" "${asset_url}"; then
+      rm -f "${dest_dir}/${asset}"
+      echo "::warning::Could not archive ${tag} ${board} after retries; skipping it."
+      continue
+    fi
     size="$(stat -c%s "${dest_dir}/${asset}")"
     rel_path="archive/${tag}/${asset}"
     release_boards="$(jq -c \
