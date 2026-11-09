@@ -4,6 +4,8 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "services/secure_client.h"
+
 #include <ArduinoJson.h>
 
 #include <esp_heap_caps.h>
@@ -1080,7 +1082,7 @@ bool fetchUpdateBlocking(double center_lat, double center_lon, float fetch_radiu
     return false;
   }
 
-  WiFiClientSecure client;
+  services::https::SecureClient client;
   client.setInsecure();
   // WiFiClientSecure::setTimeout/setHandshakeTimeout take seconds, not milliseconds.
   client.setTimeout(kFetchHttpTimeoutSec);

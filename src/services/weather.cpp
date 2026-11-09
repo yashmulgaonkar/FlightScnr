@@ -5,6 +5,8 @@
 #include <Preferences.h>
 #include <WiFiClientSecure.h>
 
+#include "services/secure_client.h"
+
 #include <ArduinoJson.h>
 
 #include <esp_heap_caps.h>
@@ -595,7 +597,7 @@ bool fetchWeatherBlocking(WeatherData* out) {
   bool ok = false;
   int code = 0;
   {
-    WiFiClientSecure client;
+    services::https::SecureClient client;
     client.setInsecure();
     client.setTimeout(kTimeoutSec);
     client.setHandshakeTimeout(kTimeoutSec);

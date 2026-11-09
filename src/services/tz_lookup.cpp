@@ -4,6 +4,8 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "services/secure_client.h"
+
 #include <ArduinoJson.h>
 
 #include <cstdio>
@@ -168,7 +170,7 @@ bool fetchTimezoneBlocking(double lat, double lon) {
   url += "&longitude=";
   url += String(lon, 5);
 
-  WiFiClientSecure client;
+  services::https::SecureClient client;
   client.setInsecure();
   client.setTimeout(config::kTzLookupTimeoutMs / 1000UL);
   client.setHandshakeTimeout(config::kTzLookupTimeoutMs / 1000UL);
