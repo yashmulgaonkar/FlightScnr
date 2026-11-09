@@ -7,6 +7,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
+#include "services/secure_client.h"
+
 #include <ArduinoJson.h>
 
 #include <cstdio>
@@ -203,7 +205,7 @@ bool fetchLatestFromGitHub(bool wait_for_link) {
   }
   services::https::drainTlsHeapAfterSession(400);
 
-  WiFiClientSecure client;
+  services::https::SecureClient client;
   client.setInsecure();
   client.setTimeout(kCheckTimeoutMs / 1000);
 
@@ -337,7 +339,7 @@ void installTaskThunk(void*) {
   }
   services::https::drainTlsHeapAfterSession(600);
 
-  WiFiClientSecure client;
+  services::https::SecureClient client;
   client.setInsecure();
   client.setTimeout(60);
 

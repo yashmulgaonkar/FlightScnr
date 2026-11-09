@@ -6,6 +6,8 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "services/secure_client.h"
+
 #include <ArduinoJson.h>
 
 #include <esp_heap_caps.h>
@@ -744,7 +746,7 @@ bool httpGetJson(const char* url, JsonDocument& doc, const char* worker_callsign
                   detailWorkerDebugStepTagImpl(), ESP.getFreeHeap());
   }
 
-  WiFiClientSecure client;
+  services::https::SecureClient client;
   client.setInsecure();
   const uint32_t timeout_sec = (timeout_ms + 999U) / 1000U;
   client.setTimeout(timeout_sec);

@@ -4,6 +4,8 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
+#include "services/secure_client.h"
+
 #include <ArduinoJson.h>
 #include <JPEGDEC.h>
 
@@ -372,7 +374,7 @@ bool fetchJsonMeta(const char* hex, MetaEntry* out) {
   char url[96];
   snprintf(url, sizeof(url), "https://api.planespotters.net/pub/photos/hex/%s", hex);
 
-  WiFiClientSecure client;
+  services::https::SecureClient client;
   client.setInsecure();
   client.setTimeout(config::kAircraftPhotoTimeoutMs / 1000U);
 
@@ -492,7 +494,7 @@ bool fetchJpeg(const char* url, PsramPayload* out) {
     Serial.println("[photo] proxy url build failed; trying direct");
   }
 
-  WiFiClientSecure client;
+  services::https::SecureClient client;
   client.setInsecure();
   client.setTimeout(config::kAircraftPhotoTimeoutMs / 1000U);
 
